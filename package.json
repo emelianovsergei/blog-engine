@@ -1,7 +1,7 @@
 {
   "name": "blog-engine",
   "version": "0.1.0",
-  "description": "Universal weekly blog topic-selection engine for the PRO MAX and PULSE Sacramento HVAC sites",
+  "description": "",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
