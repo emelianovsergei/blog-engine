@@ -20,6 +20,12 @@ export function hashEmbed(text: string, dim = 64): number[] {
   return vec;
 }
 
+export interface GenerateContentCall {
+  model: string;
+  contents: unknown;
+  config?: unknown;
+}
+
 export interface FakeGeminiOptions {
   /** Object stringified as the generateContent response. */
   candidatesJson?: unknown;
@@ -27,12 +33,21 @@ export interface FakeGeminiOptions {
   generateText?: string;
   failGenerate?: boolean;
   failEmbed?: boolean;
+  /** Optional capture array — every generateContent call is pushed. */
+  capture?: GenerateContentCall[];
 }
 
 export function makeFakeGemini(opts: FakeGeminiOptions = {}): GeminiLike {
   return {
     models: {
-      async generateContent() {
+      async generateContent(req) {
+        if (opts.capture) {
+          opts.capture.push({
+            model: req.model,
+            contents: req.contents,
+            config: req.config,
+          });
+        }
         if (opts.failGenerate) throw new Error("fake generateContent failure");
         if (opts.generateText !== undefined) return { text: opts.generateText };
         return { text: JSON.stringify(opts.candidatesJson ?? { candidates: [] }) };
