@@ -1,0 +1,74 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-merge-pending.yml
+#
+# Implements the 24h human-override window without relying on branch
+# protection or GitHub-native auto-merge — works on every plan including
+# Free.
+#
+# Hourly schedule: list open PRs with label `autoblog-approved-pending`,
+# squash-merge each one that has been open >= 24h. PRs carrying the
+# `autoblog-hold` label are skipped (manual pause). PRs with the
+# `autoblog-review-failed` label are skipped (defensive — should not
+# happen given the review workflow removes one when adding the other).
+
+name: Autoblog Merge Pending
+
+on:
+  schedule:
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge eligible PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PRS=$(gh pr list \
+            --label autoblog-approved-pending \
+            --state open \
+            --json number,createdAt,labels \
+            --jq '.[] | {number, createdAt, labels: [.labels[].name]}')
+          if [ -z "$PRS" ]; then
+            echo "No pending autoblog PRs."
+            exit 0
+          fi
+
+          NOW=$(date -u +%s)
+          THRESHOLD=$((24 * 60 * 60))
+
+          echo "$PRS" | while read -r line; do
+            NUM=$(echo "$line" | jq -r '.number')
+            CREATED=$(echo "$line" | jq -r '.createdAt')
+            LABELS=$(echo "$line" | jq -r '.labels | join(",")')
+
+            if echo "$LABELS" | grep -q 'autoblog-hold'; then
+              echo "PR #$NUM: skipped (autoblog-hold label)"
+              continue
+            fi
+            if echo "$LABELS" | grep -q 'autoblog-review-failed'; then
+              echo "PR #$NUM: skipped (autoblog-review-failed label still present)"
+              continue
+            fi
+
+            CREATED_TS=$(date -u -d "$CREATED" +%s)
+            AGE=$((NOW - CREATED_TS))
+
+            if [ "$AGE" -lt "$THRESHOLD" ]; then
+              REMAIN=$(( (THRESHOLD - AGE) / 60 ))
+              echo "PR #$NUM: too young (${REMAIN}m left in 24h window)"
+              continue
+            fi
+
+            echo "PR #$NUM: age ${AGE}s >= 24h — squash-merging."
+            gh pr merge "$NUM" --squash --delete-branch
+          done

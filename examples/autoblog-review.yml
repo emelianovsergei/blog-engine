@@ -1,0 +1,122 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-review.yml
+#
+# Triggered by the weekly autoblog draft PR (label `autoblog` or branch
+# prefix `autoblog/*`). Runs the Gemini AI review and, if it passes the
+# gate, marks the PR ready and adds the `autoblog-approved-pending` label.
+# A separate workflow (autoblog-merge-pending.yml) handles the 24h delay
+# and final merge.
+#
+# Required setup in the consumer repo:
+#   - Secret: GEMINI_API_KEY
+#   - Repo variable (optional): AUTOBLOG_AUTOMERGE = "true" | "false"
+#       Set to "false" during shadow-mode rollout — review still runs and
+#       posts the comment, but the approve/label steps are skipped.
+#   - Labels (create once): autoblog, autoblog-approved-pending,
+#       autoblog-review-failed, autoblog-hold
+#
+# Adjust the --site / --business / --service-areas flags per repo. Adjust
+# the markdown path glob (content/blog/**/*.md) for your site's layout.
+
+name: Autoblog AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'content/blog/**/*.md'
+      - 'src/content/blog/**/*.md'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'autoblog')
+      || startsWith(github.head_ref, 'autoblog/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Identify changed markdown
+        id: files
+        run: |
+          set -euo pipefail
+          CHANGED=$(git diff --name-only \
+            "origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" \
+            | grep -E '^(content|src/content)/blog/.*\.md$' | head -n 1 || true)
+          echo "file=$CHANGED" >> "$GITHUB_OUTPUT"
+          if [ -z "$CHANGED" ]; then
+            echo "No blog markdown changed — skipping review."
+          else
+            echo "Reviewing: $CHANGED"
+          fi
+
+      - name: Run AI review
+        id: review
+        if: steps.files.outputs.file != ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set +e
+          npx blog-engine-review \
+            --post "${{ steps.files.outputs.file }}" \
+            --site pulse \
+            --business "HVAC Pulse" \
+            --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --out review-summary.md \
+            --json-out review-result.json
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review artifacts
+        if: steps.files.outputs.file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoblog-review
+          path: |
+            review-summary.md
+            review-result.json
+          retention-days: 30
+
+      - name: Post sticky review comment
+        if: steps.files.outputs.file != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: review-summary.md
+          header: autoblog-review
+
+      - name: Approve PR on pass
+        if: >-
+          steps.review.outputs.exit == '0'
+          && (vars.AUTOBLOG_AUTOMERGE == 'true' || vars.AUTOBLOG_AUTOMERGE == '')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr ready "$PR" || true
+          gh pr review "$PR" --approve \
+            --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a 24h human-override window."
+          gh pr edit "$PR" --add-label autoblog-approved-pending
+          gh pr edit "$PR" --remove-label autoblog-review-failed || true
+
+      - name: Mark fail (shadow or live)
+        if: steps.review.outputs.exit == '2'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --add-label autoblog-review-failed
+          gh pr edit "$PR" --remove-label autoblog-approved-pending || true

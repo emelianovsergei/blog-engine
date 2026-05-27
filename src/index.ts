@@ -11,6 +11,14 @@ export { openMeteoWeatherClient, classifyAnomaly, buildWeatherContext } from "./
 export { getSeasonContext, seasonForMonth } from "./season.js";
 export { categorizeText, categorizePost, summarizeRecentCategories } from "./categories.js";
 
+export {
+  reviewBlogPost,
+  renderReviewMarkdown,
+  DEFAULT_REVIEW_MODEL,
+  DEFAULT_GATE,
+} from "./review.js";
+export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
+
 export type {
   EngineConfig,
   CategoryDef,
@@ -26,3 +34,13 @@ export type {
 } from "./types.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
+export type {
+  ReviewResult,
+  ReviewIssue,
+  DimensionScore,
+  ReviewDimension,
+  ReviewGate,
+  ReviewBlogPostArgs,
+  BlogPostFrontmatter,
+} from "./review.js";
+export type { RewriteBlogPostArgs, RewriteResult } from "./rewrite.js";
