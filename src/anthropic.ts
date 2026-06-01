@@ -47,7 +47,10 @@ export interface ClaudeAdapterOptions {
 }
 
 const EMIT_TOOL = "emit_result";
-const DEFAULT_MAX_TOKENS = 8192;
+// Generous ceiling: a verbose review (3 dimension rationales + many issues with
+// fix text + suggestions) can run long, and a cut-off tool call yields JSON
+// missing required fields. Billing is on actual output tokens, not this cap.
+const DEFAULT_MAX_TOKENS = 16384;
 
 interface GenConfig {
   responseMimeType?: string;

@@ -339,40 +339,56 @@ function computeGate(
 export async function reviewBlogPost(args: ReviewBlogPostArgs): Promise<ReviewResult> {
   const model = args.model ?? DEFAULT_REVIEW_MODEL;
   const gate = args.gate ?? DEFAULT_GATE;
+  const prompt = buildPrompt(args);
 
-  const response = await args.gemini.models.generateContent({
-    model,
-    contents: buildPrompt(args),
-    config: { responseMimeType: "application/json", responseSchema: reviewSchema },
-  });
+  // Structured-output models occasionally return a well-formed JSON object that
+  // is nonetheless missing a required field (e.g. Claude tool-use dropping the
+  // `scores` array). That parse failure surfaces only after the call returns, so
+  // the client's transient-retry can't catch it — re-roll here instead of failing
+  // the whole review for a recoverable model hiccup.
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await args.gemini.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseMimeType: "application/json", responseSchema: reviewSchema },
+      });
 
-  const text = response.text;
-  if (!text) throw new Error("Empty review response from Gemini");
+      const text = response.text;
+      if (!text) throw new Error("Empty review response from the model");
 
-  let parsed: RawReview;
-  try {
-    parsed = JSON.parse(text) as RawReview;
-  } catch (error) {
-    throw new Error(`Review response was not valid JSON: ${(error as Error).message}`);
+      let parsed: RawReview;
+      try {
+        parsed = JSON.parse(text) as RawReview;
+      } catch (error) {
+        throw new Error(`Review response was not valid JSON: ${(error as Error).message}`);
+      }
+
+      const scores = parseScores(parsed.scores);
+      const issues = parseIssues(parsed.issues);
+      const suggestions = parseSuggestions(parsed.suggestions);
+      const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+
+      const { pass, overall, reasoning } = computeGate(scores, issues, gate);
+
+      return {
+        pass,
+        overallScore: overall,
+        scores,
+        issues,
+        suggestions,
+        summary,
+        thresholdReasoning: reasoning,
+        modelUsed: model,
+      };
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const scores = parseScores(parsed.scores);
-  const issues = parseIssues(parsed.issues);
-  const suggestions = parseSuggestions(parsed.suggestions);
-  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
-
-  const { pass, overall, reasoning } = computeGate(scores, issues, gate);
-
-  return {
-    pass,
-    overallScore: overall,
-    scores,
-    issues,
-    suggestions,
-    summary,
-    thresholdReasoning: reasoning,
-    modelUsed: model,
-  };
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /**
