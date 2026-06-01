@@ -18,6 +18,29 @@ const goodFrontmatter: BlogPostFrontmatter = {
 
 const goodMarkdown = `# How to Prep Your Sacramento HVAC for a Heat Wave\n\nA solid intro paragraph about what to do.\n\n## Step 1\n\nDetails here.\n\n## Conclusion\n\nWrap up.`;
 
+/** A GeminiLike returning a scripted sequence of generateContent texts. */
+function sequencedGemini(texts: string[]): {
+  gemini: { models: { generateContent: (req: unknown) => Promise<{ text: string }>; embedContent: () => Promise<{ embeddings: [] }> } };
+  calls: () => number;
+} {
+  let i = 0;
+  return {
+    gemini: {
+      models: {
+        async generateContent() {
+          const text = texts[Math.min(i, texts.length - 1)]!;
+          i += 1;
+          return { text };
+        },
+        async embedContent() {
+          return { embeddings: [] };
+        },
+      },
+    },
+    calls: () => i,
+  };
+}
+
 function scoreEntries(
   values: Record<ReviewDimension, number>,
 ): Array<{ dimension: ReviewDimension; score: number; reasoning: string }> {
@@ -268,4 +291,44 @@ test("renderReviewMarkdown produces a PASS-tagged comment with all sections", as
   assert.match(md, /Brand Voice & Fit/);
   assert.match(md, /\*\*MINOR\*\* \(seoMetadata\)/);
   assert.match(md, /Add a CTA/);
+});
+
+test("retries when the model returns a response missing the scores array, then succeeds", async () => {
+  const good = JSON.stringify({
+    scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8 }),
+    issues: [],
+    suggestions: [],
+    summary: "Solid and on-brand.",
+  });
+  // First response omits `scores` (observed intermittently from Claude tool-use);
+  // the review should re-roll rather than fail the whole run.
+  const missingScores = JSON.stringify({ issues: [], suggestions: [], summary: "no scores" });
+  const { gemini, calls } = sequencedGemini([missingScores, good]);
+
+  const result = await reviewBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: goodFrontmatter,
+    markdown: goodMarkdown,
+  });
+
+  assert.equal(calls(), 2, "should retry once after the scores-less response");
+  assert.equal(result.pass, true);
+  assert.equal(result.scores.length, 3);
+});
+
+test("throws after exhausting retries when scores never appears", async () => {
+  const missingScores = JSON.stringify({ issues: [], suggestions: [], summary: "no scores" });
+  const { gemini, calls } = sequencedGemini([missingScores]);
+
+  await assert.rejects(
+    reviewBlogPost({
+      gemini,
+      config: sampleConfig,
+      frontmatter: goodFrontmatter,
+      markdown: goodMarkdown,
+    }),
+    /missing 'scores'/,
+  );
+  assert.ok(calls() >= 3, "should have retried before giving up");
 });
