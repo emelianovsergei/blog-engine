@@ -67,36 +67,97 @@ function parseScalar(value: string): unknown {
   return unquote(v);
 }
 
+const leadingSpaces = (s: string): number => (/^ */.exec(s)?.[0].length ?? 0);
+
+interface PendingBlock {
+  /** `>` folds line breaks into spaces; `|` keeps them literal. */
+  style: ">" | "|";
+  /** Indentation of the `key:` line; block content must be more indented. */
+  keyIndent: number;
+  rawLines: string[];
+}
+
+/**
+ * Renders an accumulated YAML block scalar (`>`/`|`, with optional `-`/`+`
+ * chomping). Dedents to the least-indented content line, then folds (`>`) or
+ * preserves (`|`) line breaks. Trailing blank lines are always stripped, which
+ * matches the `-` chomp our generators emit (`>-`) and is harmless otherwise.
+ */
+function renderBlock(block: PendingBlock): string {
+  const lines = [...block.rawLines];
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  if (lines.length === 0) return "";
+  const contentIndent = Math.min(
+    ...lines.filter((l) => l.trim() !== "").map(leadingSpaces),
+  );
+  const dedented = lines.map((l) => (l.trim() === "" ? "" : l.slice(contentIndent)));
+  if (block.style === "|") return dedented.join("\n");
+  // Folded: blank lines separate paragraphs; lines within a paragraph join with a space.
+  const paragraphs: string[] = [];
+  let current = "";
+  for (const line of dedented) {
+    if (line === "") {
+      paragraphs.push(current);
+      current = "";
+    } else {
+      current = current ? `${current} ${line}` : line;
+    }
+  }
+  paragraphs.push(current);
+  return paragraphs.join("\n");
+}
+
 function parseYamlBlock(yaml: string): BlogPostFrontmatter {
   const lines = yaml.split(/\r?\n/);
   const out: Record<string, unknown> = {};
   let pendingKey: string | null = null;
   let pendingList: string[] | null = null;
+  let pendingBlock: PendingBlock | null = null;
 
-  const flushList = (): void => {
+  const flushPending = (): void => {
     if (pendingKey !== null && pendingList !== null) {
       out[pendingKey] = pendingList;
+    } else if (pendingKey !== null && pendingBlock !== null) {
+      out[pendingKey] = renderBlock(pendingBlock);
     }
     pendingKey = null;
     pendingList = null;
+    pendingBlock = null;
   };
 
   for (const raw of lines) {
+    // Block scalars consume blank lines and any line indented past the key,
+    // so they must be handled before the blank/comment skip below.
+    if (pendingBlock !== null) {
+      if (raw.trim() === "" || leadingSpaces(raw) > pendingBlock.keyIndent) {
+        pendingBlock.rawLines.push(raw);
+        continue;
+      }
+      flushPending(); // dedent ends the block; fall through to process this line
+    }
+
     if (!raw.trim() || raw.trim().startsWith("#")) continue;
 
-    if (pendingKey !== null && /^\s+-\s+/.test(raw)) {
+    if (pendingKey !== null && pendingList !== null && /^\s+-\s+/.test(raw)) {
       const item = raw.replace(/^\s+-\s+/, "");
-      pendingList!.push(unquote(item));
+      pendingList.push(unquote(item));
       continue;
     }
 
-    flushList();
+    flushPending();
 
-    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(raw);
+    const m = /^(\s*)([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(raw);
     if (!m) continue;
-    const key = m[1]!;
-    const rest = m[2] ?? "";
+    const indent = m[1]!.length;
+    const key = m[2]!;
+    const rest = m[3] ?? "";
 
+    const block = /^([>|])[+-]?\s*$/.exec(rest);
+    if (block) {
+      pendingKey = key;
+      pendingBlock = { style: block[1] as ">" | "|", keyIndent: indent, rawLines: [] };
+      continue;
+    }
     if (rest.startsWith("[") && rest.trim().endsWith("]")) {
       out[key] = parseInlineArray(rest);
       continue;
@@ -108,7 +169,7 @@ function parseYamlBlock(yaml: string): BlogPostFrontmatter {
     }
     out[key] = parseScalar(rest);
   }
-  flushList();
+  flushPending();
 
   if (typeof out.title !== "string") {
     out.title = String(out.title ?? "");

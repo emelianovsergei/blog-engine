@@ -63,6 +63,67 @@ test("parseDocument tolerates an empty tags block", () => {
   assert.deepEqual(frontmatter.tags, []);
 });
 
+test("parseDocument reads folded block scalars (>-) as joined single-line text", () => {
+  // This is exactly what gray-matter / js-yaml emit for a long description.
+  const src = `---
+title: Furnace Prep
+metaDescription: >-
+  Prepare your Sacramento furnace for summer dormancy with essential steps.
+  Learn how to safely shut down your system and save energy.
+description: >-
+  Learn the practical steps Sacramento homeowners can take to safely shut down
+  their furnace for the warm months, extending system life and preventing
+  issues.
+date: 2026-05-31
+slug: furnace-prep
+---
+body
+`;
+  const { frontmatter } = parseDocument(src);
+  assert.equal(
+    frontmatter.metaDescription,
+    "Prepare your Sacramento furnace for summer dormancy with essential steps. Learn how to safely shut down your system and save energy.",
+  );
+  assert.equal(
+    frontmatter.description,
+    "Learn the practical steps Sacramento homeowners can take to safely shut down their furnace for the warm months, extending system life and preventing issues.",
+  );
+  // The scalar after the folded block must still parse — not be swallowed.
+  assert.equal(frontmatter.date, "2026-05-31");
+  assert.equal(frontmatter.slug, "furnace-prep");
+});
+
+test("parseDocument reads literal block scalars (|) preserving line breaks", () => {
+  const src = `---
+title: T
+note: |-
+  line one
+  line two
+slug: t
+---
+body
+`;
+  const { frontmatter } = parseDocument(src);
+  assert.equal(frontmatter.note, "line one\nline two");
+  assert.equal(frontmatter.slug, "t");
+});
+
+test("parseDocument handles a folded scalar immediately followed by a block list", () => {
+  const src = `---
+description: >-
+  A folded summary that spans
+  two physical lines.
+tags:
+  - furnace
+  - summer prep
+---
+body
+`;
+  const { frontmatter } = parseDocument(src);
+  assert.equal(frontmatter.description, "A folded summary that spans two physical lines.");
+  assert.deepEqual(frontmatter.tags, ["furnace", "summer prep"]);
+});
+
 test("serializeDocument round-trips through parseDocument", () => {
   const { frontmatter, body } = parseDocument(sample);
   const serialized = serializeDocument(frontmatter, body);
