@@ -4,6 +4,7 @@ import {
   HVAC_CATEGORIES,
   SACRAMENTO_LOCATION,
 } from "../config.js";
+import { createModelClient } from "../client.js";
 import type { EngineConfig, GeminiLike } from "../types.js";
 
 export type SiteKey = "pulse" | "promax";
@@ -88,4 +89,24 @@ export async function makeGeminiClient(): Promise<GeminiLike> {
     GoogleGenAI: new (init: { apiKey: string }) => GeminiLike;
   };
   return new mod.GoogleGenAI({ apiKey });
+}
+
+/**
+ * Build the composite client the review/rewrite CLIs use: Claude primary (when
+ * `ANTHROPIC_API_KEY` is set) with a Gemini fallback (when a Gemini key is set).
+ * Embeddings always route to Gemini. At least one key must be present.
+ */
+export async function makeReviewClient(): Promise<GeminiLike> {
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY);
+  if (!anthropicApiKey && !hasGeminiKey) {
+    throw new Error(
+      "Missing model credentials: set ANTHROPIC_API_KEY (preferred) and/or GEMINI_API_KEY",
+    );
+  }
+  const geminiClient = hasGeminiKey ? await makeGeminiClient() : undefined;
+  return createModelClient({
+    ...(anthropicApiKey ? { anthropicApiKey } : {}),
+    ...(geminiClient ? { geminiClient } : {}),
+  });
 }

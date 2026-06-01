@@ -13,7 +13,7 @@ import type {
   ReviewResult,
 } from "./review.js";
 
-export const DEFAULT_REWRITE_MODEL = "gemini-2.5-flash";
+export const DEFAULT_REWRITE_MODEL = "claude-sonnet-4-6";
 
 export interface RewriteBlogPostArgs {
   gemini: GeminiLike;
@@ -23,7 +23,7 @@ export interface RewriteBlogPostArgs {
   markdown: string;
   /** The failing review whose issues the rewrite should address. */
   reviewFeedback: ReviewResult;
-  /** Defaults to `gemini-2.5-flash`. */
+  /** Defaults to `claude-sonnet-4-6`. */
   model?: string;
 }
 

@@ -17,7 +17,7 @@ import type { ReviewResult } from "../review.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
 import {
   composeConfig,
-  makeGeminiClient,
+  makeReviewClient,
   optionalFlag,
   parseArgs,
   requireFlag,
@@ -27,7 +27,7 @@ function usage(): string {
   return `Usage: blog-engine-rewrite --post <path.md> --review <result.json> --site pulse|promax \\
                            --business "<Business Name>" \\
                            --service-areas "Sacramento,Roseville,..." \\
-                           [--notes-out change-notes.md] [--model gemini-2.5-flash]`;
+                           [--notes-out change-notes.md] [--model claude-sonnet-4-6]`;
 }
 
 async function main(): Promise<number> {
@@ -48,7 +48,7 @@ async function main(): Promise<number> {
   const reviewRaw = await readFile(reviewPath, "utf8");
   const reviewFeedback = JSON.parse(reviewRaw) as ReviewResult;
 
-  const gemini = await makeGeminiClient();
+  const gemini = await makeReviewClient();
   const result = await rewriteBlogPost({
     gemini,
     config,

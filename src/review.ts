@@ -12,7 +12,7 @@ import type {
   GeminiLike,
 } from "./types.js";
 
-export const DEFAULT_REVIEW_MODEL = "gemini-2.5-flash";
+export const DEFAULT_REVIEW_MODEL = "claude-sonnet-4-6";
 
 export type ReviewDimension = "contentQuality" | "seoMetadata" | "brandVoiceFit";
 
@@ -79,7 +79,7 @@ export interface ReviewBlogPostArgs {
   markdown: string;
   /** Optional published-post list — included in the prompt as duplication context. */
   existingPosts?: ExistingPostLike[];
-  /** Defaults to `gemini-2.5-flash`. */
+  /** Defaults to `claude-sonnet-4-6`. */
   model?: string;
   /** Overrides the default gate (testing / forced-strict mode). */
   gate?: ReviewGate;
