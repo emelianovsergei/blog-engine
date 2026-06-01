@@ -19,6 +19,9 @@ export {
 } from "./review.js";
 export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 
+export { claudeAdapter, createClaudeClient } from "./anthropic.js";
+export { createModelClient, createCompositeClient, isTransientError } from "./client.js";
+
 export type {
   EngineConfig,
   CategoryDef,
@@ -32,6 +35,14 @@ export type {
   CandidateTopic,
   GeminiLike,
 } from "./types.js";
+export type {
+  AnthropicLike,
+  AnthropicMessage,
+  AnthropicContentBlock,
+  AnthropicCreateRequest,
+  ClaudeAdapterOptions,
+} from "./anthropic.js";
+export type { CompositeClientOptions } from "./client.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
 export type {

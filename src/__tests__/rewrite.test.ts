@@ -70,7 +70,7 @@ test("returns a revised post and merges revised fields into frontmatter", async 
   assert.equal(result.frontmatter.date, "2026-06-01");
   assert.match(result.markdown, /Heat-Wave Prep/);
   assert.match(result.changeNotes, /Expanded description/);
-  assert.equal(result.modelUsed, "gemini-2.5-flash");
+  assert.equal(result.modelUsed, "claude-sonnet-4-6");
 });
 
 test("throws when the rewrite response is empty", async () => {

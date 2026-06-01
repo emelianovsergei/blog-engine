@@ -5,7 +5,7 @@
  * Exit codes:
  *   0  PASS — review passed the gate.
  *   2  FAIL — review ran but failed the gate.
- *   1  ERROR — unexpected failure (bad args, no API key, Gemini outage).
+ *   1  ERROR — unexpected failure (bad args, no API key, model outage).
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -14,7 +14,7 @@ import type { ReviewResult } from "../review.js";
 import { parseDocument } from "./frontmatter.js";
 import {
   composeConfig,
-  makeGeminiClient,
+  makeReviewClient,
   optionalFlag,
   parseArgs,
   requireFlag,
@@ -25,7 +25,7 @@ function usage(): string {
                           --business "<Business Name>" \\
                           --service-areas "Sacramento,Roseville,..." \\
                           [--out review-summary.md] [--json-out result.json] \\
-                          [--model gemini-2.5-flash]`;
+                          [--model claude-sonnet-4-6]`;
 }
 
 async function main(): Promise<number> {
@@ -44,7 +44,7 @@ async function main(): Promise<number> {
   const source = await readFile(postPath, "utf8");
   const { frontmatter, body } = parseDocument(source);
 
-  const gemini = await makeGeminiClient();
+  const gemini = await makeReviewClient();
   const result: ReviewResult = await reviewBlogPost({
     gemini,
     config,
