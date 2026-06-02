@@ -70,6 +70,30 @@ test("rankCandidates rewards weather-aligned topics during an anomaly", () => {
   assert.ok(ranked[0]!.score > ranked[1]!.score, "smoke-relevant topic should win during smoke");
 });
 
+test("rankCandidates rewards higher search demand when a demand signal is provided", () => {
+  const ranked = rankCandidates({
+    candidates: [candidate("low demand topic"), candidate("high demand topic")],
+    duplication: [dup(0.2), dup(0.2)],
+    recentMix: NO_MIX,
+    weather: CALM_WEATHER,
+    demand: [0.1, 0.9],
+  });
+  assert.ok(ranked[1]!.score > ranked[0]!.score, "the higher-demand candidate should win all else equal");
+  assert.ok(/demand/i.test(ranked[1]!.rationale), "rationale should mention the demand signal");
+});
+
+test("rankCandidates ignores the demand term when no demand signal is provided", () => {
+  // All-equal candidates with no demand arg: scores stay equal (back-compat path).
+  const ranked = rankCandidates({
+    candidates: [candidate("a"), candidate("b")],
+    duplication: [dup(0.2), dup(0.2)],
+    recentMix: NO_MIX,
+    weather: CALM_WEATHER,
+  });
+  assert.equal(ranked[0]!.score, ranked[1]!.score);
+  assert.ok(!/demand/i.test(ranked[0]!.rationale), "rationale omits demand when unscored");
+});
+
 test("pickBest chooses the highest-scoring survivor", () => {
   const ranked = rankCandidates({
     candidates: [candidate("low"), candidate("high")],

@@ -24,6 +24,7 @@ export { createModelClient, createCompositeClient, isTransientError } from "./cl
 
 export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
 export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
+export { scoreDemand, toSearchQuery } from "./demand.js";
 
 export type {
   EngineConfig,
@@ -48,6 +49,7 @@ export type {
 export type { CompositeClientOptions } from "./client.js";
 export type { FetchLike } from "./suggest.js";
 export type { KeywordResearch, ResearchKeywordsArgs, SearchIntent } from "./keywords.js";
+export type { DemandResult, ScoreDemandArgs } from "./demand.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
 export type {

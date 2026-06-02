@@ -1,6 +1,7 @@
 /** Ties the engine modules together into the public `selectWeeklyTopic` entry point. */
 import { generateCandidates } from "./candidates.js";
 import { summarizeRecentCategories } from "./categories.js";
+import { scoreDemand } from "./demand.js";
 import { scoreDuplication } from "./dedup.js";
 import { pickBest, rankCandidates } from "./rank.js";
 import { getSeasonContext } from "./season.js";
@@ -58,7 +59,19 @@ export async function selectWeeklyTopic(args: SelectWeeklyTopicArgs): Promise<Se
     );
   }
 
-  const ranked = rankCandidates({ candidates, duplication: scores, recentMix, weather });
+  // Optional search-demand signal — only when a fetch impl is supplied.
+  let demand: number[] | undefined;
+  if (args.fetchImpl) {
+    const demandResult = await scoreDemand({ candidates, fetchImpl: args.fetchImpl });
+    if (demandResult.available) {
+      demand = demandResult.scores;
+      console.log("[blog-engine] search-demand signal applied to ranking.");
+    } else {
+      console.warn("[blog-engine] search-demand signal unavailable — ranking without it.");
+    }
+  }
+
+  const ranked = rankCandidates({ candidates, duplication: scores, recentMix, weather, demand });
   const { winner, relaxedDuplicateFilter } = pickBest(ranked);
   if (relaxedDuplicateFilter) {
     console.warn(

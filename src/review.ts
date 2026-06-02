@@ -163,6 +163,7 @@ Rubric — score each dimension 0 to 10 (10 = excellent, 7 = solid publish, 5 = 
    - Well structured: clear intro, scannable subheads, sensible conclusion.
    - Body length roughly 600-1500 words for a weekly post.
    - No hallucinated stats, dollar amounts, model numbers, or rebate values.
+   - GEO (answer-first): the opening sentence — and the first sentence under each H2 — should directly answer the question, not warm up. Reward at least one cited statistic from an authoritative source early on. Any numbers/prices in an FAQ MUST match the body (no contradictions).
 
 2. SEO & METADATA (seoMetadata)
    - frontmatter.title present, 40-65 characters, includes a primary keyword.
@@ -171,6 +172,8 @@ Rubric — score each dimension 0 to 10 (10 = excellent, 7 = solid publish, 5 = 
    - frontmatter.tags 2-6 items, relevant.
    - frontmatter.category MUST be one of: ${allowedIds}.
    - Body uses logical H2/H3 structure. Service-area mentions feel natural, not stuffed.
+   - Keyword targeting (GEO): if frontmatter has a primary/target keyword (e.g. frontmatter.targetKeyword), it should be front-loaded in the title and appear naturally in the description and the first ~100 words of the body. Penalise keyword stuffing — e.g. raw keyword phrases jammed into sentences or FAQ answers (a known ranking penalty).
+   - FAQ for AI search: reward a genuine FAQ section answering real questions (and matching FAQPage frontmatter.faqs) — it is a strong signal for citation by AI search engines. A missing FAQ is a minor gap, not a blocker.
 
 3. BRAND VOICE & SITE FIT (brandVoiceFit)
    - Tone: knowledgeable, helpful, plainspoken — like a trusted local contractor.
