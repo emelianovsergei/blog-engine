@@ -22,6 +22,9 @@ export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 export { claudeAdapter, createClaudeClient } from "./anthropic.js";
 export { createModelClient, createCompositeClient, isTransientError } from "./client.js";
 
+export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
+export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
+
 export type {
   EngineConfig,
   CategoryDef,
@@ -43,6 +46,8 @@ export type {
   ClaudeAdapterOptions,
 } from "./anthropic.js";
 export type { CompositeClientOptions } from "./client.js";
+export type { FetchLike } from "./suggest.js";
+export type { KeywordResearch, ResearchKeywordsArgs, SearchIntent } from "./keywords.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
 export type {
