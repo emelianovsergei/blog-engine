@@ -14,10 +14,15 @@ export interface RankedCandidate {
   rationale: string;
 }
 
-// Weights — dedup distance dominates, rotation next, weather fit a light nudge.
+// Weights without a demand signal — dedup dominates, rotation next, weather a nudge.
 const WEIGHT_DEDUP = 0.5;
 const WEIGHT_ROTATION = 0.3;
 const WEIGHT_WEATHER = 0.2;
+
+// Rebalanced weights when a search-demand signal is supplied. Dedup still leads;
+// demand becomes the second-strongest pull so the engine favours topics people
+// actually search for, with rotation and weather as lighter nudges.
+const DEMAND_WEIGHTS = { dedup: 0.4, demand: 0.25, rotation: 0.2, weather: 0.15 };
 
 const ANOMALY_KEYWORDS: Record<WeatherAnomaly, string[]> = {
   "wildfire-smoke": ["smoke", "air quality", "filter", "merv", "hepa", "iaq", "ventilation"],
@@ -33,13 +38,17 @@ export interface RankArgs {
   duplication: DuplicationScore[];
   recentMix: RecentMix;
   weather: WeatherContext;
+  /** Optional, index-aligned search-demand scores in 0-1. When present, the
+   * weights rebalance to factor demand in; when absent, behaviour is unchanged. */
+  demand?: number[];
   threshold?: number;
 }
 
 export function rankCandidates(args: RankArgs): RankedCandidate[] {
-  const { candidates, duplication, recentMix, weather } = args;
+  const { candidates, duplication, recentMix, weather, demand } = args;
   const threshold = args.threshold ?? DEFAULT_SIMILARITY_THRESHOLD;
   const anomalyWords = ANOMALY_KEYWORDS[weather.anomaly];
+  const useDemand = Array.isArray(demand);
 
   return candidates.map((candidate, index) => {
     const dup = duplication[index] ?? { maxSimilarity: 0, nearestSlug: null };
@@ -49,19 +58,27 @@ export function rankCandidates(args: RankArgs): RankedCandidate[] {
     const text = `${candidate.topic} ${candidate.notes}`.toLowerCase();
     const weatherFit =
       anomalyWords.length > 0 && anomalyWords.some((word) => text.includes(word)) ? 1 : 0;
+    const demandScore = useDemand ? (demand[index] ?? 0) : 0;
 
-    const score =
-      dedupScore * WEIGHT_DEDUP +
-      rotationScore * WEIGHT_ROTATION +
-      weatherFit * WEIGHT_WEATHER;
+    const score = useDemand
+      ? dedupScore * DEMAND_WEIGHTS.dedup +
+        demandScore * DEMAND_WEIGHTS.demand +
+        rotationScore * DEMAND_WEIGHTS.rotation +
+        weatherFit * DEMAND_WEIGHTS.weather
+      : dedupScore * WEIGHT_DEDUP +
+        rotationScore * WEIGHT_ROTATION +
+        weatherFit * WEIGHT_WEATHER;
 
     const rationale = [
       `dedup distance ${dedupScore.toFixed(2)}`,
+      useDemand ? `search demand ${demandScore.toFixed(2)}` : null,
       overrepresented
         ? `category "${candidate.categoryId}" is over-represented`
         : `category "${candidate.categoryId}" keeps rotation balanced`,
       weatherFit ? `aligned with ${weather.anomaly} conditions` : "seasonally appropriate",
-    ].join("; ");
+    ]
+      .filter((part): part is string => part !== null)
+      .join("; ");
 
     return {
       candidate,

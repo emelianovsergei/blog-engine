@@ -51,6 +51,26 @@ function scoreEntries(
   }));
 }
 
+test("the review rubric instructs the model on GEO / keyword-targeting criteria", async () => {
+  const capture: GenerateContentCall[] = [];
+  const gemini = makeFakeGemini({
+    capture,
+    candidatesJson: {
+      scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8 }),
+      issues: [],
+      suggestions: [],
+      summary: "ok",
+    },
+  });
+  await reviewBlogPost({ gemini, config: sampleConfig, frontmatter: goodFrontmatter, markdown: goodMarkdown });
+
+  const prompt = String(capture[0]!.contents).toLowerCase();
+  assert.ok(prompt.includes("answer-first"), "rubric should reward answer-first structure");
+  assert.ok(prompt.includes("faq"), "rubric should check for an FAQ / FAQPage");
+  assert.ok(prompt.includes("targetkeyword") || prompt.includes("target keyword") || prompt.includes("primary keyword"), "rubric should check primary-keyword placement");
+  assert.ok(prompt.includes("stuff"), "rubric should penalise keyword stuffing");
+});
+
 test("passes a well-formed post when all scores are above the floor", async () => {
   const gemini = makeFakeGemini({
     candidatesJson: {

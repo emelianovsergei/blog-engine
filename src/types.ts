@@ -5,6 +5,7 @@
  * injected `GeminiLike` client described structurally below, so a real
  * `GoogleGenAI` instance satisfies it and tests can pass lightweight fakes.
  */
+import type { FetchLike } from "./suggest.js";
 
 /** Minimal structural view of the `@google/genai` client the engine uses. */
 export interface GeminiLike {
@@ -109,4 +110,7 @@ export interface SelectWeeklyTopicArgs {
   candidateCount?: number;
   /** Model overrides — defaults are sane; exposed for tests and cost tuning. */
   models?: { generation?: string; embedding?: string };
+  /** When provided, enables the Google-Autocomplete search-demand signal in
+   * ranking (pass the global `fetch`). Omit to skip it. Injected in tests. */
+  fetchImpl?: FetchLike;
 }
