@@ -22,6 +22,13 @@ export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 export { claudeAdapter, createClaudeClient } from "./anthropic.js";
 export { createModelClient, createCompositeClient, isTransientError } from "./client.js";
 
+export {
+  assertTopicAligned,
+  topicAlignmentIssue,
+  topicLockPlannerRules,
+  writerAccuracyRules,
+} from "./planning.js";
+
 export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
 export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
 export { scoreDemand, toSearchQuery } from "./demand.js";
