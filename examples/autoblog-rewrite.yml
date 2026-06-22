@@ -43,6 +43,19 @@ jobs:
               content: 'eyes',
             });
 
+      # `gh pr checkout` needs an existing git repo to switch branches in;
+      # without this checkout the workspace has no .git and it exits 1.
+      #
+      # Persist the AUTOBLOG_PAT (not the default GITHUB_TOKEN) as the push
+      # credential: a push made with GITHUB_TOKEN does NOT retrigger the review
+      # workflow (GitHub suppresses it to prevent loops), so the rewritten post
+      # would never get re-reviewed. Falls back to GITHUB_TOKEN when the PAT is
+      # unset (the push still works; re-review just won't auto-fire).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+
       - name: Checkout PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -92,6 +105,14 @@ jobs:
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
             --notes-out change-notes.md
+
+      # Build the site against the rewritten post BEFORE committing. A rewrite
+      # that mangles frontmatter (e.g. drops a field the page template reads)
+      # crashes the prerender; without this gate the broken post would be pushed
+      # and only fail later in the PR's own build. Failing here means nothing is
+      # pushed and the post is left in its prior state.
+      - name: Validate rewritten post builds
+        run: npm run build
 
       - name: Commit revision
         run: |
