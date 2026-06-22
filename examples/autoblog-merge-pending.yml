@@ -5,8 +5,9 @@
 # protection or GitHub-native auto-merge — works on every plan including
 # Free.
 #
-# Hourly schedule: list open PRs with label `autoblog-approved-pending`,
-# squash-merge each one that has been open >= 24h. PRs carrying the
+# Daily schedule (~1 AM PT publish window): list open PRs with label
+# `autoblog-approved-pending`, squash-merge each one that has been open >= 24h.
+# PRs carrying the
 # `autoblog-hold` label are skipped (manual pause). PRs with the
 # `autoblog-review-failed` label are skipped (defensive — should not
 # happen given the review workflow removes one when adding the other).
@@ -15,7 +16,7 @@ name: Autoblog Merge Pending
 
 on:
   schedule:
-    - cron: '15 * * * *'
+    - cron: '0 9 * * *'   # daily ~1 AM PST / 2 AM PDT (was '15 * * * *' hourly)
   workflow_dispatch:
 
 permissions:
