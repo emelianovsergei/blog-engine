@@ -1,10 +1,17 @@
 /**
- * User-initiated revision of a failed-review blog post.
+ * Revision of a failed-review blog post against the review's findings.
  *
- * Loop-safety: this is only called from the `/autoblog rewrite` slash-command
- * workflow in consumer repos. It is never triggered automatically by a failed
- * review. One call produces one revision; the revised post goes back through
- * normal review like any other commit.
+ * Invoked two ways in consumer repos: automatically by the review workflow
+ * when the gate fails (autoblog-review.yml auto-fix steps), and manually via
+ * the `/autoblog rewrite` slash-command workflow as the escape hatch once
+ * auto-fix gives up. One call produces one revision; the revised post goes
+ * back through normal review like any other commit.
+ *
+ * Loop-safety lives in CI, not here: the review workflow counts
+ * `[autoblog-autofix]` marker commits on the PR branch and stops at
+ * AUTOBLOG_MAX_AUTOFIX attempts (default 2). There is deliberately no
+ * `--max-attempts` flag — the cap is only derivable from branch state,
+ * which CI owns.
  */
 import type { EngineConfig, GeminiLike } from "./types.js";
 import type {
@@ -13,7 +20,7 @@ import type {
   ReviewResult,
 } from "./review.js";
 
-export const DEFAULT_REWRITE_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_REWRITE_MODEL = "claude-sonnet-5";
 
 export interface RewriteBlogPostArgs {
   gemini: GeminiLike;
@@ -23,7 +30,7 @@ export interface RewriteBlogPostArgs {
   markdown: string;
   /** The failing review whose issues the rewrite should address. */
   reviewFeedback: ReviewResult;
-  /** Defaults to `claude-sonnet-4-6`. */
+  /** Defaults to `claude-sonnet-5`. */
   model?: string;
 }
 

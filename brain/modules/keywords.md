@@ -3,7 +3,7 @@ type: "module"
 title: "Keyword Researcher"
 description: "Extracts and clusters search query suggestions into structured keyword profiles."
 tags: ["seo", "keywords", "clustering"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/keywords.ts"]
 ---
 # Keyword Researcher

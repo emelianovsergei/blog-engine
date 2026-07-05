@@ -2,21 +2,37 @@
 # Place at: .github/workflows/autoblog-review.yml
 #
 # Triggered by the weekly autoblog draft PR (label `autoblog` or branch
-# prefix `autoblog/*`). Runs the Gemini AI review and, if it passes the
+# prefix `autoblog/*`). Runs the Claude AI review and, if it passes the
 # gate, marks the PR ready and adds the `autoblog-approved-pending` label.
 # A separate workflow (autoblog-merge-pending.yml) handles the 24h delay
 # and final merge.
 #
+# On a genuine gate FAILURE (review exit 2) this workflow now also runs a
+# bounded auto-fix loop: it asks Claude Sonnet to revise the post against
+# the review findings, commits the revision, and pushes with AUTOBLOG_PAT
+# so the `synchronize` event re-runs this review. Attempts are counted by
+# `[autoblog-autofix]` marker commits on the PR branch; once the cap
+# (AUTOBLOG_MAX_AUTOFIX, default 2) is reached the PR keeps the
+# `autoblog-review-failed` label and waits for a human — who can edit the
+# post directly or comment `/autoblog rewrite` (autoblog-rewrite.yml).
+#
 # Required setup in the consumer repo:
-#   - Secret: GEMINI_API_KEY
+#   - Secret: ANTHROPIC_API_KEY (review + auto-fix; Claude primary)
+#   - Secret: GEMINI_API_KEY (fallback provider)
+#   - Secret: AUTOBLOG_PAT — classic PAT with repo scope. Needed so the
+#       auto-fix push retriggers this workflow (pushes made with the
+#       built-in GITHUB_TOKEN never emit workflow events). Without it the
+#       auto-fix step is skipped gracefully.
 #   - Repo variable (optional): AUTOBLOG_AUTOMERGE = "true" | "false"
 #       Set to "false" during shadow-mode rollout — review still runs and
 #       posts the comment, but the approve/label steps are skipped.
+#   - Repo variable (optional): AUTOBLOG_MAX_AUTOFIX = max automatic fix
+#       attempts per branch generation (default 2).
 #   - Labels (create once): autoblog, autoblog-approved-pending,
 #       autoblog-review-failed, autoblog-hold
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
-# the markdown path glob (content/blog/**/*.md) for your site's layout.
+# the markdown path globs for your site's layout.
 
 name: Autoblog AI Review
 
@@ -25,8 +41,21 @@ on:
     types: [opened, synchronize, reopened, labeled]
     paths:
       - 'content/blog/**/*.md'
+      - 'content/blog/**/*.mdx'
       - 'src/content/blog/**/*.md'
+      - 'src/content/blog/**/*.mdx'
 
+# A new draft PR fires both `opened` and `labeled`; two parallel review
+# passes could disagree PASS/FAIL. Keep only the latest run per PR. The
+# auto-fix push deliberately happens as the job's LAST step, so a newly
+# triggered run can only ever cancel an already-empty tail of this one.
+concurrency:
+  group: autoblog-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# contents stays read-only on purpose: the auto-fix push authenticates via
+# the AUTOBLOG_PAT persisted by the checkout step, never via GITHUB_TOKEN —
+# so a misconfigured job cannot create a push loop with the built-in token.
 permissions:
   contents: read
   pull-requests: write
@@ -39,10 +68,13 @@ jobs:
       || startsWith(github.head_ref, 'autoblog/')
     runs-on: ubuntu-latest
     steps:
+      # Persist AUTOBLOG_PAT as the push credential for the auto-fix step;
+      # falls back to GITHUB_TOKEN when unset (auto-fix then skips itself).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+          token: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -56,7 +88,7 @@ jobs:
           set -euo pipefail
           CHANGED=$(git diff --name-only \
             "origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" \
-            | grep -E '^(content|src/content)/blog/.*\.md$' | head -n 1 || true)
+            | grep -E '^(content|src/content)/blog/.*\.(md|mdx)$' | head -n 1 || true)
           echo "file=$CHANGED" >> "$GITHUB_OUTPUT"
           if [ -z "$CHANGED" ]; then
             echo "No blog markdown changed — skipping review."
@@ -68,6 +100,7 @@ jobs:
         id: review
         if: steps.files.outputs.file != ''
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set +e
@@ -76,9 +109,23 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --model claude-sonnet-5 \
             --out review-summary.md \
             --json-out review-result.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure a review summary exists
+        if: steps.files.outputs.file != ''
+        run: |
+          if [ ! -s review-summary.md ]; then
+            {
+              echo "## Autoblog AI Review"
+              echo
+              echo "⚠️ The AI review could not run this time (model error, exit code \`${{ steps.review.outputs.exit }}\`)."
+              echo
+              echo "No scored rubric was produced — this is almost always a transient upstream outage, not a problem with the post. Re-run the **Autoblog AI Review** workflow on this PR (or push a new commit) to try again."
+            } > review-summary.md
+          fi
 
       - name: Upload review artifacts
         if: steps.files.outputs.file != ''
@@ -91,11 +138,21 @@ jobs:
           retention-days: 30
 
       - name: Post sticky review comment
-        if: steps.files.outputs.file != ''
+        if: steps.files.outputs.file != '' && hashFiles('review-summary.md') != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: review-summary.md
           header: autoblog-review
+
+      # Runs on every pass, even in shadow mode (AUTOBLOG_AUTOMERGE=false),
+      # so a recovered post never keeps a stale failed label.
+      - name: Clear failed label on pass
+        if: steps.review.outputs.exit == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --remove-label autoblog-review-failed || true
 
       - name: Approve PR on pass
         if: >-
@@ -106,17 +163,204 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          gh pr ready "$PR" || true
+          # `gh pr ready` can fail silently on orgs still wired to the
+          # deprecated Projects (classic) GraphQL API — use the mutation
+          # directly instead.
+          PR_ID=$(gh pr view "$PR" --json id -q .id)
+          gh api graphql -f query='
+            mutation($id: ID!) {
+              markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+                pullRequest { isDraft }
+              }
+            }' -f id="$PR_ID"
           gh pr review "$PR" --approve \
             --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a 24h human-override window."
           gh pr edit "$PR" --add-label autoblog-approved-pending
           gh pr edit "$PR" --remove-label autoblog-review-failed || true
 
+      # exit 2 = gate failed; exit 1 = review could not run (bad args, no
+      # API key, model outage). Both land the failed label so merge-pending
+      # keeps skipping the PR, but only a genuine gate fail (exit 2, with a
+      # ReviewResult on disk) is eligible for auto-fix below.
       - name: Mark fail (shadow or live)
-        if: steps.review.outputs.exit == '2'
+        if: steps.review.outputs.exit == '1' || steps.review.outputs.exit == '2'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           gh pr edit "$PR" --add-label autoblog-review-failed
           gh pr edit "$PR" --remove-label autoblog-approved-pending || true
+
+      # ---------------------------------------------------------------
+      # Auto-fix loop. Every ineligible branch exits 0 with a reason —
+      # only genuine errors (rewrite crash, build failure) go red, and a
+      # red job never pushes, which terminates the loop safely.
+      # ---------------------------------------------------------------
+      - name: Auto-fix eligibility gate
+        id: autofix_gate
+        if: steps.review.outputs.exit == '2' && steps.files.outputs.file != ''
+        env:
+          # Secrets cannot be referenced in `if:` expressions — surface
+          # PAT presence through env instead.
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          MAX_ATTEMPTS: ${{ vars.AUTOBLOG_MAX_AUTOFIX || '2' }}
+          BASE: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "max=$MAX_ATTEMPTS" >> "$GITHUB_OUTPUT"
+          # Genuine gate fail only: never auto-fix when the ReviewResult is
+          # missing/corrupt or somehow says pass=true.
+          if [ ! -f review-result.json ] || ! jq -e '.pass == false' review-result.json >/dev/null; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no-json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Without the PAT a push cannot retrigger review — skip rather
+          # than push a fix nobody re-reviews.
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no-pat" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Attempt budget = marker commits already on this branch.
+          # Stateless and immune to label races; the weekly generate
+          # force-push wipes the markers, which intentionally resets the
+          # budget (new content = new attempts). --fixed-strings because
+          # the brackets in the marker are regex metacharacters.
+          ATTEMPTS=$(git log "origin/${BASE}..${HEAD_SHA}" \
+            --fixed-strings --grep='[autoblog-autofix]' --oneline | wc -l)
+          echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
+          if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=cap" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Stale-review guard: if the branch tip moved since this run
+          # started (weekly generate force-push race), this review no
+          # longer describes the tip — the newer run owns it.
+          git fetch origin "$HEAD_REF"
+          if [ "$(git rev-parse "origin/${HEAD_REF}")" != "$HEAD_SHA" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=stale" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "reason=" >> "$GITHUB_OUTPUT"
+
+      - name: 'Auto-fix: rewrite post'
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npx blog-engine-rewrite \
+            --post "${{ steps.files.outputs.file }}" \
+            --review review-result.json \
+            --site pulse \
+            --business "HVAC Pulse" \
+            --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --model claude-sonnet-5 \
+            --notes-out change-notes.md
+
+      # Build the site against the rewritten post BEFORE committing. A
+      # rewrite that mangles frontmatter crashes the prerender; failing
+      # here means nothing is pushed, the failed label stays, and the loop
+      # ends this round.
+      - name: 'Auto-fix: validate build'
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        run: npm run build
+
+      - name: 'Auto-fix: commit'
+        id: autofix_commit
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "autoblog-bot"
+          git config user.email "autoblog-bot@users.noreply.github.com"
+          git add "${{ steps.files.outputs.file }}"
+          if git diff --cached --quiet; then
+            echo "No changes from rewrite — model returned the same content."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          N=$(( ${{ steps.autofix_gate.outputs.attempts }} + 1 ))
+          echo "attempt_n=$N" >> "$GITHUB_OUTPUT"
+          # The [autoblog-autofix] marker IS the attempt counter read by the
+          # eligibility gate — do not "clean up" the message format.
+          git commit -m "autoblog: auto-fix attempt ${N} addressing review feedback [autoblog-autofix]"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: 'Auto-fix: prepend attempt header to change notes'
+        if: steps.autofix_commit.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          printf '### Auto-fix attempt %s of %s\n\n%s\n' \
+            "${{ steps.autofix_commit.outputs.attempt_n }}" \
+            "${{ steps.autofix_gate.outputs.max }}" \
+            "$(cat change-notes.md)" > change-notes.md
+
+      # Posted BEFORE the push on purpose: the push retriggers this
+      # workflow, whose cancel-in-progress would kill any step still
+      # pending here.
+      - name: 'Auto-fix: post change notes'
+        if: steps.autofix_commit.outputs.changed == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: change-notes.md
+          header: autoblog-autofix
+
+      - name: 'Auto-fix: human handoff comment'
+        id: handoff
+        if: >-
+          steps.review.outputs.exit == '2'
+          && steps.files.outputs.file != ''
+          && (steps.autofix_gate.outputs.eligible != 'true'
+              || steps.autofix_commit.outputs.changed == 'false')
+        env:
+          REASON: ${{ steps.autofix_gate.outputs.reason }}
+          CHANGED: ${{ steps.autofix_commit.outputs.changed }}
+          ATTEMPTS: ${{ steps.autofix_gate.outputs.attempts }}
+          MAX: ${{ steps.autofix_gate.outputs.max }}
+        run: |
+          set -euo pipefail
+          POST=true
+          case "${REASON:-}" in
+            cap)
+              printf '## Autoblog auto-fix — gave up\n\nAuto-fix already made %s of %s attempts on this branch and the review still fails. Human needed: edit the post directly, or comment `/autoblog rewrite` for one more AI revision.\n' \
+                "$ATTEMPTS" "$MAX" > handoff.md ;;
+            no-pat)
+              printf '## Autoblog auto-fix — skipped\n\n`AUTOBLOG_PAT` secret is not configured, so an automated fix push could not retrigger review. Fix the post manually or add the secret.\n' > handoff.md ;;
+            no-json|stale)
+              # no-json: exit-1-like anomaly, nothing actionable to post.
+              # stale: a newer run owns the branch tip — its review comment
+              # supersedes anything this run could say.
+              POST=false ;;
+            *)
+              if [ "${CHANGED:-}" = "false" ]; then
+                printf '## Autoblog auto-fix — no changes\n\nThe rewrite model returned the post unchanged, so there is nothing to re-review. Human needed: edit the post directly, or comment `/autoblog rewrite`.\n' > handoff.md
+              else
+                POST=false
+              fi ;;
+          esac
+          echo "post=$POST" >> "$GITHUB_OUTPUT"
+
+      - name: 'Auto-fix: post handoff comment'
+        if: steps.handoff.outputs.post == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: handoff.md
+          header: autoblog-autofix
+
+      # LAST step by design (see concurrency note at the top). Fast-forward
+      # only: the stale guard pinned the tip, so a rejected push just means
+      # the branch moved and a fresh review will cover the new tip.
+      - name: 'Auto-fix: push (retriggers review)'
+        if: steps.autofix_commit.outputs.changed == 'true'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git push origin "HEAD:refs/heads/${HEAD_REF}" \
+            || { echo "Push rejected — branch moved during this run; the newer tip gets its own review."; exit 0; }

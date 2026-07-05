@@ -3,7 +3,7 @@ type: "module"
 title: "Semantic Deduplicator"
 description: "Uses vector embeddings to filter out candidate topics that overlap with existing posts."
 tags: ["dedup", "embeddings", "vector"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/dedup.ts"]
 ---
 # Semantic Deduplicator

@@ -3,7 +3,7 @@ type: "module"
 title: "Configuration Store"
 description: "Contains category definitions, location defaults, and taxonomy profiles."
 tags: ["config", "constants", "taxonomy"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/config.ts"]
 ---
 # Configuration Store

@@ -3,7 +3,7 @@ type: "module"
 title: "Anthropic Provider Adapter"
 description: "Connects the blog-engine to Anthropic Claude models for review and rewriting tasks."
 tags: ["llm-client", "claude", "adapter"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/anthropic.ts"]
 ---
 # Anthropic Provider Adapter

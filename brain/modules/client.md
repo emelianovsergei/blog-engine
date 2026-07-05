@@ -3,7 +3,7 @@ type: "module"
 title: "Unified Model Client"
 description: "Abstract client interface managing fallback routing, retries, and multi-model configuration."
 tags: ["llm-client", "retry", "fallback"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/client.ts"]
 ---
 # Unified Model Client

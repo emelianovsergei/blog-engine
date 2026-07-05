@@ -3,7 +3,7 @@ type: "module"
 title: "Search Demand Scorer"
 description: "Scores candidate blog topics against real search suggest frequency signals."
 tags: ["demand", "ranking", "seo"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/demand.ts"]
 ---
 # Search Demand Scorer

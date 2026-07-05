@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: []
 ---
 # Developer Knowledge Index

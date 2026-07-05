@@ -3,7 +3,7 @@ type: "module"
 title: "Type Definitions"
 description: "Centralized TypeScript interfaces and type definitions used throughout the engine."
 tags: ["types", "typescript", "interfaces"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/types.ts"]
 ---
 # Type Definitions

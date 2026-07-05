@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reviewBlogPost, renderReviewMarkdown } from "../review.js";
+import { reviewBlogPost, renderReviewMarkdown, buildVerifiedFacts } from "../review.js";
 import type { ReviewDimension } from "../review.js";
 import type { BlogPostFrontmatter } from "../review.js";
 import { makeFakeGemini, sampleConfig } from "./fakes.js";
@@ -91,7 +91,7 @@ test("passes a well-formed post when all scores are above the floor", async () =
   assert.ok(result.overallScore > 8 && result.overallScore < 9);
   assert.equal(result.scores.length, 3);
   assert.match(result.thresholdReasoning, /Passed/);
-  assert.equal(result.modelUsed, "claude-sonnet-4-6");
+  assert.equal(result.modelUsed, "claude-sonnet-5");
 });
 
 test("fails when any dimension drops below the per-dimension floor", async () => {
@@ -351,4 +351,86 @@ test("throws after exhausting retries when scores never appears", async () => {
     /missing 'scores'/,
   );
   assert.ok(calls() >= 3, "should have retried before giving up");
+});
+
+test("buildVerifiedFacts reports well-formed faqs and citations with counts", () => {
+  const facts = buildVerifiedFacts({
+    ...goodFrontmatter,
+    faqs: [
+      { question: "How often should I service my AC?", answer: "Once a year." },
+      { question: "What SEER rating do I need?", answer: "14.3+ in Sacramento." },
+      { question: "Do heat pumps work in heat waves?", answer: "Yes." },
+      { question: "When should I replace ducts?", answer: "Every 20-25 years." },
+      { question: "Does SMUD offer rebates?", answer: "Yes, check smud.org." },
+    ],
+    citations: [
+      { name: "ENERGY STAR", url: "https://www.energystar.gov/" },
+      { name: "SMUD", url: "https://www.smud.org/" },
+    ],
+  });
+
+  assert.match(facts, /frontmatter\.faqs: 5 entries, all well-formed \{question, answer\}/);
+  assert.match(facts, /frontmatter\.citations: 2 entries, all well-formed \{name, url\}/);
+  assert.match(facts, new RegExp(`title: ${goodFrontmatter.title.length} chars`));
+});
+
+test("buildVerifiedFacts flags malformed faq and citation entries by index", () => {
+  const facts = buildVerifiedFacts({
+    ...goodFrontmatter,
+    faqs: [
+      { question: "Fine?", answer: "Yes." },
+      { question: "Missing answer?" },
+      { question: "   ", answer: "blank question" },
+    ],
+    citations: [
+      { name: "Bad URL", url: "not a url" },
+      { url: "https://example.com/" },
+    ],
+  });
+
+  assert.match(facts, /frontmatter\.faqs: 3 entries; malformed .* at index\(es\) 1, 2/);
+  assert.match(facts, /frontmatter\.citations: 2 entries; malformed .* at index\(es\) 0, 1/);
+});
+
+test("buildVerifiedFacts handles absent faqs/citations and missing lengths", () => {
+  const facts = buildVerifiedFacts({ title: "Just a title" });
+
+  assert.match(facts, /frontmatter\.faqs: not present/);
+  assert.match(facts, /frontmatter\.citations: not present/);
+  assert.match(facts, /title: 12 chars; description: missing; slug: missing/);
+});
+
+test("review prompt includes the verified structural facts block", async () => {
+  const good = JSON.stringify({
+    scores: [
+      { dimension: "contentQuality", score: 8, reasoning: "solid" },
+      { dimension: "seoMetadata", score: 8, reasoning: "solid" },
+      { dimension: "brandVoiceFit", score: 8, reasoning: "solid" },
+    ],
+    issues: [],
+    suggestions: [],
+    summary: "good",
+  });
+  const captured: string[] = [];
+  const gemini = {
+    models: {
+      async generateContent(req: { contents: string }) {
+        captured.push(req.contents);
+        return { text: good };
+      },
+      async embedContent() {
+        return { embeddings: [] };
+      },
+    },
+  };
+
+  await reviewBlogPost({
+    gemini: gemini as never,
+    config: sampleConfig,
+    frontmatter: { ...goodFrontmatter, faqs: [{ question: "Q", answer: "A" }] },
+    markdown: goodMarkdown,
+  });
+
+  assert.match(captured[0]!, /VERIFIED STRUCTURAL FACTS/);
+  assert.match(captured[0]!, /frontmatter\.faqs: 1 entries, all well-formed/);
 });
