@@ -19,10 +19,13 @@
 # Required setup in the consumer repo:
 #   - Secret: ANTHROPIC_API_KEY (review + auto-fix; Claude primary)
 #   - Secret: GEMINI_API_KEY (fallback provider)
-#   - Secret: AUTOBLOG_PAT — classic PAT with repo scope. Needed so the
+#   - Secret: AUTOBLOG_PAT — needs PUSH rights, not just PR rights:
+#       fine-grained PAT with Contents: Read and write + Pull requests:
+#       Read and write, or a classic PAT with repo scope. Needed so the
 #       auto-fix push retriggers this workflow (pushes made with the
 #       built-in GITHUB_TOKEN never emit workflow events). Without it the
-#       auto-fix step is skipped gracefully.
+#       auto-fix step is skipped gracefully; with a PR-only PAT the push
+#       is denied (403) and the run logs a warning instead.
 #   - Repo variable (optional): AUTOBLOG_AUTOMERGE = "true" | "false"
 #       Set to "false" during shadow-mode rollout — review still runs and
 #       posts the comment, but the approve/label steps are skipped.
@@ -362,5 +365,14 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          git push origin "HEAD:refs/heads/${HEAD_REF}" \
-            || { echo "Push rejected — branch moved during this run; the newer tip gets its own review."; exit 0; }
+          if git push origin "HEAD:refs/heads/${HEAD_REF}" 2>push-err.txt; then
+            echo "Pushed auto-fix — review will re-run on the new tip."
+          elif grep -qiE "403|write access|permission" push-err.txt; then
+            cat push-err.txt
+            echo "::warning::Auto-fix push denied: AUTOBLOG_PAT lacks contents write access. A fine-grained PAT needs Contents: Read and write (plus Pull requests: Read and write); a classic PAT needs the repo scope. The fix commit was built and validated but could not be pushed."
+            exit 0
+          else
+            cat push-err.txt
+            echo "Push rejected — branch moved during this run; the newer tip gets its own review."
+            exit 0
+          fi
