@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-07-02T00:10:59.800Z*
+*Generated on: 2026-07-05T16:26:46.994Z*
 
 ## Summary
 
-*   **Total Wiki Files**: 25
+*   **Total Wiki Files**: 26
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 16
+*   **Orphan Pages**: 15
 *   **Stale Pages**: 0
 
 > [!NOTE]
@@ -17,7 +17,6 @@
 
 *The following pages have no incoming links:*
 
-*   [[concepts/quality-gates]]
 *   [[concepts/topic-deduplication]]
 *   [[concepts/weather-season-targeting]]
 *   [[modules/anthropic]]

@@ -3,7 +3,7 @@ type: "module"
 title: "Weather Client"
 description: "Fetches regional weather data and detects anomalies like heat waves or cold snaps."
 tags: ["weather", "api-client", "anomalies"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/weather.ts"]
 ---
 # Weather Client

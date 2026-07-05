@@ -12,7 +12,7 @@ import type {
   GeminiLike,
 } from "./types.js";
 
-export const DEFAULT_REVIEW_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_REVIEW_MODEL = "claude-sonnet-5";
 
 export type ReviewDimension = "contentQuality" | "seoMetadata" | "brandVoiceFit";
 
@@ -79,7 +79,7 @@ export interface ReviewBlogPostArgs {
   markdown: string;
   /** Optional published-post list — included in the prompt as duplication context. */
   existingPosts?: ExistingPostLike[];
-  /** Defaults to `claude-sonnet-4-6`. */
+  /** Defaults to `claude-sonnet-5`. */
   model?: string;
   /** Overrides the default gate (testing / forced-strict mode). */
   gate?: ReviewGate;
@@ -133,6 +133,69 @@ const reviewSchema = {
   required: ["scores", "issues", "summary"],
 };
 
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+/**
+ * Deterministic structural facts injected into the review prompt.
+ *
+ * The reviewer model has miscounted list-shaped frontmatter before (a
+ * five-entry `faqs` array read as one entry, tripping a false blocker that
+ * failed the gate), so everything a few lines of code can verify is computed
+ * here and handed to the model as ground truth it must not contradict.
+ */
+export function buildVerifiedFacts(frontmatter: BlogPostFrontmatter): string {
+  const lines: string[] = [];
+
+  const faqs = frontmatter.faqs;
+  if (Array.isArray(faqs)) {
+    const malformed = faqs
+      .map((entry, i) => {
+        const f = entry as { question?: unknown; answer?: unknown } | null;
+        return isNonEmptyString(f?.question) && isNonEmptyString(f?.answer) ? -1 : i;
+      })
+      .filter((i) => i >= 0);
+    lines.push(
+      malformed.length === 0
+        ? `frontmatter.faqs: ${faqs.length} entries, all well-formed {question, answer}`
+        : `frontmatter.faqs: ${faqs.length} entries; malformed (missing question/answer) at index(es) ${malformed.join(", ")}`,
+    );
+  } else {
+    lines.push("frontmatter.faqs: not present");
+  }
+
+  const citations = frontmatter.citations;
+  if (Array.isArray(citations)) {
+    const malformed = citations
+      .map((entry, i) => {
+        const c = entry as { name?: unknown; url?: unknown } | null;
+        if (!isNonEmptyString(c?.name) || !isNonEmptyString(c?.url)) return i;
+        try {
+          new URL(c.url);
+          return -1;
+        } catch {
+          return i;
+        }
+      })
+      .filter((i) => i >= 0);
+    lines.push(
+      malformed.length === 0
+        ? `frontmatter.citations: ${citations.length} entries, all well-formed {name, url}`
+        : `frontmatter.citations: ${citations.length} entries; malformed (missing name or invalid url) at index(es) ${malformed.join(", ")}`,
+    );
+  } else {
+    lines.push("frontmatter.citations: not present");
+  }
+
+  const len = (v: unknown) => (isNonEmptyString(v) ? `${v.length} chars` : "missing");
+  lines.push(
+    `title: ${len(frontmatter.title)}; description: ${len(frontmatter.description)}; slug: ${len(frontmatter.slug)}`,
+  );
+
+  return lines.map((l) => `- ${l}`).join("\n");
+}
+
 function buildPrompt(args: ReviewBlogPostArgs): string {
   const { config, frontmatter, markdown, existingPosts } = args;
   const categoryLines = config.categories
@@ -184,6 +247,9 @@ Rubric — score each dimension 0 to 10 (10 = excellent, 7 = solid publish, 5 = 
 
 Recent published titles for duplication awareness:
 ${recentTitles}
+
+VERIFIED STRUCTURAL FACTS (computed deterministically by code — trust these over your own counting; do NOT raise issues that contradict them):
+${buildVerifiedFacts(frontmatter)}
 
 POST FRONTMATTER:
 ${JSON.stringify(frontmatter, null, 2)}

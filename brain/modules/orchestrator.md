@@ -3,7 +3,7 @@ type: "module"
 title: "Topic Selection Orchestrator"
 description: "Orchestrates the selection of weekly blog topics using seasonal, weather, and keyword demand signals."
 tags: ["orchestrator", "topic-selection", "pipeline"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/orchestrator.ts"]
 ---
 # Topic Selection Orchestrator

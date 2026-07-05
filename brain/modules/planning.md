@@ -3,7 +3,7 @@ type: "module"
 title: "Topic Alignment Guard"
 description: "Ensures post topics align to planned keywords, target areas, and accuracy guidelines."
 tags: ["alignment", "guard", "validation"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/planning.ts"]
 ---
 # Topic Alignment Guard

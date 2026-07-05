@@ -3,13 +3,18 @@
 #
 # User-initiated rewrite of a failed-review post. Triggered when the repo
 # owner comments `/autoblog rewrite` on an autoblog PR. Loads the most
-# recent ReviewResult artifact, asks Gemini for a focused revision, and
+# recent ReviewResult artifact, asks Claude for a focused revision, and
 # pushes the revised post back to the PR branch — which retriggers the
 # normal review workflow.
 #
-# Loop safety: this workflow runs ONCE per comment. There is no auto-retry
-# path; the next move after a rewrite is always either a human action or
-# the next weekly cron.
+# This is the manual escape hatch behind the automated fix loop in
+# autoblog-review.yml (which retries a failed review up to
+# AUTOBLOG_MAX_AUTOFIX times on its own). Loop safety: this workflow runs
+# ONCE per comment, and its commit deliberately does NOT carry the
+# `[autoblog-autofix]` marker — a manual rewrite never consumes the
+# auto-fix budget. Note the interaction: if the re-review of a manual
+# rewrite fails and auto-fix budget remains on the branch, the automated
+# loop resumes from there.
 
 name: Autoblog AI Rewrite
 

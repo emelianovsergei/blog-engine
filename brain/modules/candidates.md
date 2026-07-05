@@ -3,7 +3,7 @@ type: "module"
 title: "Topic Candidate Generator"
 description: "Generates a list of candidate weekly blog topics matching seasonal and weather conditions."
 tags: ["generation", "llm", "candidates"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/candidates.ts"]
 ---
 # Topic Candidate Generator

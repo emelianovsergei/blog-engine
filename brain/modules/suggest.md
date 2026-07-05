@@ -3,7 +3,7 @@ type: "module"
 title: "Google Autocomplete Client"
 description: "Retrieves autocomplete suggestions from Google's search suggest API."
 tags: ["google-suggest", "seo", "api-client"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/suggest.ts"]
 ---
 # Google Autocomplete Client

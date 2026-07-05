@@ -3,7 +3,7 @@ type: "module"
 title: "Category Classifier"
 description: "Classifies blog posts into categories and analyzes category distribution history."
 tags: ["classification", "taxonomy", "history"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/categories.ts"]
 ---
 # Category Classifier

@@ -3,7 +3,7 @@ type: "module"
 title: "Season Context Mapper"
 description: "Maps calendar dates and time zones to seasons and microclimate profiles."
 tags: ["season", "climate", "dates"]
-timestamp: "2026-07-02"
+timestamp: "2026-07-05"
 sources: ["src/season.ts"]
 ---
 # Season Context Mapper
