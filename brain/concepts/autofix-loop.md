@@ -61,7 +61,10 @@ so [[modules/review]] injects a `VERIFIED STRUCTURAL FACTS` block into the
 prompt — `buildVerifiedFacts()` deterministically counts and shape-checks
 `frontmatter.faqs`, `frontmatter.citations`, and title/description/slug
 lengths, and instructs the model not to contradict them. Motivated by a real
-incident: a five-entry `faqs` array misread as one entry raised a false
-blocker that failed an 8.0/10 post.
+incident: a five-entry `faqs` array read as one entry raised a false blocker
+that failed an 8.0/10 post. (Post-mortem: the actual culprit was the CLI's
+hand-rolled frontmatter parser mangling nested YAML — fixed in v0.7.1 by
+switching to the `yaml` package. The verified-facts block stays as defense in
+depth against genuine model miscounts.)
 
 See [[concepts/quality-gates]], [[modules/review]], [[modules/rewrite]].

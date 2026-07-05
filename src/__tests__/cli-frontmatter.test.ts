@@ -166,3 +166,56 @@ test("serializeDocument places preferred keys before extras and preserves them",
   const { frontmatter } = parseDocument(out);
   assert.equal(frontmatter.customField, "preserved");
 });
+
+const nestedSample = `---
+title: 'AC Tune-Up Checklist: Get Ready'
+metaDescription: >-
+  A practical AC tune-up checklist for Sacramento homeowners — what to check
+  before the first big heat wave.
+date: '2026-07-05'
+category: efficiency-controls
+tags:
+  - AC
+  - maintenance
+citations:
+  - name: U.S. Department of Energy — Maintaining Your Air Conditioner
+    url: 'https://www.energy.gov/energysaver/maintaining-your-air-conditioner'
+  - name: ENERGY STAR — Maintenance Checklist
+    url: 'https://www.energystar.gov/campaign/heating_cooling/maintenance_checklist'
+faqs:
+  - question: How often should I get an AC tune-up in Sacramento?
+    answer: >-
+      Once a year, ideally in spring before the first heat wave. Sacramento's
+      long cooling season puts more runtime hours on your system.
+  - question: Can I do an AC tune-up myself?
+    answer: >-
+      You can handle the basics safely: filters, debris, coil rinse, and the
+      condensate line. Leave refrigerant and electrical to a licensed tech.
+---
+
+Body text.
+`;
+
+test("parses nested faqs and citations as arrays of objects", () => {
+  const { frontmatter } = parseDocument(nestedSample);
+  const faqs = frontmatter.faqs as Array<{ question: string; answer: string }>;
+  const citations = frontmatter.citations as Array<{ name: string; url: string }>;
+
+  assert.equal(faqs.length, 2);
+  assert.equal(faqs[0]!.question, "How often should I get an AC tune-up in Sacramento?");
+  assert.match(faqs[0]!.answer, /^Once a year, ideally in spring/);
+  assert.match(faqs[1]!.answer, /licensed tech\.$/);
+  assert.equal(citations.length, 2);
+  assert.equal(citations[1]!.url, "https://www.energystar.gov/campaign/heating_cooling/maintenance_checklist");
+  assert.match(frontmatter.metaDescription as string, /heat wave\.$/);
+});
+
+test("nested structures survive a full parse -> serialize -> parse round-trip", () => {
+  const first = parseDocument(nestedSample);
+  const serialized = serializeDocument(first.frontmatter, first.body);
+  const second = parseDocument(serialized);
+
+  assert.deepEqual(second.frontmatter, first.frontmatter);
+  assert.equal(second.body.trim(), first.body.trim());
+  assert.ok(!serialized.includes("[object Object]"));
+});
