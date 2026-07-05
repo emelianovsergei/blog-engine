@@ -114,6 +114,19 @@ jobs:
             --json-out review-result.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
 
+      - name: Ensure a review summary exists
+        if: steps.files.outputs.file != ''
+        run: |
+          if [ ! -s review-summary.md ]; then
+            {
+              echo "## Autoblog AI Review"
+              echo
+              echo "⚠️ The AI review could not run this time (model error, exit code \`${{ steps.review.outputs.exit }}\`)."
+              echo
+              echo "No scored rubric was produced — this is almost always a transient upstream outage, not a problem with the post. Re-run the **Autoblog AI Review** workflow on this PR (or push a new commit) to try again."
+            } > review-summary.md
+          fi
+
       - name: Upload review artifacts
         if: steps.files.outputs.file != ''
         uses: actions/upload-artifact@v4
@@ -125,11 +138,21 @@ jobs:
           retention-days: 30
 
       - name: Post sticky review comment
-        if: steps.files.outputs.file != ''
+        if: steps.files.outputs.file != '' && hashFiles('review-summary.md') != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: review-summary.md
           header: autoblog-review
+
+      # Runs on every pass, even in shadow mode (AUTOBLOG_AUTOMERGE=false),
+      # so a recovered post never keeps a stale failed label.
+      - name: Clear failed label on pass
+        if: steps.review.outputs.exit == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --remove-label autoblog-review-failed || true
 
       - name: Approve PR on pass
         if: >-
