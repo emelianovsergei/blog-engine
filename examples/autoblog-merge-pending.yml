@@ -75,10 +75,19 @@ jobs:
             fi
 
             echo "PR #$NUM: age ${AGE}s >= 24h — marking ready + squash-merging."
-            # Belt-and-suspenders: flip any still-draft PR to ready with the PAT
-            # (GITHUB_TOKEN can't) so the squash-merge below doesn't fail on a
-            # draft. Tolerate failure — normally the review step already did it.
-            PR_ID=$(gh pr view "$NUM" --json id -q .id)
-            GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PR_ID" || true
-            gh pr merge "$NUM" --squash --delete-branch
+            # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
+            # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
+            # mutation and the `gh pr ready` fallback use the PAT. The node-id
+            # lookup feeds only the mutation — tolerate a flaky read so it can't
+            # abort the whole loop under errexit.
+            PR_ID=$(gh pr view "$NUM" --json id -q .id) || PR_ID=""
+            if [ -n "$PR_ID" ]; then
+              GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PR_ID" \
+                || GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
+            else
+              GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
+            fi
+            # One bad PR must not abort the batch — warn and move on.
+            gh pr merge "$NUM" --squash --delete-branch \
+              || echo "::warning::Could not merge #$NUM (still draft or merge conflict); leaving for next run."
           done
