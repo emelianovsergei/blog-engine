@@ -48,6 +48,13 @@ test("extractModuleFacts pulls file doc, exports, and local imports", () => {
   assert.deepEqual(facts.imports.sort(), ["client", "types"]);
 });
 
+test("extractModuleFacts reads file JSDoc after a shebang (CLI entrypoints)", () => {
+  const cli = `#!/usr/bin/env node\n/**\n * blog-engine-review — AI quality review CLI.\n */\nasync function main() {}\nmain();\n`;
+  const facts = extractModuleFacts(cli, "src/cli/review.ts", "/abs/src/cli/review.ts");
+  assert.equal(facts.pageId, "cli-review");
+  assert.match(facts.fileDoc, /AI quality review CLI/);
+});
+
 test("sourceHash is stable and content-sensitive", () => {
   assert.equal(sourceHash(SAMPLE), sourceHash(SAMPLE));
   assert.notEqual(sourceHash(SAMPLE), sourceHash(SAMPLE + " "));

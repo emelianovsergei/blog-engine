@@ -89,7 +89,9 @@ export function extractModuleFacts(code: string, relPath: string, absPath: strin
   const pageId = pageIdFromRelPath(relPath);
 
   let fileDoc = "";
-  const fileDocMatch = code.match(/^\/\*\*([\s\S]*?)\*\//);
+  // Allow an optional shebang (CLI entrypoints like `src/cli/review.ts` start
+  // with `#!/usr/bin/env node`) and leading whitespace before the file JSDoc.
+  const fileDocMatch = code.match(/^(?:#![^\n]*\r?\n)?\s*\/\*\*([\s\S]*?)\*\//);
   if (fileDocMatch && fileDocMatch[1]) {
     fileDoc = fileDocMatch[1]
       .split("\n")

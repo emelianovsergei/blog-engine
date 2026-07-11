@@ -160,7 +160,10 @@ async function main() {
     }
 
     const facts = extractModuleFacts(src.code, src.relPath, src.absPath);
-    const info = MODULE_INFOS[src.basename] ?? {};
+    // MODULE_INFOS is curated for the top-level library modules only. Never
+    // apply it to src/cli/* — the basename collides (cli/review.ts vs
+    // review.ts) and would mislabel the CLI page with the library's metadata.
+    const info = src.relPath.startsWith("src/cli/") ? {} : (MODULE_INFOS[src.basename] ?? {});
     let fields: ModulePageFields;
     if (client) {
       try {
