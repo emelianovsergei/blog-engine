@@ -51,7 +51,10 @@ jobs:
           NOW=$(date -u +%s)
           THRESHOLD=$((24 * 60 * 60))
 
-          echo "$PRS" | while read -r line; do
+          # Track merge failures across the batch. `... | while` runs the loop
+          # in a subshell, so FAILED would not survive it — feed via here-string.
+          FAILED=0
+          while read -r line; do
             NUM=$(echo "$line" | jq -r '.number')
             CREATED=$(echo "$line" | jq -r '.createdAt')
             LABELS=$(echo "$line" | jq -r '.labels | join(",")')
@@ -87,7 +90,13 @@ jobs:
             else
               GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
             fi
-            # One bad PR must not abort the batch — warn and move on.
+            # One bad PR must not abort the batch — record the failure, keep
+            # going, and fail the job at the end so the problem stays visible.
             gh pr merge "$NUM" --squash --delete-branch \
-              || echo "::warning::Could not merge #$NUM (still draft or merge conflict); leaving for next run."
-          done
+              || { echo "::warning::Could not merge #$NUM (still draft or merge conflict); leaving for next run."; FAILED=1; }
+          done <<< "$PRS"
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::One or more eligible autoblog PRs could not be merged (see warnings above)."
+            exit 1
+          fi
