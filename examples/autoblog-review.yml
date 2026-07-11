@@ -162,24 +162,48 @@ jobs:
           steps.review.outputs.exit == '0'
           && (vars.AUTOBLOG_AUTOMERGE == 'true' || vars.AUTOBLOG_AUTOMERGE == '')
         env:
+          # Approve runs as github-actions[bot] (GITHUB_TOKEN): AUTOBLOG_PAT
+          # often opened the PR and GitHub forbids approving your own PR. But
+          # the mark-ready mutation below is FORBIDDEN for GITHUB_TOKEN, so it
+          # runs under the PAT instead (see inline note).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT: ${{ secrets.AUTOBLOG_PAT }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          # `gh pr ready` can fail silently on orgs still wired to the
-          # deprecated Projects (classic) GraphQL API — use the mutation
-          # directly instead.
-          PR_ID=$(gh pr view "$PR" --json id -q .id)
-          gh api graphql -f query='
-            mutation($id: ID!) {
-              markPullRequestReadyForReview(input: {pullRequestId: $id}) {
-                pullRequest { isDraft }
-              }
-            }' -f id="$PR_ID"
+          # GitHub Actions runs `run:` steps with `bash -eo pipefail`, so
+          # errexit stays ON. We rely on it: the merge-gate label add at the end
+          # is left UNguarded, so a failure there fails the job loudly (red run)
+          # instead of silently skipping publication. Only the genuinely
+          # optional calls (mark-ready, approve, clear-label, and the PR node-id
+          # lookup they depend on) are guarded so their hiccups can't block it.
+          set -uo pipefail
+          # PR_ID feeds only the best-effort mark-ready mutation — tolerate a
+          # flaky lookup so it can never abort before the label add.
+          PR_ID=$(gh pr view "$PR" --json id -q .id) || PR_ID=""
+          # `gh pr ready` errors on orgs on the deprecated Projects (classic)
+          # GraphQL API, AND the built-in GITHUB_TOKEN is FORBIDDEN from marking
+          # a draft ready ("Resource not accessible by integration") — so run
+          # the mutation under AUTOBLOG_PAT and tolerate any failure.
+          if [ -n "$PR_ID" ]; then
+            GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='
+              mutation($id: ID!) {
+                markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+                  pullRequest { isDraft }
+                }
+              }' -f id="$PR_ID" \
+              || echo "::warning::Could not mark PR ready (merge-pending will retry with the PAT before merge)."
+          else
+            echo "::warning::Could not resolve PR node id; skipping mark-ready (merge-pending will retry with the PAT)."
+          fi
           gh pr review "$PR" --approve \
-            --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a 24h human-override window."
-          gh pr edit "$PR" --add-label autoblog-approved-pending
+            --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a 24h human-override window." \
+            || true
+          # Clear any stale failed label first (best-effort), THEN apply the
+          # merge-gate label LAST and UNguarded: under errexit a failure here
+          # fails the job (red run) instead of being masked by a trailing
+          # `|| true` — so a passed review can never silently miss the gate.
           gh pr edit "$PR" --remove-label autoblog-review-failed || true
+          gh pr edit "$PR" --add-label autoblog-approved-pending
 
       # exit 2 = gate failed; exit 1 = review could not run (bad args, no
       # API key, model outage). Both land the failed label so merge-pending

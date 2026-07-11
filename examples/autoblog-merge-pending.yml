@@ -32,6 +32,10 @@ jobs:
       - name: Merge eligible PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Draft PRs cannot be squash-merged, and GITHUB_TOKEN is FORBIDDEN
+          # from marking a PR ready — so a PAT is used for the mark-ready flip
+          # below (defensive; the review step normally already marked it ready).
+          PAT: ${{ secrets.AUTOBLOG_PAT }}
         run: |
           set -euo pipefail
           PRS=$(gh pr list \
@@ -47,7 +51,10 @@ jobs:
           NOW=$(date -u +%s)
           THRESHOLD=$((24 * 60 * 60))
 
-          echo "$PRS" | while read -r line; do
+          # Track merge failures across the batch. `... | while` runs the loop
+          # in a subshell, so FAILED would not survive it — feed via here-string.
+          FAILED=0
+          while read -r line; do
             NUM=$(echo "$line" | jq -r '.number')
             CREATED=$(echo "$line" | jq -r '.createdAt')
             LABELS=$(echo "$line" | jq -r '.labels | join(",")')
@@ -70,6 +77,26 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= 24h — squash-merging."
-            gh pr merge "$NUM" --squash --delete-branch
-          done
+            echo "PR #$NUM: age ${AGE}s >= 24h — marking ready + squash-merging."
+            # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
+            # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
+            # mutation and the `gh pr ready` fallback use the PAT. The node-id
+            # lookup feeds only the mutation — tolerate a flaky read so it can't
+            # abort the whole loop under errexit.
+            PR_ID=$(gh pr view "$NUM" --json id -q .id) || PR_ID=""
+            if [ -n "$PR_ID" ]; then
+              GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PR_ID" \
+                || GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
+            else
+              GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
+            fi
+            # One bad PR must not abort the batch — record the failure, keep
+            # going, and fail the job at the end so the problem stays visible.
+            gh pr merge "$NUM" --squash --delete-branch \
+              || { echo "::warning::Could not merge #$NUM (still draft or merge conflict); leaving for next run."; FAILED=1; }
+          done <<< "$PRS"
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::One or more eligible autoblog PRs could not be merged (see warnings above)."
+            exit 1
+          fi
