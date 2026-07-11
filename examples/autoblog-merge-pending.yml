@@ -32,6 +32,10 @@ jobs:
       - name: Merge eligible PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Draft PRs cannot be squash-merged, and GITHUB_TOKEN is FORBIDDEN
+          # from marking a PR ready — so a PAT is used for the mark-ready flip
+          # below (defensive; the review step normally already marked it ready).
+          PAT: ${{ secrets.AUTOBLOG_PAT }}
         run: |
           set -euo pipefail
           PRS=$(gh pr list \
@@ -70,6 +74,11 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= 24h — squash-merging."
+            echo "PR #$NUM: age ${AGE}s >= 24h — marking ready + squash-merging."
+            # Belt-and-suspenders: flip any still-draft PR to ready with the PAT
+            # (GITHUB_TOKEN can't) so the squash-merge below doesn't fail on a
+            # draft. Tolerate failure — normally the review step already did it.
+            PR_ID=$(gh pr view "$NUM" --json id -q .id)
+            GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PR_ID" || true
             gh pr merge "$NUM" --squash --delete-branch
           done
