@@ -62,6 +62,15 @@ test("extractModuleFacts resolves imports relative to the file's own dir", () =>
   assert.deepEqual(facts.imports.sort(), ["cli-shared", "review"]);
 });
 
+test("fieldsFromFacts never emits a blank required field (no info, no file doc)", () => {
+  const facts = extractModuleFacts(`export const X = 1;\n`, "src/newthing.ts", "/abs/src/newthing.ts");
+  assert.equal(facts.fileDoc, ""); // no file JSDoc
+  const fields = fieldsFromFacts(facts, {}, VALID_TARGETS); // no MODULE_INFOS entry
+  assert.ok(fields.title.length > 0);
+  assert.ok(fields.description.length > 0, "description must not be empty (wiki:lint schema)");
+  assert.ok(fields.tags.length > 0);
+});
+
 test("sourceHash is stable and content-sensitive", () => {
   assert.equal(sourceHash(SAMPLE), sourceHash(SAMPLE));
   assert.notEqual(sourceHash(SAMPLE), sourceHash(SAMPLE + " "));

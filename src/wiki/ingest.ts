@@ -329,8 +329,11 @@ export function fieldsFromFacts(
     facts.pageId,
   );
   return {
-    title: info.title ?? titleCase(facts.pageId),
-    description: info.description ?? facts.fileDoc ?? "Auto-generated module documentation.",
+    // `||` (not `??`): an empty-string fileDoc/title must fall through to the
+    // default so required frontmatter fields are never emitted blank (which
+    // wiki:lint rejects as a schema violation).
+    title: info.title || titleCase(facts.pageId),
+    description: info.description || facts.fileDoc || "Auto-generated module documentation.",
     tags: info.tags?.length ? info.tags : ["module"],
     summary: facts.fileDoc || "*No summary available.*",
     exports: facts.exports.map((e) => ({
