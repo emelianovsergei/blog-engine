@@ -55,6 +55,13 @@ test("extractModuleFacts reads file JSDoc after a shebang (CLI entrypoints)", ()
   assert.match(facts.fileDoc, /AI quality review CLI/);
 });
 
+test("extractModuleFacts resolves imports relative to the file's own dir", () => {
+  const cliCode = `import { reviewBlogPost } from "../review.js";\nimport { parseArgs } from "./shared.js";\nexport function run() {}\n`;
+  const facts = extractModuleFacts(cliCode, "src/cli/review.ts", "/abs/src/cli/review.ts");
+  // ../review.js → "review" (top-level), ./shared.js → "cli-shared" (same dir).
+  assert.deepEqual(facts.imports.sort(), ["cli-shared", "review"]);
+});
+
 test("sourceHash is stable and content-sensitive", () => {
   assert.equal(sourceHash(SAMPLE), sourceHash(SAMPLE));
   assert.notEqual(sourceHash(SAMPLE), sourceHash(SAMPLE + " "));

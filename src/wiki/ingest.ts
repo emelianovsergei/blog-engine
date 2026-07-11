@@ -20,6 +20,7 @@
  * hash is unchanged, so a no-op ingest costs nothing and produces no diff.
  */
 import { createHash } from "node:crypto";
+import path from "node:path";
 import type { GeminiLike } from "../types.js";
 
 /** Short, stable content hash of a source file. */
@@ -134,14 +135,18 @@ export function extractModuleFacts(code: string, relPath: string, absPath: strin
     exports.push({ name, kind, signature: line.trim(), ...(jsdoc ? { jsdoc } : {}) });
   }
 
-  // Local sibling imports → their page ids (seeds cross-links). Matches
-  // `from "./x.js"` / `from "../cli/y.js"` and normalises to a page id.
+  // Local relative imports → their page ids (seeds cross-links). Resolve each
+  // specifier against THIS file's directory (not the src root) so `./shared.js`
+  // in src/cli/review.ts → `cli-shared` and `../client.js` → `client`.
   const imports = new Set<string>();
   const importRe = /from\s+["'](\.[^"']+)["']/g;
+  const dir = path.posix.dirname(relPath.replace(/\\/g, "/"));
   let im: RegExpExecArray | null;
   while ((im = importRe.exec(code)) !== null) {
-    const spec = im[1]!.replace(/\.js$/, "").replace(/\.\//g, "").replace(/^\.\.\//, "");
-    const id = spec.replace(/\//g, "-");
+    const resolved = path.posix
+      .normalize(path.posix.join(dir, im[1]!))
+      .replace(/\.(js|ts)$/, ".ts");
+    const id = pageIdFromRelPath(resolved);
     if (id && id !== pageId) imports.add(id);
   }
 
