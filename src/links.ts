@@ -127,7 +127,12 @@ export function extractLinks(mdx: string): string[] {
   // attribute, or a YAML string — which covers every form these URLs appear in
   // without needing four separate patterns. `)` is deliberately *not* a
   // delimiter here; trimUrlTail decides that by balance instead.
-  const pattern = /https?:\/\/[^\s<>"'`\]}]+/g;
+  //
+  // `*` is excluded because emphasis wrapping a link — `**[text](url)**`, which
+  // is how every rebate-program bullet in the consumer repo is written — would
+  // otherwise trail `)**` into the URL, past the point where the balance check
+  // can see the paren.
+  const pattern = /https?:\/\/[^\s<>"'`\]}*]+/g;
   const seen = new Set<string>();
   for (const match of mdx.matchAll(pattern)) {
     const url = trimUrlTail(match[0]);

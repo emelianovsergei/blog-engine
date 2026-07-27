@@ -12,6 +12,10 @@ sources: []
 
 - [[modules/links|Links]] — Outbound-link policy and liveness checking for generated blog content.
 
+## [2026-07-27] ingest | 1 module page(s) updated
+
+- [[modules/links|Links]] — Outbound-link policy and liveness checking for generated blog content.
+
 ## [2026-07-27] ingest | 23 module page(s) updated
 
 - [[modules/anthropic|Anthropic Provider Adapter]] — Connects the blog-engine to Anthropic Claude models for review and rewriting tasks.

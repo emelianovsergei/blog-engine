@@ -116,6 +116,13 @@ test("extractLinks keeps balanced parentheses inside a markdown destination", ()
   ]);
 });
 
+test("extractLinks survives emphasis wrapped around a link", () => {
+  // Every rebate-program bullet in the consumer repo is written this way, and
+  // `)**` riding along turns a live URL into a 404 the sweep would "repair".
+  const mdx = "- **[BayREN Home+](https://www.bayren.org/residential)** — rebates.";
+  assert.deepEqual(extractLinks(mdx), ["https://www.bayren.org/residential"]);
+});
+
 test("extractLinks strips a trailing period that follows a closing parenthesis", () => {
   const mdx = "See [x](https://example.com/a_(b)). Done.";
   assert.deepEqual(extractLinks(mdx), ["https://example.com/a_(b)"]);
