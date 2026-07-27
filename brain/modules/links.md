@@ -5,7 +5,7 @@ description: "Outbound-link policy and liveness checking for generated blog cont
 tags: ["module"]
 timestamp: "2026-07-27"
 sources: ["src/links.ts"]
-source_hash: "0002c78b6e3ad92c"
+source_hash: "5aa517737b2c85b9"
 ---
 # Links
 

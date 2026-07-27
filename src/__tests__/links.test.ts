@@ -101,6 +101,26 @@ test("extractLinks de-duplicates and strips trailing markdown punctuation", () =
   assert.deepEqual(extractLinks(mdx), ["https://example.com/x"]);
 });
 
+test("extractLinks keeps balanced parentheses inside a markdown destination", () => {
+  // Truncating this at the first `)` yields a URL that really does 404, so the
+  // sweep would "repair" a perfectly live citation.
+  const mdx = [
+    "[source](https://en.wikipedia.org/wiki/Heat_pump_(heating))",
+    "and [plain](https://example.com/page) too.",
+    "A bare one in prose (https://example.com/bare) as well.",
+  ].join("\n");
+  assert.deepEqual(extractLinks(mdx).sort(), [
+    "https://en.wikipedia.org/wiki/Heat_pump_(heating)",
+    "https://example.com/bare",
+    "https://example.com/page",
+  ]);
+});
+
+test("extractLinks strips a trailing period that follows a closing parenthesis", () => {
+  const mdx = "See [x](https://example.com/a_(b)). Done.";
+  assert.deepEqual(extractLinks(mdx), ["https://example.com/a_(b)"]);
+});
+
 test("checkLink reports a 404 as dead", async () => {
   const out = await checkLink("https://example.com/gone", {
     fetchImpl: async () => res(404, "https://example.com/gone"),
@@ -188,6 +208,38 @@ test("checkLink treats 403/429 bot-blocks as unverified rather than dead", async
     });
     assert.equal(out.ok, false, `status ${status}`);
     assert.equal(out.unverified, true, `status ${status} should be unverified`);
+  }
+});
+
+test("checkLink retries a 5xx and accepts the page once the origin recovers", async () => {
+  let calls = 0;
+  const out = await checkLink("https://example.com/a", {
+    retries: 2,
+    retryDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return calls < 3 ? res(503, "https://example.com/a") : res(200, "https://example.com/a");
+    },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(calls, 3);
+});
+
+test("checkLink treats a persistent 5xx as unverified, never as dead", async () => {
+  // An origin outage must not delete a valid citation or discard the post.
+  for (const status of [500, 502, 503]) {
+    let calls = 0;
+    const out = await checkLink("https://example.com/a", {
+      retries: 1,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        calls += 1;
+        return res(status, "https://example.com/a");
+      },
+    });
+    assert.equal(out.ok, false, `status ${status}`);
+    assert.equal(out.unverified, true, `status ${status} should be unverified`);
+    assert.equal(calls, 2, `status ${status} should use the retry budget`);
   }
 });
 

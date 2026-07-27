@@ -93,19 +93,44 @@ export function policyViolation(url: string, policy: LinkPolicy): string | undef
 }
 
 /**
+ * Drop the trailing characters a URL picked up from the prose around it.
+ *
+ * `)` is the awkward one: it closes a markdown destination *and* appears
+ * inside perfectly valid URLs (`.../Heat_pump_(heating)`). Treating every `)`
+ * as the delimiter truncates those into a URL that 404s, so the closer is only
+ * shed when it is unbalanced — the same heuristic GitHub uses for autolinks.
+ */
+function trimUrlTail(candidate: string): string {
+  let url = candidate;
+  for (;;) {
+    // Trailing sentence punctuation is never part of the URL.
+    const stripped = url.replace(/[.,;:!?]+$/, "");
+    if (stripped !== url) {
+      url = stripped;
+      continue;
+    }
+    if (!url.endsWith(")")) return url;
+    const opens = (url.match(/\(/g) ?? []).length;
+    const closes = (url.match(/\)/g) ?? []).length;
+    if (closes <= opens) return url;
+    url = url.slice(0, -1);
+  }
+}
+
+/**
  * Extract every absolute http(s) URL from raw MDX — frontmatter citations and
  * body links alike. The 2026-07 sweep found dead links in post *bodies* that a
  * frontmatter-only scan missed, so this deliberately scans the whole file.
  */
 export function extractLinks(mdx: string): string[] {
-  // Stops at whitespace and at the delimiters that close a markdown link, an
-  // autolink, an HTML attribute, or a YAML string — which covers every form
-  // these URLs appear in without needing four separate patterns.
-  const pattern = /https?:\/\/[^\s<>"'`)\]}]+/g;
+  // Stops at whitespace and at the delimiters that close an autolink, an HTML
+  // attribute, or a YAML string — which covers every form these URLs appear in
+  // without needing four separate patterns. `)` is deliberately *not* a
+  // delimiter here; trimUrlTail decides that by balance instead.
+  const pattern = /https?:\/\/[^\s<>"'`\]}]+/g;
   const seen = new Set<string>();
   for (const match of mdx.matchAll(pattern)) {
-    // Trailing sentence punctuation is never part of the URL.
-    const url = match[0].replace(/[.,;:!?]+$/, "");
+    const url = trimUrlTail(match[0]);
     if (url.length > 0) seen.add(url);
   }
   return [...seen];
@@ -143,6 +168,11 @@ const BROWSER_USER_AGENT =
 /** Statuses that mean "we were blocked", not "this page is gone". */
 const UNVERIFIABLE_STATUSES = new Set([401, 403, 405, 408, 429]);
 
+/** A 5xx is the origin having a bad day, not proof the page was retired. */
+function isTransientStatus(status: number): boolean {
+  return status >= 500;
+}
+
 function isRootPath(url: string): boolean {
   try {
     const { pathname } = new URL(url);
@@ -169,6 +199,7 @@ export async function checkLink(
   } = options;
 
   let lastError: unknown;
+  let lastTransient: { status: number; finalUrl: string } | undefined;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
@@ -196,6 +227,25 @@ export async function checkLink(
           status,
           finalUrl,
           reason: `HTTP ${status} — blocked or rate-limited, liveness unverified`,
+        };
+      }
+
+      // A 500/502/503 during an origin outage must not be allowed to delete a
+      // live citation, so it spends the retry budget like a network error and
+      // degrades to `unverified` rather than `dead` if it never recovers.
+      if (isTransientStatus(status)) {
+        lastTransient = { status, finalUrl };
+        if (attempt < retries) {
+          await sleep(retryDelayMs * (attempt + 1));
+          continue;
+        }
+        return {
+          url,
+          ok: false,
+          unverified: true,
+          status,
+          finalUrl,
+          reason: `HTTP ${status} — origin error after ${retries + 1} attempt(s), liveness unverified`,
         };
       }
 
@@ -229,6 +279,8 @@ export async function checkLink(
     url,
     ok: false,
     unverified: true,
+    status: lastTransient?.status,
+    finalUrl: lastTransient?.finalUrl,
     reason: `unreachable after ${retries + 1} attempt(s): ${detail}`,
   };
 }
