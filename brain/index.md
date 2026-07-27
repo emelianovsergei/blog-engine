@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: []
 ---
 # Developer Knowledge Index
@@ -16,12 +16,17 @@ sources: []
 *   [[modules/anthropic|Anthropic Provider Adapter]]
 *   [[modules/candidates|Topic Candidate Generator]]
 *   [[modules/categories|Category Classifier]]
+*   [[modules/cli-frontmatter|Cli Frontmatter]]
+*   [[modules/cli-review|Cli Review]]
+*   [[modules/cli-rewrite|Cli Rewrite]]
+*   [[modules/cli-shared|Cli Shared]]
 *   [[modules/client|Unified Model Client]]
 *   [[modules/config|Configuration Store]]
 *   [[modules/dedup|Semantic Deduplicator]]
 *   [[modules/demand|Search Demand Scorer]]
-*   [[modules/index|index]]
+*   [[modules/index|Index]]
 *   [[modules/keywords|Keyword Researcher]]
+*   [[modules/links|Links]]
 *   [[modules/orchestrator|Topic Selection Orchestrator]]
 *   [[modules/planning|Topic Alignment Guard]]
 *   [[modules/rank|Topic Ranker]]
@@ -34,6 +39,7 @@ sources: []
 
 ## Core Concepts
 
+*   [[concepts/autofix-loop|Auto-Fix Loop (Review Failure Recovery)]]
+*   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]
 *   [[concepts/topic-deduplication|Topic Deduplication]]
 *   [[concepts/weather-season-targeting|Weather & Seasonal Targeting]]
-*   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]

@@ -29,6 +29,22 @@ export {
   writerAccuracyRules,
 } from "./planning.js";
 
+export {
+  EMPTY_LINK_POLICY,
+  parseLinkPolicy,
+  policyViolation,
+  extractLinks,
+  checkLink,
+  checkLinks,
+  citationGuidance,
+} from "./links.js";
+export type {
+  LinkPolicy,
+  LinkCheckResult,
+  CheckLinkOptions,
+  CheckLinksOptions,
+} from "./links.js";
+
 export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
 export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
 export { scoreDemand, toSearchQuery } from "./demand.js";

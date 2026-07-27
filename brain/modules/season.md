@@ -3,27 +3,28 @@ type: "module"
 title: "Season Context Mapper"
 description: "Maps calendar dates and time zones to seasons and microclimate profiles."
 tags: ["season", "climate", "dates"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/season.ts"]
+source_hash: "8ded172d57031739"
 ---
 # Season Context Mapper
 
 Season detection and a domain-agnostic Sacramento climate description.
 
-**Source File**: [season.ts](file:///home/jaysonlee/Projects/blog-engine/src/season.ts)
+**Source File**: [src/season.ts](file:///home/jaysonlee/Projects/blog-engine/src/season.ts)
 
 ## API Interface
 
-### `Season` (type)
-Season detection and a domain-agnostic Sacramento climate description. */
+### `Season`
+Season detection and a domain-agnostic Sacramento climate description.
 
-### `SeasonContext` (interface)
+### `SeasonContext`
 *No description provided.*
 
-### `seasonForMonth` (function)
-Maps a 1-12 month number to a season. */
+### `seasonForMonth`
+Maps a 1-12 month number to a season.
 
-### `getSeasonContext` (function)
+### `getSeasonContext`
 *No description provided.*
 
 ## Custom Notes

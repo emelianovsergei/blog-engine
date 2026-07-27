@@ -3,30 +3,37 @@ type: "module"
 title: "Topic Ranker"
 description: "Ranks candidate topics by combining category mix, weather anomaly, and demand scores."
 tags: ["ranking", "candidates", "pipeline"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/rank.ts"]
+source_hash: "7aa36392cce526e8"
 ---
 # Topic Ranker
 
 Scoring and selection of the winning topic candidate.
 
-**Source File**: [rank.ts](file:///home/jaysonlee/Projects/blog-engine/src/rank.ts)
+**Source File**: [src/rank.ts](file:///home/jaysonlee/Projects/blog-engine/src/rank.ts)
+
+## Related
+
+- [[modules/categories]]
+- [[modules/dedup]]
+- [[modules/types]]
 
 ## API Interface
 
-### `RankedCandidate` (interface)
+### `RankedCandidate`
 *No description provided.*
 
-### `RankArgs` (interface)
+### `RankArgs`
 *No description provided.*
 
-### `rankCandidates` (function)
+### `rankCandidates`
 *No description provided.*
 
-### `PickResult` (interface)
+### `PickResult`
 *No description provided.*
 
-### `pickBest` (function)
+### `pickBest`
 Picks the highest-scoring non-duplicate candidate. If every candidate is a near-duplicate, relaxes the filter and picks the most distinct one rather than failing the run.
 
 ## Custom Notes
