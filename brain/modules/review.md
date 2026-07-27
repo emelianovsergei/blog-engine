@@ -3,51 +3,56 @@ type: "module"
 title: "Blog Post Reviewer"
 description: "Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria."
 tags: ["review", "rubric", "quality-gate"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/review.ts"]
+source_hash: "6cfe995423edc72c"
 ---
 # Blog Post Reviewer
 
 AI-powered quality review of a draft blog post. Mirrors the structured-JSON pattern used by `candidates.ts`: the model is asked to emit a JSON object matching `reviewSchema`, we parse it, then compute the pass/fail gate ourselves so the verdict is deterministic and never just trusted from the model.
 
-**Source File**: [review.ts](file:///home/jaysonlee/Projects/blog-engine/src/review.ts)
+**Source File**: [src/review.ts](file:///home/jaysonlee/Projects/blog-engine/src/review.ts)
+
+## Related
+
+- [[modules/types]]
 
 ## API Interface
 
-### `DEFAULT_REVIEW_MODEL` (const)
+### `DEFAULT_REVIEW_MODEL`
 *No description provided.*
 
-### `ReviewDimension` (type)
+### `ReviewDimension`
 *No description provided.*
 
-### `DimensionScore` (interface)
+### `DimensionScore`
 *No description provided.*
 
-### `ReviewIssue` (interface)
+### `ReviewIssue`
 *No description provided.*
 
-### `ReviewGate` (interface)
+### `ReviewGate`
 *No description provided.*
 
-### `DEFAULT_GATE` (const)
+### `DEFAULT_GATE`
 *No description provided.*
 
-### `ReviewResult` (interface)
+### `ReviewResult`
 *No description provided.*
 
-### `BlogPostFrontmatter` (interface)
+### `BlogPostFrontmatter`
 *No description provided.*
 
-### `ReviewBlogPostArgs` (interface)
+### `ReviewBlogPostArgs`
 *No description provided.*
 
-### `buildVerifiedFacts` (function)
+### `buildVerifiedFacts`
 Deterministic structural facts injected into the review prompt. The reviewer model has miscounted list-shaped frontmatter before (a five-entry `faqs` array read as one entry, tripping a false blocker that failed the gate), so everything a few lines of code can verify is computed here and handed to the model as ground truth it must not contradict.
 
-### `reviewBlogPost` (async function)
+### `reviewBlogPost`
 Reviews a draft blog post. Throws if the model returned an empty response, invalid JSON, or a body missing the required dimension scores. All other shape oddities are clamped/defaulted so we always emit a usable result.
 
-### `renderReviewMarkdown` (function)
+### `renderReviewMarkdown`
 Renders a `ReviewResult` as a Markdown summary suitable for posting as a sticky PR comment. Deterministic — used by the CLI.
 
 ## Custom Notes

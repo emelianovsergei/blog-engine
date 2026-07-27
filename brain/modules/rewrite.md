@@ -3,27 +3,33 @@ type: "module"
 title: "Blog Post Rewriter"
 description: "Rewrites blog posts using LLMs to fix issues highlighted in the review rubric."
 tags: ["rewrite", "llm-generation", "seo"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/rewrite.ts"]
+source_hash: "85552eb680f7d0ba"
 ---
 # Blog Post Rewriter
 
 Revision of a failed-review blog post against the review's findings. Invoked two ways in consumer repos: automatically by the review workflow when the gate fails (autoblog-review.yml auto-fix steps), and manually via the `/autoblog rewrite` slash-command workflow as the escape hatch once auto-fix gives up. One call produces one revision; the revised post goes back through normal review like any other commit. Loop-safety lives in CI, not here: the review workflow counts `[autoblog-autofix]` marker commits on the PR branch and stops at AUTOBLOG_MAX_AUTOFIX attempts (default 2). There is deliberately no `--max-attempts` flag — the cap is only derivable from branch state, which CI owns.
 
-**Source File**: [rewrite.ts](file:///home/jaysonlee/Projects/blog-engine/src/rewrite.ts)
+**Source File**: [src/rewrite.ts](file:///home/jaysonlee/Projects/blog-engine/src/rewrite.ts)
+
+## Related
+
+- [[modules/types]]
+- [[modules/review]]
 
 ## API Interface
 
-### `DEFAULT_REWRITE_MODEL` (const)
+### `DEFAULT_REWRITE_MODEL`
 *No description provided.*
 
-### `RewriteBlogPostArgs` (interface)
+### `RewriteBlogPostArgs`
 *No description provided.*
 
-### `RewriteResult` (interface)
+### `RewriteResult`
 *No description provided.*
 
-### `rewriteBlogPost` (async function)
+### `rewriteBlogPost`
 Asks Gemini to revise the post to address review feedback. Throws on empty response, invalid JSON, or missing required output fields — the workflow surfaces the error and the user decides whether to retry.
 
 ## Custom Notes

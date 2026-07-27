@@ -3,48 +3,53 @@ type: "module"
 title: "Type Definitions"
 description: "Centralized TypeScript interfaces and type definitions used throughout the engine."
 tags: ["types", "typescript", "interfaces"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/types.ts"]
+source_hash: "965b8f1a45e2d722"
 ---
 # Type Definitions
 
 Public types for the blog topic-selection engine. The engine has zero hard dependency on `@google/genai`: it accepts an injected `GeminiLike` client described structurally below, so a real `GoogleGenAI` instance satisfies it and tests can pass lightweight fakes.
 
-**Source File**: [types.ts](file:///home/jaysonlee/Projects/blog-engine/src/types.ts)
+**Source File**: [src/types.ts](file:///home/jaysonlee/Projects/blog-engine/src/types.ts)
+
+## Related
+
+- [[modules/suggest]]
 
 ## API Interface
 
-### `GeminiLike` (interface)
-Minimal structural view of the `@google/genai` client the engine uses. */
+### `GeminiLike`
+Minimal structural view of the `@google/genai` client the engine uses.
 
-### `ExistingPostLike` (interface)
-A previously published post — used for category rotation and dedup. */
+### `ExistingPostLike`
+A previously published post — used for category rotation and dedup.
 
-### `CategoryDef` (interface)
-One topic bucket. Order matters: categorization picks the first match. */
+### `CategoryDef`
+One topic bucket. Order matters: categorization picks the first match.
 
-### `GeoLocation` (interface)
+### `GeoLocation`
 *No description provided.*
 
-### `EngineConfig` (interface)
+### `EngineConfig`
 *No description provided.*
 
-### `WeatherAnomaly` (type)
+### `WeatherAnomaly`
 *No description provided.*
 
-### `WeatherContext` (interface)
+### `WeatherContext`
 *No description provided.*
 
-### `WeatherClient` (interface)
+### `WeatherClient`
 *No description provided.*
 
-### `CandidateTopic` (interface)
+### `CandidateTopic`
 *No description provided.*
 
-### `SelectedTopic` (interface)
+### `SelectedTopic`
 *No description provided.*
 
-### `SelectWeeklyTopicArgs` (interface)
+### `SelectWeeklyTopicArgs`
 *No description provided.*
 
 ## Custom Notes

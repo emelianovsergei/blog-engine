@@ -1,16 +1,28 @@
 ---
 type: "module"
-title: "Index Module"
-description: "Auto-generated module documentation."
+title: "Index"
+description: "Public API of the blog topic-selection engine."
 tags: ["module"]
-timestamp: "2026-07-05"
+timestamp: "2026-07-27"
 sources: ["src/index.ts"]
+source_hash: "b6cf6866d8e76c02"
 ---
-# Index Module
+# Index
 
 Public API of the blog topic-selection engine.
 
-**Source File**: [index.ts](file:///home/jaysonlee/Projects/blog-engine/src/index.ts)
+**Source File**: [src/index.ts](file:///home/jaysonlee/Projects/blog-engine/src/index.ts)
+
+## Related
+
+- [[modules/orchestrator]]
+- [[modules/config]]
+- [[modules/weather]]
+- [[modules/season]]
+- [[modules/categories]]
+- [[modules/review]]
+- [[modules/rewrite]]
+- [[modules/anthropic]]
 
 ## Custom Notes
 
