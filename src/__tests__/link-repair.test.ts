@@ -144,6 +144,45 @@ test("takes emphasis delimiters with a removed image", () => {
   );
 });
 
+test("accepts an angle-bracketed image destination", () => {
+  // CommonMark allows `](<url>)`. Not recognising it let the parenthetical rule
+  // swallow the destination alone, publishing `Before ![alt]after.`
+  const dead = "https://x/dead.png";
+  assert.equal(unlinkUrl(`Before ![alt](<${dead}>) after.`, dead, [dead]), "Before after.");
+  assert.equal(unlinkUrl(`See [text](<${dead}>) here.`, dead, [dead]), "See text here.");
+});
+
+test("keeps a separator between non-Latin words", () => {
+  // An ASCII-only word test reads Cyrillic/CJK neighbours as non-words and
+  // returns no separator, welding `До ![x](dead) после` into `Допосле`.
+  const dead = "https://x/dead.png";
+  assert.equal(unlinkUrl(`До ![x](${dead}) после`, dead, [dead]), "До после");
+  assert.equal(unlinkUrl(`前 ![x](${dead}) 後`, dead, [dead]), "前 後");
+});
+
+test("removes the marker when an image is a whole list item, heading or quote", () => {
+  // Removing only the image leaves the marker behind — an empty list item, a
+  // bare `>`, or an empty heading.
+  const dead = "https://x/dead.png";
+  assert.equal(unlinkUrl(`- ![screenshot](${dead})`, dead, [dead]), "");
+  assert.equal(unlinkUrl(`1. ![x](${dead})`, dead, [dead]), "");
+  assert.equal(unlinkUrl(`> ![x](${dead})`, dead, [dead]), "");
+  assert.equal(unlinkUrl(`## ![x](${dead})`, dead, [dead]), "");
+  // Surrounding list items survive.
+  assert.equal(unlinkUrl(`- one\n- ![x](${dead})\n- three`, dead, [dead]), "- one\n- three");
+});
+
+test("treats intraword underscores as literal, not emphasis", () => {
+  // CommonMark allows intraword emphasis with `*` but NOT with `_`, so
+  // `prefix_![x](dead)_suffix` is an image between two literal underscores.
+  const dead = "https://x/dead.png";
+  assert.equal(unlinkUrl(`prefix_![x](${dead})_suffix`, dead, [dead]), "prefix__suffix");
+  // Genuine underscore emphasis, correctly flanked, still goes.
+  assert.equal(unlinkUrl(`Before _![x](${dead})_ after.`, dead, [dead]), "Before after.");
+  // Asterisks may be intraword, so they are emphasis and do go.
+  assert.equal(unlinkUrl(`Before *![x](${dead})* after.`, dead, [dead]), "Before after.");
+});
+
 test("removes a URL that is a parenthetical aside", () => {
   assert.equal(unlinkUrl(`Rebates vary (${DEAD}) by utility.`, DEAD, [DEAD]), "Rebates vary by utility.");
   assert.equal(
