@@ -5,7 +5,7 @@ description: "The edits a link sweep makes to published MDX once `links.ts` has 
 tags: ["module"]
 timestamp: "2026-07-27"
 sources: ["src/link-repair.ts"]
-source_hash: "e1beaf2bfe17f01f"
+source_hash: "07709366d0178c45"
 ---
 # Link Repair
 

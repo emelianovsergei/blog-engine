@@ -55,8 +55,11 @@ export function unlinkUrl(body: string, url: string, siblings: readonly string[]
   // Autolink or bare URL — the two forms that leave a hole in the prose.
   const loose = `(?:<${escaped}>|${escaped}${notAnExtension})`;
 
-  // Destination must end here — optionally after a markdown title.
-  const destination = `\\(\\s*${escaped}\\s*(?:"[^"]*"|'[^']*'|\\([^)]*\\))?\\s*\\)`;
+  // Destination must end here — optionally after a markdown title. The URL may
+  // be angle-bracketed (`](<url>)`), which CommonMark allows and which the
+  // parenthetical rule would otherwise swallow on its own, leaving `![alt]`.
+  const destination =
+    `\\(\\s*(?:<${escaped}>|${escaped})\\s*` + `(?:"[^"]*"|'[^']*'|\\([^)]*\\))?\\s*\\)`;
 
   // Any destination, live or dead — the half of a linked image that is not the
   // URL being removed.
@@ -67,11 +70,34 @@ export function unlinkUrl(body: string, url: string, siblings: readonly string[]
   // and published the remainder as prose (`See) here.`).
   const anyDestination = `\\((?:[^()]|\\([^()]*\\))*\\)`;
 
-  // Markdown emphasis delimiters, matched as a pair via backreference.
-  const emphasis = `(\\*\\*|\\*|__|_)`;
+  // Emphasis delimiters, matched as a pair via backreference.
+  //
+  // Asterisks and underscores are NOT interchangeable here. CommonMark allows
+  // intraword emphasis with `*` but not with `_`, so `prefix_![x](dead)_suffix`
+  // is an image between two LITERAL underscores — deleting them would rewrite
+  // `prefix__suffix` into `prefix suffix`. The underscore variant therefore
+  // requires non-word flanking; the asterisk variant does not.
+  const star = `(\\*\\*|\\*)`;
+  const underscore = `(?<![\\p{L}\\p{N}_])(__|_)`;
+  const underscoreClose = `(?![\\p{L}\\p{N}_])`;
+
+  // An image that is the entire content of a line — including under a list
+  // marker, blockquote or heading — is structural, not prose. Removing just the
+  // image leaves the marker behind as an empty list item or a bare `>`.
+  const lineMarker = `(?:(?:[-*+]|\\d+\\.)[ \\t]+|>[ \\t]*|#{1,6}[ \\t]+)?`;
+  const anyEmphasis = `(?:\\*\\*|\\*|__|_)?`;
 
   return (
     body
+      // Whole-line images first, so the marker goes with them.
+      .replace(
+        new RegExp(
+          `^[ \\t]*${lineMarker}${anyEmphasis}!\\[[^\\]]*\\]${destination}` +
+            `${anyEmphasis}[ \\t]*(?:\\r?\\n|$)`,
+          "gmu",
+        ),
+        "",
+      )
       // LINKED IMAGES FIRST — `[![alt](img)](target)` — because every simpler
       // rule below mangles them. Each half can be the dead one, and they call
       // for opposite treatment.
@@ -80,8 +106,15 @@ export function unlinkUrl(body: string, url: string, siblings: readonly string[]
       // are published as literal `****`.
       .replace(
         new RegExp(
-          `([ \\t]*)${emphasis}\\[!\\[[^\\]]*\\]${destination}\\]${anyDestination}\\2([ \\t]*)`,
-          "g",
+          `([ \\t]*)${star}\\[!\\[[^\\]]*\\]${destination}\\]${anyDestination}\\2([ \\t]*)`,
+          "gu",
+        ),
+        closeGap,
+      )
+      .replace(
+        new RegExp(
+          `([ \\t]*)${underscore}\\[!\\[[^\\]]*\\]${destination}\\]${anyDestination}\\2${underscoreClose}([ \\t]*)`,
+          "gu",
         ),
         closeGap,
       )
@@ -109,10 +142,17 @@ export function unlinkUrl(body: string, url: string, siblings: readonly string[]
       // a hyperlink to shed, and an image whose source is gone leaves nothing
       // worth keeping — its alt text as bare words would read as noise.
       .replace(
-        new RegExp(`([ \\t]*)${emphasis}!\\[[^\\]]*\\]${destination}\\2([ \\t]*)`, "g"),
+        new RegExp(`([ \\t]*)${star}!\\[[^\\]]*\\]${destination}\\2([ \\t]*)`, "gu"),
         closeGap,
       )
-      .replace(new RegExp(`([ \\t]*)!\\[[^\\]]*\\]${destination}([ \\t]*)`, "g"), closeGap)
+      .replace(
+        new RegExp(
+          `([ \\t]*)${underscore}!\\[[^\\]]*\\]${destination}\\2${underscoreClose}([ \\t]*)`,
+          "gu",
+        ),
+        closeGap,
+      )
+      .replace(new RegExp(`([ \\t]*)!\\[[^\\]]*\\]${destination}([ \\t]*)`, "gu"), closeGap)
       // Ordinary link: keep the anchor text, drop the hyperlink.
       .replace(new RegExp(`\\[([^\\]]*)\\]${destination}`, "g"), "$1")
       // A URL alone inside parens takes the parens with it, rather than
@@ -148,7 +188,10 @@ function closeGap(...args: unknown[]): string {
   const offset = args[args.length - 2] as number;
   const charBefore = whole[offset - 1] ?? "";
   const charAfter = whole[offset + match.length] ?? "";
-  const isWord = (char: string): boolean => /[A-Za-z0-9]/.test(char);
+  // Unicode letters/numbers, not `[A-Za-z0-9]`. An ASCII-only test reads
+  // Cyrillic or CJK neighbours as non-words and returns no separator, welding
+  // `До ![x](dead) после` into `Допосле`.
+  const isWord = (char: string): boolean => /[\p{L}\p{N}]/u.test(char);
   return isWord(charBefore) && isWord(charAfter) ? " " : "";
 }
 
