@@ -8,6 +8,11 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-07-27] ingest | 2 module page(s) updated
+
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/link-repair|Link Repair]] — The edits a link sweep makes to published MDX once `links.ts` has decided a URL is dead.
+
 ## [2026-07-27] ingest | 1 module page(s) updated
 
 - [[modules/links|Links]] — Outbound-link policy and liveness checking for generated blog content.
