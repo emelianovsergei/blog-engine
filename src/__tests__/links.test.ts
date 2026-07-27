@@ -58,6 +58,26 @@ test("policyViolation catches the exact URLs that broke run 30153351381", () => 
   assert.equal(policyViolation("https://www.energy.gov/eere/buildings", policy), undefined);
 });
 
+test("deniedUrls bans one page without banning the live pages beneath it", () => {
+  // A fragment cannot say "this page, not its children". Denying the fragment
+  // `example.com/page` also bans `example.com/page/details`, which fails the
+  // consumer repo's content guard and steers the planner off a working source.
+  const policy = parseLinkPolicy({ deniedUrls: ["https://example.com/page"] });
+  assert.match(policyViolation("https://example.com/page", policy)!, /known-dead URL/);
+  assert.equal(policyViolation("https://example.com/page/details", policy), undefined);
+});
+
+test("deniedUrls compares URLs canonically", () => {
+  const policy = parseLinkPolicy({ deniedUrls: ["https://www.example.com/Page/"] });
+  for (const variant of [
+    "https://example.com/page",
+    "http://example.com/page/",
+    "https://WWW.Example.com/PAGE",
+  ]) {
+    assert.ok(policyViolation(variant, policy), variant);
+  }
+});
+
 test("policyViolation matches regardless of the URL's casing", () => {
   const policy = parseLinkPolicy({ deniedUrlFragments: ["energy.gov/energysaver/"] });
   assert.ok(policyViolation("https://WWW.ENERGY.GOV/EnergySaver/Foo", policy));

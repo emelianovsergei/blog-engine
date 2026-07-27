@@ -26,6 +26,16 @@
 export interface LinkPolicy {
   /** Lowercased substrings that mark a URL as known-dead. */
   deniedUrlFragments: readonly string[];
+  /**
+   * Whole URLs that are dead, matched exactly rather than by substring.
+   *
+   * A fragment cannot express "this page, but not its children". When
+   * `example.com/page` is retired while `example.com/page/details` is alive,
+   * denying the fragment also bans the live sibling — which fails the consumer
+   * repo's content guard and teaches the planner to avoid a working citation.
+   * Those belong here instead.
+   */
+  deniedUrls: readonly string[];
   /** Domains the planner should prefer when citing authorities. */
   preferredCitationDomains: readonly string[];
   /** Domains banned outright (competitors, low-trust aggregators). */
@@ -34,6 +44,7 @@ export interface LinkPolicy {
 
 export const EMPTY_LINK_POLICY: LinkPolicy = {
   deniedUrlFragments: [],
+  deniedUrls: [],
   preferredCitationDomains: [],
   bannedCitationDomains: [],
 };
@@ -52,9 +63,21 @@ export function parseLinkPolicy(raw: unknown): LinkPolicy {
   const doc = raw as Record<string, unknown>;
   return {
     deniedUrlFragments: cleanStringList(doc.deniedUrlFragments),
+    deniedUrls: cleanStringList(doc.deniedUrls).map(normalizeUrl),
     preferredCitationDomains: cleanStringList(doc.preferredCitationDomains),
     bannedCitationDomains: cleanStringList(doc.bannedCitationDomains),
   };
+}
+
+/**
+ * Canonical form for exact URL comparison: lowercased, no trailing slash, no
+ * `www.`, scheme-insensitive. `http://Example.com/Page/` and
+ * `https://www.example.com/page` denote the same page for this purpose.
+ */
+function normalizeUrl(url: string): string {
+  const trimmed = url.trim().toLowerCase();
+  const withoutScheme = trimmed.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  return withoutScheme.replace(/\/+$/, "");
 }
 
 function hostnameOf(url: string): string | undefined {
@@ -71,6 +94,13 @@ function hostnameOf(url: string): string | undefined {
  */
 export function policyViolation(url: string, policy: LinkPolicy): string | undefined {
   const lowered = url.toLowerCase();
+
+  const normalized = normalizeUrl(url);
+  for (const denied of policy.deniedUrls) {
+    if (normalized === denied) {
+      return `is a known-dead URL ("${denied}")`;
+    }
+  }
 
   for (const fragment of policy.deniedUrlFragments) {
     if (lowered.includes(fragment)) {
@@ -332,6 +362,14 @@ export function citationGuidance(policy: LinkPolicy): string {
     );
     lines.push(
       "- Prefer linking an authority's stable top-level section over a deep consumer path, which is the kind of URL agencies retire without redirecting.",
+    );
+  }
+
+  if (policy.deniedUrls.length > 0) {
+    lines.push(
+      `- NEVER cite or link these exact URLs — they are retired, though pages beneath them may still be live: ${policy.deniedUrls
+        .map((url) => `\`${url}\``)
+        .join(", ")}.`,
     );
   }
 
