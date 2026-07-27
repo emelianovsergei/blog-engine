@@ -45,6 +45,8 @@ export type {
   CheckLinksOptions,
 } from "./links.js";
 
+export { unlinkUrl, stripDeadCitations, repairContent } from "./link-repair.js";
+
 export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
 export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
 export { scoreDemand, toSearchQuery } from "./demand.js";

@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-07-27T16:08:50.451Z*
+*Generated on: 2026-07-27T21:01:27.283Z*
 
 ## Summary
 
-*   **Total Wiki Files**: 31
+*   **Total Wiki Files**: 32
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 8
+*   **Orphan Pages**: 9
 *   **Stale Pages**: 0
 
 > [!NOTE]
@@ -23,6 +23,7 @@
 *   [[modules/cli-rewrite]]
 *   [[modules/index]]
 *   [[modules/keywords]]
+*   [[modules/link-repair]]
 *   [[modules/links]]
 *   [[modules/planning]]
 
