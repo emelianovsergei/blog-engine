@@ -122,6 +122,49 @@ REACTION_UNTRUSTED=0
 # override it was asked to honour.
 FORCE_BASELINE=""
 
+# Re-read reviewer state and findings RIGHT NOW.
+#
+# Everything gathered in a poll is a snapshot, and the reactions are read before
+# the thread, force-push and check requests. A rereview starting during those
+# calls still shows 👀=0 in the snapshot. Consistency is not freshness: any
+# branch that acts on the reviewer's verdict — merging OR telling a human the PR
+# is ready — has to re-check at the moment it acts.
+#
+# Returns 0 only when nothing is running and nothing is outstanding.
+revalidate() {
+  local rc eyes threads findings
+  if ! rc=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
+    say "  -> could not revalidate reviewer state; standing down this round"; return 1
+  fi
+  eyes=$(printf '%s' "$rc" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
+  case "$eyes" in (*[!0-9]*|"") say "  -> reviewer state unreadable; standing down"; return 1 ;; esac
+  if [ "$eyes" -gt 0 ]; then
+    say "  -> a review started while this poll was gathering state; standing down"; return 1
+  fi
+  if ! threads=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              reviewThreads(first:100, after:$endCursor){
+                pageInfo{ hasNextPage endCursor }
+                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
+              }
+            }
+          }
+        }' 2>/dev/null); then
+    say "  -> could not revalidate findings; standing down"; return 1
+  fi
+  findings=$(printf '%s' "$threads" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
+        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.comments.nodes[0].author.login == $bot)
+          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null)
+  case "$findings" in (*[!0-9]*|"") say "  -> findings unreadable; standing down"; return 1 ;; esac
+  if [ "$findings" -gt 0 ]; then
+    say "  -> $findings finding(s) appeared while this poll was gathering state"; return 1
+  fi
+  return 0
+}
+
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
 
@@ -274,6 +317,11 @@ for i in $(seq 1 "$MAX_POLLS"); do
   if [ "$TRUST_REACTION" != "1" ] && [ "$REVIEWED" -eq 0 ] && [ -n "$APPROVE_TIME" ] \
      && [[ ! "$APPROVE_TIME" < "$SEEN_SINCE" ]] && [ "$REACTION_UNTRUSTED" -eq 0 ] \
      && [ "$FINDINGS" -eq 0 ] && [ "$CHECKS_RC" -eq 0 ] && [ "$EYES" -eq 0 ]; then
+    # Same revalidation as the merge path. Telling a human "this is ready, go
+    # merge it" is acting on the verdict just as much as merging is, and this
+    # branch runs BEFORE the merge-boundary rechecks, so without this it could
+    # report readiness while a rereview was already running.
+    if ! revalidate; then continue; fi
     say "  -> $REPO#$PR looks clean and green, but the only approval is a bare 👍."
     say "     A clean pass emits no review object, so nothing ties that verdict to ${HEAD:0:10}."
     say "     Merge it yourself, or re-run with WATCH_MERGE_TRUST_REACTION=1."
@@ -332,42 +380,7 @@ for i in $(seq 1 "$MAX_POLLS"); do
     continue
   fi
 
-  # Revalidate at the boundary. Everything above is a snapshot: the reactions
-  # were read before the thread, force-push and check requests, so a rereview
-  # that starts during those calls still shows 👀=0 in the snapshot. Re-read the
-  # reviewer state immediately before acting, so the decision is made on the
-  # state that exists at the moment of merging rather than seconds earlier.
-  if ! RECHECK=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
-    say "  -> could not revalidate reviewer state; not merging this round"; continue
-  fi
-  EYES_NOW=$(printf '%s' "$RECHECK" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
-  case "$EYES_NOW" in (*[!0-9]*|"") say "  -> reviewer state unreadable at the merge boundary; not merging"; continue ;; esac
-  if [ "$EYES_NOW" -gt 0 ]; then
-    say "  -> a review started while this poll was gathering state; standing down"
-    continue
-  fi
-  if ! THREADS_NOW=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
-        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
-          repository(owner:$owner,name:$name){
-            pullRequest(number:$pr){
-              reviewThreads(first:100, after:$endCursor){
-                pageInfo{ hasNextPage endCursor }
-                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
-              }
-            }
-          }
-        }' 2>/dev/null); then
-    say "  -> could not revalidate findings; not merging this round"; continue
-  fi
-  FINDINGS_NOW=$(printf '%s' "$THREADS_NOW" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
-        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
-          | select(.comments.nodes[0].author.login == $bot)
-          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null)
-  case "$FINDINGS_NOW" in (*[!0-9]*|"") say "  -> findings unreadable at the merge boundary; not merging"; continue ;; esac
-  if [ "$FINDINGS_NOW" -gt 0 ]; then
-    say "  -> $FINDINGS_NOW finding(s) appeared while this poll was gathering state; not merging"
-    exit 3
-  fi
+  if ! revalidate; then continue; fi
 
   say "  -> approved, no findings on this head, checks green, revalidated: merging"
   if ! gh pr merge "$PR" --repo "$REPO" --squash --delete-branch --match-head-commit "$HEAD" >/dev/null 2>&1; then
