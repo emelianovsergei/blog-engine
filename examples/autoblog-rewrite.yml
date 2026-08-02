@@ -140,6 +140,7 @@ jobs:
           gh pr comment "$PR" --body "⚠️ Autoblog rewrite produced a post that fails \`npm run build\` — not pushing. The post is unchanged. A human edit is needed (likely malformed frontmatter)."
 
       - name: Commit revision
+        id: commit
         run: |
           set -euo pipefail
           git config user.name "autoblog-bot"
@@ -147,14 +148,56 @@ jobs:
           git add "${{ steps.files.outputs.file }}"
           if git diff --cached --quiet; then
             echo "No changes from rewrite — model returned the same content."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Written BEFORE the commit/push on purpose. Under `set -e` a failed
+          # push would otherwise leave `changed` unset, and an unset output
+          # equals neither 'true' nor 'false' — so BOTH comment steps below
+          # would skip and the run would say nothing at all.
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           git commit -m "autoblog: AI rewrite addressing review feedback"
           git push
 
+      # Gated on the commit actually happening, not just on the notes file
+      # existing. blog-engine-rewrite always writes --notes-out and always
+      # exits 0, including when the model returns the post byte-identical —
+      # so `hashFiles` alone would post "here is what I revised" about a
+      # revision that was never committed.
       - name: Post change-notes comment
-        if: hashFiles('change-notes.md') != ''
+        if: steps.commit.outputs.changed == 'true' && hashFiles('change-notes.md') != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: change-notes.md
+          header: autoblog-rewrite
+
+      # A byte-identical rewrite commits nothing, so no `synchronize` event
+      # fires and autoblog-review.yml never re-runs. Without this the run is
+      # green, the comment above is (correctly) suppressed, and the human is
+      # told nothing — the post sits with `autoblog-review-failed` until the
+      # watchdog notices weeks later. The automated auto-fix loop in
+      # autoblog-review.yml already handles this case; this is the manual
+      # escape hatch catching up.
+      #
+      # Same `autoblog-rewrite` header as above, deliberately: sticky comments
+      # key off the header, so a no-op run REPLACES a stale "revision landed"
+      # comment from an earlier successful rewrite. A separate header would
+      # leave that older, now-misleading comment standing.
+      - name: Report a no-op rewrite
+        if: steps.commit.outputs.changed == 'false'
+        run: |
+          set -euo pipefail
+          {
+            echo "## Autoblog AI Rewrite — no changes"
+            echo
+            echo "The rewrite model returned the post unchanged, so nothing was committed and the AI review will not re-run."
+            echo
+            echo "This PR still carries \`autoblog-review-failed\`, so auto-merge will keep skipping it. A human is needed: edit the post directly, or comment \`/autoblog rewrite\` to try once more."
+          } > rewrite-noop.md
+
+      - name: Post no-op comment
+        if: steps.commit.outputs.changed == 'false'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: rewrite-noop.md
           header: autoblog-rewrite
