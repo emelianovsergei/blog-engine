@@ -265,7 +265,14 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   # A clean pass posts no review object, only a 👍, and a reaction carries no
   # SHA — it is bound solely by when it appeared.
+  # The 👍 must fall inside the CURRENT approval window. Without that test this
+  # fired on a reaction left from an earlier head — typically right after a push,
+  # before Codex has begun reviewing the new one — and told the operator the PR
+  # was clean and ready to merge by hand when nothing had reviewed it. Reporting
+  # readiness off a stale signal is the same error as merging off one, only with
+  # a human as the actuator.
   if [ "$TRUST_REACTION" != "1" ] && [ "$REVIEWED" -eq 0 ] && [ -n "$APPROVE_TIME" ] \
+     && [[ ! "$APPROVE_TIME" < "$SEEN_SINCE" ]] && [ "$REACTION_UNTRUSTED" -eq 0 ] \
      && [ "$FINDINGS" -eq 0 ] && [ "$CHECKS_RC" -eq 0 ] && [ "$EYES" -eq 0 ]; then
     say "  -> $REPO#$PR looks clean and green, but the only approval is a bare 👍."
     say "     A clean pass emits no review object, so nothing ties that verdict to ${HEAD:0:10}."
