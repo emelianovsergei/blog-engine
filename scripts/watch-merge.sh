@@ -33,7 +33,13 @@ PR="${2:?usage: watch-merge.sh <owner/repo> <pr-number> [max-polls] [interval-se
 MAX_POLLS="${3:-24}"
 INTERVAL="${4:-90}"
 
-CODEX_RE='codex'
+# Exact actor identity, never a substring. `test("codex";"i")` matches ANY login
+# containing "codex", so on a public repo an unrelated account could add a 👍 and
+# satisfy the approval predicate for a PR the real reviewer never looked at.
+# The numeric account id is immutable and is what REST comparisons use; GraphQL
+# reports the bot without its "[bot]" suffix, hence the bare form too.
+BOT_ID="${WATCH_MERGE_BOT_ID:-199175422}"
+BOT_LOGIN_BARE="${WATCH_MERGE_BOT_LOGIN:-chatgpt-codex-connector}"
 say() { printf '%s\n' "$*"; }
 
 # When did this SHA become the PR head?
@@ -41,16 +47,24 @@ say() { printf '%s\n' "$*"; }
 # NOT the commit's own committer date. A force-push or reset can make an OLDER
 # existing commit the head, and its committer date can predate an approval that
 # was given for a different SHA — which would let a stale 👍 clear code Codex
-# never saw. CI is triggered by the push that makes a SHA the head, so the
-# earliest check-run start for this SHA tracks the head-change event itself.
-# Take the later of the two so neither a back-dated commit nor a missing check
-# run can move the cutoff backwards.
+# never saw. CI is triggered by the push that makes a SHA the head, so check-run
+# starts for this SHA track its activations. Take the later of that and the
+# commit date, so neither a back-dated commit nor a missing check run can move
+# the cutoff backwards.
 head_active_time() {
   local sha="$1" commit_time checks_time
   commit_time=$(gh api "repos/$REPO/commits/$sha" -q '.commit.committer.date' 2>/dev/null) || return 1
   [ -n "$commit_time" ] || return 1
-  checks_time=$(gh api "repos/$REPO/commits/$sha/check-runs" \
-    -q '[.check_runs[].started_at]|sort|first // empty' 2>/dev/null)
+  # LAST check-run start, not the first. If a PR is reset to a SHA that was
+  # already built once, this endpoint holds runs from BOTH activations; taking
+  # the earliest deliberately picks the stale one, so an approval earned by a
+  # different head in between would be accepted as current. The reset triggers
+  # fresh runs, so the latest start tracks the current activation. A manual
+  # re-run can push this later than strictly necessary, which only costs a wait.
+  if ! checks_time=$(gh api "repos/$REPO/commits/$sha/check-runs" \
+      -q '[.check_runs[].started_at]|sort|last // empty' 2>/dev/null); then
+    return 1   # fail closed: never silently fall back to the commit date
+  fi
   if [ -n "$checks_time" ] && [[ "$checks_time" > "$commit_time" ]]; then
     printf '%s\n' "$checks_time"
   else
@@ -89,7 +103,7 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # field, not scraped from the rendered body: the body is prose that can change
   # format, commit_id is the reviewed SHA itself.
   if ! REVIEWED=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
-      -q "[.[]|select(.user.login|test(\"$CODEX_RE\";\"i\"))|select(.commit_id==\"$HEAD\")]|length" 2>/dev/null); then
+      -q "[.[]|select(.user.id==$BOT_ID)|select(.commit_id==\"$HEAD\")]|length" 2>/dev/null); then
     say "[poll $i] could not read reviews; retrying"; continue
   fi
   REVIEWED=$(printf '%s\n' "$REVIEWED" | awk '{s+=$1} END {print s+0}')
@@ -99,31 +113,40 @@ for i in $(seq 1 "$MAX_POLLS"); do
   if ! REACTIONS=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
     say "[poll $i] could not read reactions; retrying"; continue
   fi
-  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.login|test(\"$CODEX_RE\";\"i\"))|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
+  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
 
-  # Findings are matched by commit_id, not by timestamp: a review of the PREVIOUS
-  # head can land after the new head is pushed, and judging by created_at would
-  # count those against the new head and abort a PR that is actually clean.
+  # Outstanding findings come from the review-thread state, not from timestamps,
+  # not from commit_id, and not from "has someone replied".
   #
-  # commit_id alone is not enough either. GitHub re-anchors a still-applicable
-  # comment to the current head, so a finding that was raised earlier AND already
-  # answered keeps reappearing as a finding "on this head" forever — which would
-  # block every PR whose review was resolved by replying in-thread. A finding
-  # counts as outstanding only while nobody has replied to it.
-  if ! COMMENTS=$(gh api "repos/$REPO/pulls/$PR/comments?per_page=100" --paginate -q '.[]' 2>/dev/null); then
-    # Never default this to 0. A PR whose findings could not be read is not a PR
-    # without findings, and signal 1 alone could otherwise merge it.
-    say "[poll $i] could not read review comments; retrying rather than assuming none"; continue
+  # A reply is not a resolution: an acknowledgement, a disagreement, or a promise
+  # to fix later all create a reply while the finding stands. Counting replies
+  # would let a re-run merge an unchanged head carrying a known defect.
+  #
+  # GitHub tracks the two states that actually matter. `isOutdated` means the
+  # diff moved past the comment, so it no longer describes this code.
+  # `isResolved` means a human explicitly closed the thread. Anything neither
+  # outdated nor resolved is still open against this head. Note this makes
+  # resolving a thread part of the workflow — replying alone will not clear it,
+  # which is the point.
+  if ! THREADS=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              reviewThreads(first:100){
+                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
+              }
+            }
+          }
+        }' 2>/dev/null); then
+    # Never default this to zero. A PR whose findings could not be read is not a
+    # PR without findings, and the review signal alone could otherwise merge it.
+    say "[poll $i] could not read review threads; retrying rather than assuming none"; continue
   fi
-  if ! FINDINGS=$(printf '%s' "$COMMENTS" | jq -s --arg head "$HEAD" --arg re "$CODEX_RE" '
-        ([.[] | select(.in_reply_to_id != null) | .in_reply_to_id]) as $answered
-        | [ .[]
-            | select(.user.login | test($re; "i"))
-            | select(.in_reply_to_id == null)
-            | select(.commit_id == $head)
-            | . as $c | select(($answered | index($c.id)) == null)
-          ] | length' 2>/dev/null); then
-    say "[poll $i] could not evaluate review comments; retrying"; continue
+  if ! FINDINGS=$(printf '%s' "$THREADS" | jq -r --arg bot "$BOT_LOGIN_BARE" '
+        [ .data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.comments.nodes[0].author.login == $bot)
+          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null); then
+    say "[poll $i] could not evaluate review threads; retrying"; continue
   fi
 
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1; CHECKS_RC=$?
