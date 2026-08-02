@@ -140,79 +140,76 @@ FORCE_BASELINE=""
 #
 # Returns 0 only when nothing is running and nothing is outstanding.
 revalidate() {
-  local rc eyes threads findings now_head
-  # The head first. `--match-head-commit` protects the merge path, but the
-  # readiness report has no equivalent — without this it could recommend merging
-  # a commit that replaced the reviewed one while this poll was still gathering
-  # state, using the old head's approval and checks as justification.
-  if ! now_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null) \
-     || [ -z "$now_head" ] || [ "$now_head" = "null" ]; then
-    say "  -> could not revalidate the head; standing down"; return 1
-  fi
-  if [ "$now_head" != "$HEAD" ]; then
-    say "  -> head moved to ${now_head:0:10} while this poll was gathering state; standing down"; return 1
-  fi
-  if ! rc=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
-    say "  -> could not revalidate reviewer state; standing down this round"; return 1
-  fi
-  eyes=$(printf '%s' "$rc" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
-  case "$eyes" in (*[!0-9]*|"") say "  -> reviewer state unreadable; standing down"; return 1 ;; esac
-  if [ "$eyes" -gt 0 ]; then
-    say "  -> a review started while this poll was gathering state; standing down"; return 1
-  fi
-  # The same fetch already contains the 👍 — check it rather than discarding it.
-  # Reactions can be REMOVED. When the approval is the only thing authorising
-  # this action, a 👍 withdrawn after the poll snapshot would otherwise still be
-  # acted on from the stale timestamp.
-  if [ "${REVIEWED:-0}" -eq 0 ]; then
-    local approve_now
-    approve_now=$(printf '%s' "$rc" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
-    if [ -z "$approve_now" ]; then
-      say "  -> the approving 👍 is no longer present; standing down"; return 1
-    fi
-    if [[ "$approve_now" < "$SEEN_SINCE" ]]; then
-      say "  -> the remaining 👍 predates the current approval window; standing down"; return 1
-    fi
-  fi
-  if ! threads=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
-        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+  local snap head_now eyes approve_now findings tail_head
+
+  # ONE query for head, reactions and review threads.
+  #
+  # Reading them separately leaves gaps between the reads, and a whole review
+  # can fall into one: 👀 appears after the reactions fetch and its finding
+  # lands after the thread fetch, so both snapshots look clear and neither ever
+  # saw the review that happened between them. Narrowing that gap does not help;
+  # the reads have to be one snapshot.
+  if ! snap=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!){
           repository(owner:$owner,name:$name){
             pullRequest(number:$pr){
-              reviewThreads(first:100, after:$endCursor){
-                pageInfo{ hasNextPage endCursor }
+              headRefOid
+              reactions(first:100){ nodes{ content createdAt user{ login } } }
+              reviewThreads(first:100){
                 nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
               }
             }
           }
         }' 2>/dev/null); then
-    say "  -> could not revalidate findings; standing down"; return 1
+    say "  -> could not revalidate; standing down"; return 1
   fi
-  findings=$(printf '%s' "$threads" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
-        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
-          | select(.comments.nodes[0].author.login == $bot)
-          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null)
+
+  head_now=$(printf '%s' "$snap" | jq -r '.data.repository.pullRequest.headRefOid // empty')
+  [ -n "$head_now" ] || { say "  -> revalidation returned no head; standing down"; return 1; }
+  if [ "$head_now" != "$HEAD" ]; then
+    say "  -> head moved to ${head_now:0:10}; standing down"; return 1
+  fi
+
+  # GraphQL names the reaction author WITH the [bot] suffix and the thread author
+  # without it. Matching one form against both silently returns zero.
+  eyes=$(printf '%s' "$snap" | jq -r --arg b "$BOT_LOGIN_BARE" \
+    '[.data.repository.pullRequest.reactions.nodes[]|select(.user.login==$b or .user.login==($b+"[bot]"))|select(.content=="EYES")]|length')
+  case "$eyes" in (*[!0-9]*|"") say "  -> reviewer state unreadable; standing down"; return 1 ;; esac
+  if [ "$eyes" -gt 0 ]; then
+    say "  -> a review is running; standing down"; return 1
+  fi
+
+  findings=$(printf '%s' "$snap" | jq -r --arg b "$BOT_LOGIN_BARE" \
+    '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.comments.nodes[0].author.login==$b)|select(.isResolved==false and .isOutdated==false)]|length')
   case "$findings" in (*[!0-9]*|"") say "  -> findings unreadable; standing down"; return 1 ;; esac
   if [ "$findings" -gt 0 ]; then
-    say "  -> $findings finding(s) appeared while this poll was gathering state"; return 1
+    say "  -> $findings finding(s) outstanding; standing down"; return 1
   fi
-  # CI last. A workflow rerun on the SAME SHA can turn a green result pending or
-  # red without the head changing, so `--match-head-commit` cannot see it and the
-  # captured CHECKS_RC goes stale like everything else. rc 8 is pending, 1 is
-  # failing; neither is a basis for merging or for telling someone it is ready.
+
+  # When nothing commit-bound authorises this action, the reaction is doing the
+  # work — so confirm it is still present and still inside the window. It comes
+  # from the same snapshot as the 👀 above, so the two cannot disagree.
+  if [ "${REVIEWED:-0}" -eq 0 ]; then
+    approve_now=$(printf '%s' "$snap" | jq -r --arg b "$BOT_LOGIN_BARE" \
+      '[.data.repository.pullRequest.reactions.nodes[]|select(.user.login==$b or .user.login==($b+"[bot]"))|select(.content=="THUMBS_UP")|.createdAt]|sort|last // empty')
+    [ -n "$approve_now" ] || { say "  -> the approving 👍 is gone; standing down"; return 1; }
+    if [[ "$approve_now" < "$SEEN_SINCE" ]]; then
+      say "  -> the remaining 👍 predates the window; standing down"; return 1
+    fi
+  fi
+
+  # CI cannot be answered by that query, so it stays a separate call — which
+  # means the head must be confirmed again afterwards, or the CI result could
+  # describe a commit that replaced the one just validated.
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1 || {
-    say "  -> CI is no longer green (rc=$?); standing down"; return 1
+    say "  -> CI is no longer green; standing down"; return 1
   }
-  # Close the bracket. This function makes several remote calls after its opening
-  # head check, and the head can move during them — the reactions, threads and
-  # checks read afterwards would then describe a commit other than the one being
-  # authorised. Checking once at the start only narrows the window; checking at
-  # both ends means every read in between happened while this head was current.
-  if ! now_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null) \
-     || [ -z "$now_head" ] || [ "$now_head" = "null" ]; then
-    say "  -> could not confirm the head at the end of revalidation; standing down"; return 1
+  if ! tail_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null) \
+     || [ -z "$tail_head" ] || [ "$tail_head" = "null" ]; then
+    say "  -> could not confirm the head after the CI read; standing down"; return 1
   fi
-  if [ "$now_head" != "$HEAD" ]; then
-    say "  -> head moved to ${now_head:0:10} during revalidation; standing down"; return 1
+  if [ "$tail_head" != "$HEAD" ]; then
+    say "  -> head moved to ${tail_head:0:10} during revalidation; standing down"; return 1
   fi
   return 0
 }
