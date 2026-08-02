@@ -73,9 +73,9 @@ say() { printf '%s\n' "$*"; }
 #     from one earned by a previous head. WATCH_MERGE_TRUST_EXISTING=1 accepts a
 #     pre-existing approval when you have checked it yourself.
 #
-#   * Once the head moves at any point during a watch, bare 👍 approval is
-#     disabled for the rest of that run and only a commit-bound review object
-#     will do. A review can be queued against the old head and only show 👀
+#   * Bare 👍 approval is disabled for the rest of a run once the verdict can no
+#     longer be attributed — either the head moved, or a review was already
+#     running when the watch began. Only a commit-bound review object will do. A review can be queued against the old head and only show 👀
 #     after the new head is observed, so no snapshot of the reactions can tell
 #     the two apart. This is a limit of the signal, not of the implementation:
 #     Codex emits no review object for a clean pass, so a clean verdict is
@@ -94,10 +94,12 @@ STALE_VERDICT_PENDING=0
 # review that finishes in between would already show 👀=0 by the time we look,
 # and an in-flight review straddling a head change would go unnoticed.
 PREV_EYES=0
-# Set once the head moves at any point during this watch. From then on a bare 👍
-# can no longer approve: only a review object, which carries commit_id and so
-# proves which head it judged. See the note on binding above.
-HEAD_EVER_CHANGED=0
+# Set when a bare 👍 can no longer be attributed to a specific head. From then on
+# only a review object, which carries commit_id, can approve. Two triggers:
+#   * the head moved at any point during this watch
+#   * a review was ALREADY in flight when the watch began — its verdict may
+#     belong to a head that existed before we were looking
+REACTION_UNTRUSTED=0
 # Latest force-push seen so far. Compared against itself rather than against
 # SEEN_SINCE: with WATCH_MERGE_TRUST_EXISTING the window starts at the epoch, so
 # every historical force-push would look newer than it and a PR that had ever
@@ -227,7 +229,17 @@ for i in $(seq 1 "$MAX_POLLS"); do
   fi
 
   if [ "$HEAD_CHANGED" = "1" ] || [ "$HIDDEN_CHANGE" = "1" ]; then
-    HEAD_EVER_CHANGED=1
+    REACTION_UNTRUSTED=1
+  fi
+  # A review already running when the watch STARTS has no provenance: it may be
+  # judging this head or one that preceded it, and nothing observable
+  # distinguishes them. Marking its verdict stale would consume the only verdict
+  # a clean review ever emits and hang a good PR; accepting it would approve a
+  # head nothing reviewed. Both are wrong, so the bare reaction is simply not
+  # trusted for this run and a commit-bound review object is required instead.
+  if [ "$FIRST_POLL" = "1" ] && [ "$EYES" -gt 0 ]; then
+    REACTION_UNTRUSTED=1
+    say "[poll $i] a review was already running when this watch began — its verdict cannot be attributed, so a commit-bound review is required"
   fi
   SEEN_HEAD="$HEAD"
 
@@ -238,7 +250,7 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   # A clean pass posts no review object, only a 👍, and a reaction carries no
   # SHA — it is bound solely by when it appeared.
-  if [ "$HEAD_EVER_CHANGED" = "1" ] && [ -n "$APPROVE_TIME" ] && [ "$REVIEWED" -eq 0 ]; then
+  if [ "$REACTION_UNTRUSTED" = "1" ] && [ -n "$APPROVE_TIME" ] && [ "$REVIEWED" -eq 0 ]; then
     # More than one head has existed during this watch, so a reaction — which
     # carries no SHA — cannot be attributed to any particular one. Timing
     # heuristics do not resolve it: a review can be queued against the old head
@@ -246,7 +258,7 @@ for i in $(seq 1 "$MAX_POLLS"); do
     # reactions distinguishes the two cases. Rather than guess, this run stops
     # trusting reactions entirely and waits for a review object, which carries
     # commit_id. If none arrives the watch times out and merges nothing.
-    say "[poll $i] head moved during this watch — a bare 👍 can no longer identify which head it judged; holding out for a commit-bound review"
+    say "[poll $i] 👍 cannot be attributed to this head; holding out for a commit-bound review"
   # `>=`, not `>`. Both sides carry only second precision, so a review finishing
   # later in the SAME second as the observation compares equal — and a strict
   # comparison would reject it permanently, with no second verdict ever coming.
