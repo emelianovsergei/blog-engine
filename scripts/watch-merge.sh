@@ -78,6 +78,10 @@ SEEN_SINCE=""
 # That review is about the OLD head, so the 👍 it eventually posts is a verdict
 # on code that is no longer here and must not approve the new head.
 STALE_VERDICT_PENDING=0
+# 👀 as of the PREVIOUS poll. The head is read before the reactions are, so a
+# review that finishes in between would already show 👀=0 by the time we look,
+# and an in-flight review straddling a head change would go unnoticed.
+PREV_EYES=0
 
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
@@ -159,9 +163,15 @@ for i in $(seq 1 "$MAX_POLLS"); do
   if ! REACTIONS=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
     say "[poll $i] could not read reactions; retrying"; continue
   fi
-  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
-  EYES=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
-  EYES="${EYES:-0}"
+  # --paginate emits one JSON array PER PAGE. Without slurping, these expressions
+  # produce one result per page — EYES becomes something like "0\n1", the integer
+  # test below fails with "integer expression expected", and stale-verdict
+  # tracking is skipped entirely. Slurp and flatten so each is a single value.
+  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
+  if ! EYES=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null); then
+    say "[poll $i] could not evaluate reactions; retrying"; continue
+  fi
+  case "$EYES" in (*[!0-9]*|"") say "[poll $i] reaction count unreadable ('"'"'$EYES'"'"'); retrying"; continue ;; esac
 
   # Outstanding findings come from the review-thread state, not from timestamps,
   # not from commit_id, and not from "has someone replied".
@@ -206,7 +216,10 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   # If the head moved while a review was in flight, the next 👍 is that review's
   # verdict on the PREVIOUS head. Mark it so it is consumed rather than trusted.
-  if [ "$HEAD_CHANGED_MID_REVIEW" = "1" ] && [ "$EYES" -gt 0 ]; then
+  # PREV_EYES matters as much as EYES: the head is read first, so a review that
+  # completes between that read and the reactions read shows 👀=0 here even
+  # though it WAS in flight when the head moved.
+  if [ "$HEAD_CHANGED_MID_REVIEW" = "1" ] && { [ "$EYES" -gt 0 ] || [ "$PREV_EYES" -gt 0 ]; }; then
     STALE_VERDICT_PENDING=1
     say "[poll $i] head changed while a review was running — the next 👍 belongs to the old head"
   fi
@@ -230,6 +243,8 @@ for i in $(seq 1 "$MAX_POLLS"); do
   fi
 
   say "[poll $i] head=${HEAD:0:10} observed_since=$SEEN_SINCE reviews_on_head=$REVIEWED thumbs_up=${APPROVE_TIME:-none} eyes=$EYES stale_verdict=$STALE_VERDICT_PENDING findings_on_head=$FINDINGS checks_rc=$CHECKS_RC approved=$APPROVED"
+
+  PREV_EYES="$EYES"
 
   [ "$APPROVED" = "true" ] || continue
 
