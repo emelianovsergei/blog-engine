@@ -67,10 +67,22 @@ say() { printf '%s\n' "$*"; }
 # SHA-bound by construction rather than by inference, and needs no GitHub
 # timestamp at all.
 #
-# The deliberate cost: a 👍 that predates the watcher is NOT trusted, because
-# nothing can tell it apart from one earned by a previous head. Such a run
-# declines and exits 4 rather than guessing. Set WATCH_MERGE_TRUST_EXISTING=1 to
-# accept a pre-existing approval when you have checked it yourself.
+# TWO DELIBERATE COSTS, both chosen so the script declines rather than guesses:
+#
+#   * A 👍 that predates the watcher is not trusted — nothing distinguishes it
+#     from one earned by a previous head. WATCH_MERGE_TRUST_EXISTING=1 accepts a
+#     pre-existing approval when you have checked it yourself.
+#
+#   * Once the head moves at any point during a watch, bare 👍 approval is
+#     disabled for the rest of that run and only a commit-bound review object
+#     will do. A review can be queued against the old head and only show 👀
+#     after the new head is observed, so no snapshot of the reactions can tell
+#     the two apart. This is a limit of the signal, not of the implementation:
+#     Codex emits no review object for a clean pass, so a clean verdict is
+#     genuinely unattributable once more than one head is in play.
+#
+# In normal use — push, then start the watcher — the head does not move and
+# neither cost applies.
 TRUST_EXISTING="${WATCH_MERGE_TRUST_EXISTING:-0}"
 SEEN_HEAD=""
 SEEN_SINCE=""
@@ -82,6 +94,10 @@ STALE_VERDICT_PENDING=0
 # review that finishes in between would already show 👀=0 by the time we look,
 # and an in-flight review straddling a head change would go unnoticed.
 PREV_EYES=0
+# Set once the head moves at any point during this watch. From then on a bare 👍
+# can no longer approve: only a review object, which carries commit_id and so
+# proves which head it judged. See the note on binding above.
+HEAD_EVER_CHANGED=0
 
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
@@ -97,6 +113,12 @@ for i in $(seq 1 "$MAX_POLLS"); do
   STATE=$(printf '%s' "$PRJSON" | jq -r '.state')
   IS_DRAFT=$(printf '%s' "$PRJSON" | jq -r '.isDraft')
   HEAD=$(printf '%s' "$PRJSON" | jq -r '.headRefOid')
+  # Stamped HERE, when the head was actually observed — not later in the
+  # transition phase. Several API calls happen in between, and a clean review
+  # completing during them would produce a 👍 older than a cutoff taken after
+  # the fact. That 👍 would be rejected forever, and since a clean pass emits no
+  # review object and no second verdict, the watcher would time out on a good PR.
+  OBSERVED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   if [ -z "$STATE" ] || [ "$STATE" = "null" ] || [ -z "$HEAD" ] || [ "$HEAD" = "null" ]; then
     say "[poll $i] PR read came back incomplete; retrying"; continue
   fi
@@ -159,7 +181,7 @@ for i in $(seq 1 "$MAX_POLLS"); do
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1; CHECKS_RC=$?
 
   # ---------------------------------------------------------- TRANSITION PHASE
-  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  NOW="$OBSERVED_AT"
   FIRST_POLL=0; [ -z "$SEEN_HEAD" ] && FIRST_POLL=1
 
   HEAD_CHANGED=0
@@ -195,6 +217,9 @@ for i in $(seq 1 "$MAX_POLLS"); do
     say "[poll $i] a review was in flight across that change — its next 👍 belongs to the old head"
   fi
 
+  if [ "$HEAD_CHANGED" = "1" ] || [ "$HIDDEN_CHANGE" = "1" ]; then
+    HEAD_EVER_CHANGED=1
+  fi
   SEEN_HEAD="$HEAD"
 
   # ------------------------------------------------------------ DECISION PHASE
@@ -204,7 +229,16 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   # A clean pass posts no review object, only a 👍, and a reaction carries no
   # SHA — it is bound solely by when it appeared.
-  if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then
+  if [ "$HEAD_EVER_CHANGED" = "1" ] && [ -n "$APPROVE_TIME" ] && [ "$REVIEWED" -eq 0 ]; then
+    # More than one head has existed during this watch, so a reaction — which
+    # carries no SHA — cannot be attributed to any particular one. Timing
+    # heuristics do not resolve it: a review can be queued against the old head
+    # and only show 👀 after the new head was observed, so no snapshot of the
+    # reactions distinguishes the two cases. Rather than guess, this run stops
+    # trusting reactions entirely and waits for a review object, which carries
+    # commit_id. If none arrives the watch times out and merges nothing.
+    say "[poll $i] head moved during this watch — a bare 👍 can no longer identify which head it judged; holding out for a commit-bound review"
+  elif [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then
     if [ "$STALE_VERDICT_PENDING" = "1" ]; then
       say "[poll $i] ignoring 👍 at $APPROVE_TIME — verdict of the review that predates this head"
       STALE_VERDICT_PENDING=0
