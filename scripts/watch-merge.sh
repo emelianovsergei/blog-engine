@@ -202,6 +202,18 @@ revalidate() {
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1 || {
     say "  -> CI is no longer green (rc=$?); standing down"; return 1
   }
+  # Close the bracket. This function makes several remote calls after its opening
+  # head check, and the head can move during them — the reactions, threads and
+  # checks read afterwards would then describe a commit other than the one being
+  # authorised. Checking once at the start only narrows the window; checking at
+  # both ends means every read in between happened while this head was current.
+  if ! now_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null) \
+     || [ -z "$now_head" ] || [ "$now_head" = "null" ]; then
+    say "  -> could not confirm the head at the end of revalidation; standing down"; return 1
+  fi
+  if [ "$now_head" != "$HEAD" ]; then
+    say "  -> head moved to ${now_head:0:10} during revalidation; standing down"; return 1
+  fi
   return 0
 }
 
