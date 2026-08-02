@@ -22,6 +22,20 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # `gh pr checks` reads the check-run / status rollup. Without these the CI
+  # gate below cannot see ANY checks, returns nonzero for every PR, and skips
+  # all of them every single day — a merge gate that silently blocks
+  # everything looks identical to one that is merely waiting.
+  checks: read
+  statuses: read
+  # `gh pr checks` does not stop at the rollup: it also resolves
+  # `checkSuite.workflowRun` on every context to build the run URLs it
+  # prints. That field is gated behind `actions: read`, and GITHUB_TOKEN
+  # without it fails the WHOLE GraphQL query with "Resource not accessible
+  # by integration" — so gh exits 1 even when every check is green, and the
+  # gate below reads that as "CI failing" for every PR, forever. The job
+  # still exits 0, so this looks exactly like a healthy no-op run.
+  actions: read
 
 jobs:
   merge:
@@ -32,9 +46,8 @@ jobs:
       - name: Merge eligible PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Draft PRs cannot be squash-merged, and GITHUB_TOKEN is FORBIDDEN
-          # from marking a PR ready — so a PAT is used for the mark-ready flip
-          # below (defensive; the review step normally already marked it ready).
+          # GITHUB_TOKEN is FORBIDDEN from marking a draft PR ready, so the
+          # belt-and-suspenders mark-ready below runs under the PAT instead.
           PAT: ${{ secrets.AUTOBLOG_PAT }}
         run: |
           set -euo pipefail
@@ -67,6 +80,15 @@ jobs:
               echo "PR #$NUM: skipped (autoblog-review-failed label still present)"
               continue
             fi
+            # A dead URL the generator could not remove without breaking the
+            # sentence around it. CI cannot catch this one: the @smoke guard
+            # only rejects URLs already recorded in policy, and a URL found dead
+            # during generation is not there yet. Without this skip, the post
+            # auto-publishes with a live dead link and a green tick.
+            if echo "$LABELS" | grep -q 'autoblog-link-repair-needed'; then
+              echo "PR #$NUM: skipped (autoblog-link-repair-needed — dead link still in the post)"
+              continue
+            fi
 
             CREATED_TS=$(date -u -d "$CREATED" +%s)
             AGE=$((NOW - CREATED_TS))
@@ -77,23 +99,77 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= 24h — marking ready + squash-merging."
+            # CI GATE. Age + labels used to be the ONLY merge conditions, so a
+            # post that failed the build or the @smoke guards could still be
+            # squash-merged straight to production: the AI review scores prose,
+            # not tests, and will happily approve a post with a broken build.
+            # Survivable while a human clicked merge; under auto-publish it
+            # would ship broken pages unattended.
+            #
+            # rc 0 = all green; 8 = still pending; 1 = failing; a PR with no
+            # checks at all also errors. Anything but 0 means "not yet" — leave
+            # it for the next daily run, and the watchdog escalates if it sticks.
+            # Pin the SHA the checks are about to be read for, so the merge can
+            # refuse to publish anything else. Between `gh pr checks` and
+            # `gh pr merge` a generator re-run, an auto-fix commit or a reviewer
+            # push can land; the approval labels survive a new head, so without
+            # this the workflow would merge a head whose CI and AI review are
+            # still pending — the labels say approved, the code is unreviewed.
+            if ! HEAD_SHA=$(gh pr view "$NUM" --json headRefOid --jq .headRefOid); then
+              echo "::warning::Could not read head SHA for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+
+            CHECKS_OUT=$(gh pr checks "$NUM" 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
+            if [ "$CHECKS_RC" -ne 0 ]; then
+              echo "PR #$NUM: skipped — CI not green (gh pr checks rc=$CHECKS_RC)"
+              echo "$CHECKS_OUT" | head -20
+              continue
+            fi
+
+            # Re-read the labels. `PRS` is a snapshot taken at the top of the
+            # job, and an AI review finishing in between can add
+            # `autoblog-review-failed` and drop `autoblog-approved-pending` —
+            # a *semantic* failure that still reports a successful workflow run,
+            # so `gh pr checks` stays green and `--match-head-commit` does not
+            # help because the SHA never moved. On the stale snapshot this loop
+            # would publish content the review had explicitly rejected.
+            if ! FRESH_LABELS=$(gh pr view "$NUM" --json labels --jq '[.labels[].name] | join(",")'); then
+              echo "::warning::Could not re-read labels for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+            SKIP=""
+            for BLOCKER in autoblog-hold autoblog-review-failed autoblog-link-repair-needed; do
+              if echo "$FRESH_LABELS" | grep -q "$BLOCKER"; then SKIP="$BLOCKER"; break; fi
+            done
+            if [ -n "$SKIP" ]; then
+              echo "PR #$NUM: skipped — $SKIP appeared after the batch was listed"
+              continue
+            fi
+            if ! echo "$FRESH_LABELS" | grep -q 'autoblog-approved-pending'; then
+              echo "PR #$NUM: skipped — autoblog-approved-pending was removed after the batch was listed"
+              continue
+            fi
+
+            echo "PR #$NUM: age ${AGE}s >= 24h, CI green, labels re-verified — marking ready + squash-merging."
             # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
             # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
             # mutation and the `gh pr ready` fallback use the PAT. The node-id
             # lookup feeds only the mutation — tolerate a flaky read so it can't
             # abort the whole loop under errexit.
-            PR_ID=$(gh pr view "$NUM" --json id -q .id) || PR_ID=""
-            if [ -n "$PR_ID" ]; then
-              GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PR_ID" \
+            PRID=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" -q .node_id) || PRID=""
+            if [ -n "$PRID" ]; then
+              GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}' -f id="$PRID" \
                 || GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
             else
               GH_TOKEN="${PAT:-$GH_TOKEN}" gh pr ready "$NUM" || true
             fi
             # One bad PR must not abort the batch — record the failure, keep
             # going, and fail the job at the end so the problem stays visible.
-            gh pr merge "$NUM" --squash --delete-branch \
-              || { echo "::warning::Could not merge #$NUM (still draft or merge conflict); leaving for next run."; FAILED=1; }
+            gh pr merge "$NUM" --squash --delete-branch --match-head-commit "$HEAD_SHA" \
+              || { echo "::warning::Could not merge #$NUM (still draft, merge conflict, or head moved since checks passed); leaving for next run."; FAILED=1; }
           done <<< "$PRS"
 
           if [ "$FAILED" -ne 0 ]; then

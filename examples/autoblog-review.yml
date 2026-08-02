@@ -111,7 +111,7 @@ jobs:
             --post "${{ steps.files.outputs.file }}" \
             --site pulse \
             --business "HVAC Pulse" \
-            --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model claude-sonnet-5 \
             --out review-summary.md \
             --json-out review-result.json
@@ -288,7 +288,7 @@ jobs:
             --review review-result.json \
             --site pulse \
             --business "HVAC Pulse" \
-            --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model claude-sonnet-5 \
             --notes-out change-notes.md
 
