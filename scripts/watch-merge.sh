@@ -74,6 +74,10 @@ say() { printf '%s\n' "$*"; }
 TRUST_EXISTING="${WATCH_MERGE_TRUST_EXISTING:-0}"
 SEEN_HEAD=""
 SEEN_SINCE=""
+# Set when the head changes while a review is already in flight (👀 present).
+# That review is about the OLD head, so the 👍 it eventually posts is a verdict
+# on code that is no longer here and must not approve the new head.
+STALE_VERDICT_PENDING=0
 
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
@@ -101,10 +105,17 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # Witness the head. A change restarts the clock, so an approval earned by the
   # previous head can never carry over to this one.
   if [ "$HEAD" != "$SEEN_HEAD" ]; then
+    # A review already running when the head changes is reviewing the OLD head.
+    # Its verdict will land AFTER this moment and would otherwise look like an
+    # approval of the new head. HEAD_CHANGED_MID_REVIEW is resolved below, once
+    # the reactions for this poll have been read.
+    HEAD_CHANGED_MID_REVIEW=1
     SEEN_HEAD="$HEAD"
     SEEN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     [ "$i" -eq 1 ] && [ "$TRUST_EXISTING" = "1" ] && SEEN_SINCE="1970-01-01T00:00:00Z"
     say "[poll $i] observing head ${HEAD:0:10} since $SEEN_SINCE"
+  else
+    HEAD_CHANGED_MID_REVIEW=0
   fi
 
   # Sampling cannot see a head that came and went between two polls. If the head
@@ -149,6 +160,8 @@ for i in $(seq 1 "$MAX_POLLS"); do
     say "[poll $i] could not read reactions; retrying"; continue
   fi
   APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
+  EYES=$(printf '%s' "$REACTIONS" | jq -r "[.[]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
+  EYES="${EYES:-0}"
 
   # Outstanding findings come from the review-thread state, not from timestamps,
   # not from commit_id, and not from "has someone replied".
@@ -191,11 +204,32 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1; CHECKS_RC=$?
 
-  APPROVED=false
-  [ "$REVIEWED" -gt 0 ] && APPROVED=true
-  if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then APPROVED=true; fi
+  # If the head moved while a review was in flight, the next 👍 is that review's
+  # verdict on the PREVIOUS head. Mark it so it is consumed rather than trusted.
+  if [ "$HEAD_CHANGED_MID_REVIEW" = "1" ] && [ "$EYES" -gt 0 ]; then
+    STALE_VERDICT_PENDING=1
+    say "[poll $i] head changed while a review was running — the next 👍 belongs to the old head"
+  fi
 
-  say "[poll $i] head=${HEAD:0:10} observed_since=$SEEN_SINCE reviews_on_head=$REVIEWED thumbs_up=${APPROVE_TIME:-none} findings_on_head=$FINDINGS checks_rc=$CHECKS_RC approved=$APPROVED"
+  APPROVED=false
+  # A review object carries commit_id, so it proves WHICH head was reviewed and
+  # needs no inference.
+  [ "$REVIEWED" -gt 0 ] && APPROVED=true
+
+  # A clean pass posts no review object, only a 👍, and a reaction carries no
+  # SHA — it is bound solely by when it appeared. That is sound only while no
+  # review was straddling a head change.
+  if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then
+    if [ "$STALE_VERDICT_PENDING" = "1" ]; then
+      say "[poll $i] ignoring 👍 at $APPROVE_TIME — verdict of the review that was running before this head"
+      STALE_VERDICT_PENDING=0
+      SEEN_SINCE="$APPROVE_TIME"   # only a LATER 👍, from a review of this head, can approve
+    else
+      APPROVED=true
+    fi
+  fi
+
+  say "[poll $i] head=${HEAD:0:10} observed_since=$SEEN_SINCE reviews_on_head=$REVIEWED thumbs_up=${APPROVE_TIME:-none} eyes=$EYES stale_verdict=$STALE_VERDICT_PENDING findings_on_head=$FINDINGS checks_rc=$CHECKS_RC approved=$APPROVED"
 
   [ "$APPROVED" = "true" ] || continue
 
