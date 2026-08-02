@@ -107,6 +107,33 @@ for i in $(seq 1 "$MAX_POLLS"); do
     say "[poll $i] observing head ${HEAD:0:10} since $SEEN_SINCE"
   fi
 
+  # Sampling cannot see a head that came and went between two polls. If the head
+  # went A -> B -> A inside one interval, both samples read A and the clock above
+  # never restarts — so a 👍 earned while B was the head would count for A.
+  #
+  # Restoring a previous head is necessarily a force-push, and GitHub records it.
+  # So any force-push newer than the current observation window means the head
+  # moved while we were not looking; advance the window to that event. This is
+  # only ever used to push the window FORWARD, never to establish it, so it
+  # cannot reintroduce the false-rejection problem that using these events as a
+  # primary cutoff caused.
+  if ! FORCE_PUSHED=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              timelineItems(last:100, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
+                nodes{ ... on HeadRefForcePushedEvent { createdAt } }
+              }
+            }
+          }
+        }' -q '[.data.repository.pullRequest.timelineItems.nodes[].createdAt]|sort|last // empty' 2>/dev/null); then
+    say "[poll $i] could not read force-push history; retrying"; continue
+  fi
+  if [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$SEEN_SINCE" ]]; then
+    say "[poll $i] head moved between polls (force-push at $FORCE_PUSHED); restarting the approval window"
+    SEEN_SINCE="$FORCE_PUSHED"
+  fi
+
   # Signal 1 — a review object whose commit_id IS this head. Read from the API
   # field, not scraped from the rendered body: the body is prose that can change
   # format, commit_id is the reviewed SHA itself.
@@ -199,18 +226,26 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # READ is the same unknown-as-definite collapse this script exists to avoid,
   # merely pointing the other way — and it is worse here, because it would send
   # someone to re-merge a PR that already merged.
-  for attempt in 1 2 3 4 5; do
+  # A PR still OPEN right after the command is not proof of failure. If the base
+  # branch uses a merge queue, `gh pr merge` succeeds by ENQUEUEING it and the
+  # state stays OPEN until the queue lands it. Treating the first OPEN reading as
+  # "did not take effect" would report failure for a merge that was accepted, and
+  # send someone to re-merge it. So keep watching for a bounded period, and if it
+  # is still open at the end, say the outcome is unverified rather than failed.
+  LAST_SEEN=""
+  for attempt in $(seq 1 24); do
     sleep 5
     if FINAL=$(gh pr view "$PR" --repo "$REPO" --json state,mergedAt \
         -q '"\(.state) \(.mergedAt // "")"' 2>/dev/null) && [ -n "$FINAL" ]; then
+      LAST_SEEN="$FINAL"
       case "$FINAL" in
         MERGED*) say "MERGED $REPO#$PR — $FINAL"; exit 0 ;;
-        *)       say "MERGE DID NOT TAKE EFFECT — PR is: $FINAL"; exit 6 ;;
+        CLOSED*) say "MERGE DID NOT TAKE EFFECT — PR is: $FINAL"; exit 6 ;;
       esac
     fi
-    say "  -> post-merge read failed (attempt $attempt); retrying"
   done
-  say "MERGE OUTCOME UNVERIFIABLE — the merge was issued but the PR state could not be read. Check $REPO#$PR by hand before retrying."
+  say "MERGE OUTCOME UNVERIFIED after 2m — last seen: ${LAST_SEEN:-unreadable}."
+  say "The merge was issued and may be queued. Check $REPO#$PR by hand before retrying."
   exit 7
 done
 
