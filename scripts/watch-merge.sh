@@ -265,6 +265,17 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   PREV_EYES="$EYES"
 
+  # Never merge while a review is actively running on this head. After findings
+  # are resolved and a rereview is requested, the EARLIER review object still
+  # satisfies REVIEWED>0 and the resolved threads leave FINDINGS==0 — so with
+  # green checks the gate would open on the strength of a superseded verdict,
+  # moments before the running review posts its new findings. 👀 means a verdict
+  # is pending; wait for it.
+  if [ "$EYES" -gt 0 ]; then
+    say "  -> a review is in flight on this head (👀); waiting for it to finish before acting on any approval"
+    continue
+  fi
+
   [ "$APPROVED" = "true" ] || continue
 
   if [ "$FINDINGS" -gt 0 ]; then
