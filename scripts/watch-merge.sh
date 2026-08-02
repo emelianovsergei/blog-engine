@@ -46,31 +46,47 @@ say() { printf '%s\n' "$*"; }
 # When did this SHA become the PR head?
 #
 # NOT the commit's own committer date. A force-push or reset can make an OLDER
-# existing commit the head, and its committer date can predate an approval that
-# was given for a different SHA — which would let a stale 👍 clear code Codex
-# never saw. CI is triggered by the push that makes a SHA the head, so check-run
-# starts for this SHA track its activations. Take the later of that and the
-# commit date, so neither a back-dated commit nor a missing check run can move
-# the cutoff backwards.
+# existing commit the head, and its committer date can predate an approval given
+# for a different SHA — letting a stale 👍 clear code the reviewer never saw.
+#
+# Nor is the check-run list sufficient on its own. Immediately after a reset to a
+# SHA that was already built, the endpoint still returns only that SHA's OLD run:
+# the reset-triggered runs do not exist yet. During that window the newest run is
+# the stale one, the cutoff stays old, and a 👍 earned by the intervening head
+# reads as current. `gh pr checks` is no help either, since it sees the same old
+# green checks.
+#
+# The force-push event is the authoritative record of the head changing, and it
+# exists the moment the reset happens. Take the LATEST of all three signals: max
+# can only move the cutoff forward, and forward is the safe direction — an
+# over-late cutoff costs a wait, an over-early one merges unreviewed code.
 head_active_time() {
-  local sha="$1" commit_time checks_time
+  local sha="$1" commit_time checks_time push_time newest
   commit_time=$(gh api "repos/$REPO/commits/$sha" -q '.commit.committer.date' 2>/dev/null) || return 1
   [ -n "$commit_time" ] || return 1
-  # LAST check-run start, not the first. If a PR is reset to a SHA that was
-  # already built once, this endpoint holds runs from BOTH activations; taking
-  # the earliest deliberately picks the stale one, so an approval earned by a
-  # different head in between would be accepted as current. The reset triggers
-  # fresh runs, so the latest start tracks the current activation. A manual
-  # re-run can push this later than strictly necessary, which only costs a wait.
+
   if ! checks_time=$(gh api "repos/$REPO/commits/$sha/check-runs" \
       -q '[.check_runs[].started_at]|sort|last // empty' 2>/dev/null); then
     return 1   # fail closed: never silently fall back to the commit date
   fi
-  if [ -n "$checks_time" ] && [[ "$checks_time" > "$commit_time" ]]; then
-    printf '%s\n' "$checks_time"
-  else
-    printf '%s\n' "$commit_time"
+
+  if ! push_time=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              timelineItems(last:100, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
+                nodes{ ... on HeadRefForcePushedEvent { createdAt afterCommit { oid } } }
+              }
+            }
+          }
+        }' -q "[.data.repository.pullRequest.timelineItems.nodes[]|select(.afterCommit.oid==\"$sha\")|.createdAt]|sort|last // empty" 2>/dev/null); then
+    return 1
   fi
+
+  newest="$commit_time"
+  [ -n "$checks_time" ] && [[ "$checks_time" > "$newest" ]] && newest="$checks_time"
+  [ -n "$push_time" ]   && [[ "$push_time"   > "$newest" ]] && newest="$push_time"
+  printf '%s\n' "$newest"
 }
 
 for i in $(seq 1 "$MAX_POLLS"); do
