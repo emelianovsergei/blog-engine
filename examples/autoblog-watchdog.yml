@@ -236,7 +236,14 @@ jobs:
             --color D93F0B --description "Autoblog delivery watchdog alert" \
             >/dev/null 2>&1 || true
 
-          TITLE="Autoblog watchdog: no post published in the last ${DELIVERY_STALE_DAYS} days"
+          # The title is the issue's IDENTITY: both the update path here and the
+          # recovery path below locate the issue by exact title equality, so it
+          # must not depend on anything a maintainer might tune. Interpolating
+          # ${DELIVERY_STALE_DAYS} here would mean that changing the window
+          # mid-outage orphans the open issue — the next run files a duplicate
+          # under the new title, and recovery never closes the old one. The
+          # window belongs in the body, which is free to change.
+          TITLE="Autoblog watchdog: delivery has stalled"
 
           BODY_FILE=$(mktemp)
           {
@@ -293,7 +300,7 @@ jobs:
           # Title-matched: closing `.[0]` would close the stranded-PR tracker
           # instead, declaring stuck posts recovered because a *different* post
           # shipped — the precise confusion this split exists to remove.
-          TITLE="Autoblog watchdog: no post published in the last ${DELIVERY_STALE_DAYS} days"
+          TITLE="Autoblog watchdog: delivery has stalled"
           if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
             echo "::error::Could not list watchdog issues — cannot confirm the stale alert was closed."
             exit 1

@@ -350,6 +350,21 @@ jobs:
             gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE"
             PR_NUM="$EXISTING_PR"
 
+            # Restore the `autoblog` marker before the reopen below.
+            # autoblog-review.yml admits a PR by the `autoblog` label OR an
+            # `autoblog/*` head — and this branch is `blog/auto-*`, so the label
+            # is the ONLY thing that admits it. The create path attaches it; this
+            # reuse path never did. If it had been removed, the reopen still
+            # raises the event but the review job evaluates its `if:` to false
+            # and skips — so the post gets no review, never earns
+            # `autoblog-approved-pending`, and can never merge, while every run
+            # in the chain reports success. Adding a label already present is a
+            # no-op, so this is safe on the normal path.
+            GH_TOKEN="$LABEL_TOKEN" gh label create autoblog \
+              --color 0E8A16 --description "Auto-generated blog post" \
+              >/dev/null 2>&1 || true
+            gh pr edit "$EXISTING_PR" --add-label autoblog
+
             # The push above used GITHUB_TOKEN, which raises no `pull_request`
             # event, so this new head has no CI and no AI review. Since
             # autoblog-merge-pending.yml now requires green checks, a head with
