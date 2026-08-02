@@ -86,9 +86,11 @@ PREV_EYES=0
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
 
-  # A failed read must not be classified. Without capturing the status, a
-  # transient API error yields empty fields and the state checks below would
-  # declare a perfectly open PR "not OPEN" and abort on the first blip.
+  # ---------------------------------------------------------------- READ PHASE
+  # Every read happens before ANY state is mutated, and a failed read abandons
+  # the poll without touching state. Mutating as we went meant a later read
+  # failing could leave the head recorded but its transition unprocessed — the
+  # next poll then saw "no change" and the pending stale verdict was lost.
   if ! PRJSON=$(gh pr view "$PR" --repo "$REPO" --json state,isDraft,headRefOid 2>/dev/null); then
     say "[poll $i] could not read PR; retrying"; continue
   fi
@@ -106,32 +108,41 @@ for i in $(seq 1 "$MAX_POLLS"); do
   esac
   [ "$IS_DRAFT" = "true" ] && { say "PR is still a draft — mark it ready first"; exit 5; }
 
-  # Witness the head. A change restarts the clock, so an approval earned by the
-  # previous head can never carry over to this one.
-  if [ "$HEAD" != "$SEEN_HEAD" ]; then
-    # A review already running when the head changes is reviewing the OLD head.
-    # Its verdict will land AFTER this moment and would otherwise look like an
-    # approval of the new head. HEAD_CHANGED_MID_REVIEW is resolved below, once
-    # the reactions for this poll have been read.
-    HEAD_CHANGED_MID_REVIEW=1
-    SEEN_HEAD="$HEAD"
-    SEEN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    [ "$i" -eq 1 ] && [ "$TRUST_EXISTING" = "1" ] && SEEN_SINCE="1970-01-01T00:00:00Z"
-    say "[poll $i] observing head ${HEAD:0:10} since $SEEN_SINCE"
-  else
-    HEAD_CHANGED_MID_REVIEW=0
+  if ! REVIEWED=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+      -q "[.[]|select(.user.id==$BOT_ID)|select(.commit_id==\"$HEAD\")]|length" 2>/dev/null); then
+    say "[poll $i] could not read reviews; retrying"; continue
+  fi
+  REVIEWED=$(printf '%s\n' "$REVIEWED" | awk '{s+=$1} END {print s+0}')
+
+  if ! REACTIONS=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
+    say "[poll $i] could not read reactions; retrying"; continue
+  fi
+  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
+  if ! EYES=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null); then
+    say "[poll $i] could not evaluate reactions; retrying"; continue
+  fi
+  case "$EYES" in (*[!0-9]*|"") say "[poll $i] reaction count unreadable; retrying"; continue ;; esac
+
+  if ! THREADS=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              reviewThreads(first:100, after:$endCursor){
+                pageInfo{ hasNextPage endCursor }
+                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
+              }
+            }
+          }
+        }' 2>/dev/null); then
+    say "[poll $i] could not read review threads; retrying rather than assuming none"; continue
+  fi
+  if ! FINDINGS=$(printf '%s' "$THREADS" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
+        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.comments.nodes[0].author.login == $bot)
+          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null); then
+    say "[poll $i] could not evaluate review threads; retrying"; continue
   fi
 
-  # Sampling cannot see a head that came and went between two polls. If the head
-  # went A -> B -> A inside one interval, both samples read A and the clock above
-  # never restarts — so a 👍 earned while B was the head would count for A.
-  #
-  # Restoring a previous head is necessarily a force-push, and GitHub records it.
-  # So any force-push newer than the current observation window means the head
-  # moved while we were not looking; advance the window to that event. This is
-  # only ever used to push the window FORWARD, never to establish it, so it
-  # cannot reintroduce the false-rejection problem that using these events as a
-  # primary cutoff caused.
   if ! FORCE_PUSHED=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
         query($owner:String!,$name:String!,$pr:Int!){
           repository(owner:$owner,name:$name){
@@ -144,99 +155,60 @@ for i in $(seq 1 "$MAX_POLLS"); do
         }' -q '[.data.repository.pullRequest.timelineItems.nodes[].createdAt]|sort|last // empty' 2>/dev/null); then
     say "[poll $i] could not read force-push history; retrying"; continue
   fi
-  if [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$SEEN_SINCE" ]]; then
-    say "[poll $i] head moved between polls (force-push at $FORCE_PUSHED); restarting the approval window"
-    SEEN_SINCE="$FORCE_PUSHED"
-  fi
-
-  # Signal 1 — a review object whose commit_id IS this head. Read from the API
-  # field, not scraped from the rendered body: the body is prose that can change
-  # format, commit_id is the reviewed SHA itself.
-  if ! REVIEWED=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
-      -q "[.[]|select(.user.id==$BOT_ID)|select(.commit_id==\"$HEAD\")]|length" 2>/dev/null); then
-    say "[poll $i] could not read reviews; retrying"; continue
-  fi
-  REVIEWED=$(printf '%s\n' "$REVIEWED" | awk '{s+=$1} END {print s+0}')
-
-  # Signal 2 — the 👍. Bound to the head by witnessed observation, not by any
-  # inferred activation timestamp. See the note at the top of the file.
-  if ! REACTIONS=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
-    say "[poll $i] could not read reactions; retrying"; continue
-  fi
-  # --paginate emits one JSON array PER PAGE. Without slurping, these expressions
-  # produce one result per page — EYES becomes something like "0\n1", the integer
-  # test below fails with "integer expression expected", and stale-verdict
-  # tracking is skipped entirely. Slurp and flatten so each is a single value.
-  APPROVE_TIME=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
-  if ! EYES=$(printf '%s' "$REACTIONS" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null); then
-    say "[poll $i] could not evaluate reactions; retrying"; continue
-  fi
-  case "$EYES" in (*[!0-9]*|"") say "[poll $i] reaction count unreadable ('"'"'$EYES'"'"'); retrying"; continue ;; esac
-
-  # Outstanding findings come from the review-thread state, not from timestamps,
-  # not from commit_id, and not from "has someone replied".
-  #
-  # A reply is not a resolution: an acknowledgement, a disagreement, or a promise
-  # to fix later all create a reply while the finding stands. Counting replies
-  # would let a re-run merge an unchanged head carrying a known defect.
-  #
-  # GitHub tracks the two states that actually matter. `isOutdated` means the
-  # diff moved past the comment, so it no longer describes this code.
-  # `isResolved` means a human explicitly closed the thread. Anything neither
-  # outdated nor resolved is still open against this head. Note this makes
-  # resolving a thread part of the workflow — replying alone will not clear it,
-  # which is the point.
-  # `first: 100` is not "all". A PR with more threads than one page would hide an
-  # unresolved finding outside it, and an otherwise-green PR would merge carrying
-  # a known defect. Paginate and aggregate across every page.
-  if ! THREADS=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
-        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
-          repository(owner:$owner,name:$name){
-            pullRequest(number:$pr){
-              reviewThreads(first:100, after:$endCursor){
-                pageInfo{ hasNextPage endCursor }
-                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
-              }
-            }
-          }
-        }' 2>/dev/null); then
-    # Never default this to zero. A PR whose findings could not be read is not a
-    # PR without findings, and the review signal alone could otherwise merge it.
-    say "[poll $i] could not read review threads; retrying rather than assuming none"; continue
-  fi
-  # --paginate emits one JSON document per page; slurp and sum across all of them.
-  if ! FINDINGS=$(printf '%s' "$THREADS" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
-        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
-          | select(.comments.nodes[0].author.login == $bot)
-          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null); then
-    say "[poll $i] could not evaluate review threads; retrying"; continue
-  fi
 
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1; CHECKS_RC=$?
 
-  # If the head moved while a review was in flight, the next 👍 is that review's
-  # verdict on the PREVIOUS head. Mark it so it is consumed rather than trusted.
-  # PREV_EYES matters as much as EYES: the head is read first, so a review that
-  # completes between that read and the reactions read shows 👀=0 here even
-  # though it WAS in flight when the head moved.
-  if [ "$HEAD_CHANGED_MID_REVIEW" = "1" ] && { [ "$EYES" -gt 0 ] || [ "$PREV_EYES" -gt 0 ]; }; then
-    STALE_VERDICT_PENDING=1
-    say "[poll $i] head changed while a review was running — the next 👍 belongs to the old head"
+  # ---------------------------------------------------------- TRANSITION PHASE
+  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  FIRST_POLL=0; [ -z "$SEEN_HEAD" ] && FIRST_POLL=1
+
+  HEAD_CHANGED=0
+  [ "$FIRST_POLL" = "0" ] && [ "$HEAD" != "$SEEN_HEAD" ] && HEAD_CHANGED=1
+
+  # A force-push newer than the window means the head moved between polls — the
+  # A -> B -> A case, where both samples read A and the change is invisible.
+  HIDDEN_CHANGE=0
+  if [ "$FIRST_POLL" = "0" ] && [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$SEEN_SINCE" ]]; then
+    HIDDEN_CHANGE=1
   fi
 
+  if [ "$FIRST_POLL" = "1" ]; then
+    SEEN_SINCE="$NOW"
+    [ "$TRUST_EXISTING" = "1" ] && SEEN_SINCE="1970-01-01T00:00:00Z"
+    say "[poll $i] observing head ${HEAD:0:10} since $SEEN_SINCE"
+  elif [ "$HEAD_CHANGED" = "1" ]; then
+    SEEN_SINCE="$NOW"
+    say "[poll $i] head changed to ${HEAD:0:10}; approval window restarted"
+  elif [ "$HIDDEN_CHANGE" = "1" ]; then
+    SEEN_SINCE="$FORCE_PUSHED"
+    say "[poll $i] head moved between polls (force-push at $FORCE_PUSHED); approval window restarted"
+  fi
+
+  # A review already running when the head moved is reviewing the OLD head, so
+  # the 👍 it posts next is a verdict on code that is no longer here. Both an
+  # observed change and a hidden one count. The first poll is NOT a transition:
+  # treating it as one consumed the only verdict a clean review will ever emit
+  # and left the watcher timing out on a perfectly good PR.
+  if [ "$FIRST_POLL" = "0" ] && { [ "$HEAD_CHANGED" = "1" ] || [ "$HIDDEN_CHANGE" = "1" ]; } \
+     && { [ "$EYES" -gt 0 ] || [ "$PREV_EYES" -gt 0 ]; }; then
+    STALE_VERDICT_PENDING=1
+    say "[poll $i] a review was in flight across that change — its next 👍 belongs to the old head"
+  fi
+
+  SEEN_HEAD="$HEAD"
+
+  # ------------------------------------------------------------ DECISION PHASE
   APPROVED=false
-  # A review object carries commit_id, so it proves WHICH head was reviewed and
-  # needs no inference.
+  # A review object carries commit_id, so it proves WHICH head was reviewed.
   [ "$REVIEWED" -gt 0 ] && APPROVED=true
 
   # A clean pass posts no review object, only a 👍, and a reaction carries no
-  # SHA — it is bound solely by when it appeared. That is sound only while no
-  # review was straddling a head change.
+  # SHA — it is bound solely by when it appeared.
   if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then
     if [ "$STALE_VERDICT_PENDING" = "1" ]; then
-      say "[poll $i] ignoring 👍 at $APPROVE_TIME — verdict of the review that was running before this head"
+      say "[poll $i] ignoring 👍 at $APPROVE_TIME — verdict of the review that predates this head"
       STALE_VERDICT_PENDING=0
-      SEEN_SINCE="$APPROVE_TIME"   # only a LATER 👍, from a review of this head, can approve
+      SEEN_SINCE="$APPROVE_TIME"
     else
       APPROVED=true
     fi
