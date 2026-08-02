@@ -43,51 +43,37 @@ BOT_ID="${WATCH_MERGE_BOT_ID:-199175422}"
 BOT_LOGIN_BARE="${WATCH_MERGE_BOT_LOGIN:-chatgpt-codex-connector}"
 say() { printf '%s\n' "$*"; }
 
-# When did this SHA become the PR head?
+# APPROVAL BINDING — why there is no timestamp heuristic here any more
 #
-# NOT the commit's own committer date. A force-push or reset can make an OLDER
-# existing commit the head, and its committer date can predate an approval given
-# for a different SHA — letting a stale 👍 clear code the reviewer never saw.
+# A clean Codex pass produces no review object; it only swaps its reaction to 👍.
+# Reactions carry no SHA, so binding one to a commit means inferring "when did
+# this SHA become the head" — and every available proxy leaks:
 #
-# Nor is the check-run list sufficient on its own. Immediately after a reset to a
-# SHA that was already built, the endpoint still returns only that SHA's OLD run:
-# the reset-triggered runs do not exist yet. During that window the newest run is
-# the stale one, the cutoff stays old, and a 👍 earned by the intervening head
-# reads as current. `gh pr checks` is no help either, since it sees the same old
-# green checks.
+#   commit committer date   — a reset/fast-forward to an older or existing commit
+#                             predates the push that made it the head
+#   check-run starts        — absent in the window right after a reset, and a
+#                             delayed matrix job or a manual re-run on an
+#                             unchanged SHA pushes the cutoff PAST a valid 👍,
+#                             so a correct approval is rejected forever
+#   force-push events       — miss ordinary synchronize and fast-forward pushes
 #
-# The force-push event is the authoritative record of the head changing, and it
-# exists the moment the reset happens. Take the LATEST of all three signals: max
-# can only move the cutoff forward, and forward is the safe direction — an
-# over-late cutoff costs a wait, an over-early one merges unreviewed code.
-head_active_time() {
-  local sha="$1" commit_time checks_time push_time newest
-  commit_time=$(gh api "repos/$REPO/commits/$sha" -q '.commit.committer.date' 2>/dev/null) || return 1
-  [ -n "$commit_time" ] || return 1
-
-  if ! checks_time=$(gh api "repos/$REPO/commits/$sha/check-runs" \
-      -q '[.check_runs[].started_at]|sort|last // empty' 2>/dev/null); then
-    return 1   # fail closed: never silently fall back to the commit date
-  fi
-
-  if ! push_time=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
-        query($owner:String!,$name:String!,$pr:Int!){
-          repository(owner:$owner,name:$name){
-            pullRequest(number:$pr){
-              timelineItems(last:100, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
-                nodes{ ... on HeadRefForcePushedEvent { createdAt afterCommit { oid } } }
-              }
-            }
-          }
-        }' -q "[.data.repository.pullRequest.timelineItems.nodes[]|select(.afterCommit.oid==\"$sha\")|.createdAt]|sort|last // empty" 2>/dev/null); then
-    return 1
-  fi
-
-  newest="$commit_time"
-  [ -n "$checks_time" ] && [[ "$checks_time" > "$newest" ]] && newest="$checks_time"
-  [ -n "$push_time" ]   && [[ "$push_time"   > "$newest" ]] && newest="$push_time"
-  printf '%s\n' "$newest"
-}
+# Patching one proxy moved the hole to another, and the last two reports were in
+# direct tension: tracking more activations makes false-rejection worse, and
+# loosening it makes false-acceptance worse.
+#
+# So the script no longer infers activation. It WITNESSES it. Each poll records
+# the head it sees; when the head changes, the clock restarts. A 👍 counts only
+# if it arrived after this process saw the current head in place — which is
+# SHA-bound by construction rather than by inference, and needs no GitHub
+# timestamp at all.
+#
+# The deliberate cost: a 👍 that predates the watcher is NOT trusted, because
+# nothing can tell it apart from one earned by a previous head. Such a run
+# declines and exits 4 rather than guessing. Set WATCH_MERGE_TRUST_EXISTING=1 to
+# accept a pre-existing approval when you have checked it yourself.
+TRUST_EXISTING="${WATCH_MERGE_TRUST_EXISTING:-0}"
+SEEN_HEAD=""
+SEEN_SINCE=""
 
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
@@ -112,8 +98,13 @@ for i in $(seq 1 "$MAX_POLLS"); do
   esac
   [ "$IS_DRAFT" = "true" ] && { say "PR is still a draft — mark it ready first"; exit 5; }
 
-  if ! CUTOFF=$(head_active_time "$HEAD"); then
-    say "[poll $i] could not determine when $HEAD became head; retrying"; continue
+  # Witness the head. A change restarts the clock, so an approval earned by the
+  # previous head can never carry over to this one.
+  if [ "$HEAD" != "$SEEN_HEAD" ]; then
+    SEEN_HEAD="$HEAD"
+    SEEN_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    [ "$i" -eq 1 ] && [ "$TRUST_EXISTING" = "1" ] && SEEN_SINCE="1970-01-01T00:00:00Z"
+    say "[poll $i] observing head ${HEAD:0:10} since $SEEN_SINCE"
   fi
 
   # Signal 1 — a review object whose commit_id IS this head. Read from the API
@@ -125,8 +116,8 @@ for i in $(seq 1 "$MAX_POLLS"); do
   fi
   REVIEWED=$(printf '%s\n' "$REVIEWED" | awk '{s+=$1} END {print s+0}')
 
-  # Signal 2 — the 👍. Reactions carry no SHA, so freshness is judged against
-  # the head-change time computed above.
+  # Signal 2 — the 👍. Bound to the head by witnessed observation, not by any
+  # inferred activation timestamp. See the note at the top of the file.
   if ! REACTIONS=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
     say "[poll $i] could not read reactions; retrying"; continue
   fi
@@ -175,9 +166,9 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   APPROVED=false
   [ "$REVIEWED" -gt 0 ] && APPROVED=true
-  if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$CUTOFF" ]]; then APPROVED=true; fi
+  if [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then APPROVED=true; fi
 
-  say "[poll $i] head=${HEAD:0:10} head_active=$CUTOFF reviews_on_head=$REVIEWED thumbs_up=${APPROVE_TIME:-none} findings_on_head=$FINDINGS checks_rc=$CHECKS_RC approved=$APPROVED"
+  say "[poll $i] head=${HEAD:0:10} observed_since=$SEEN_SINCE reviews_on_head=$REVIEWED thumbs_up=${APPROVE_TIME:-none} findings_on_head=$FINDINGS checks_rc=$CHECKS_RC approved=$APPROVED"
 
   [ "$APPROVED" = "true" ] || continue
 
