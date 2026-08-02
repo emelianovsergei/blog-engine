@@ -32,6 +32,12 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
+  # `gh run list` below needs this. Without it the token cannot read workflow
+  # runs, the guarded fallback records "could not list runs", and every outage
+  # issue silently loses the generation-run history it exists to surface —
+  # exactly the evidence needed to tell "generation failed" from "generation
+  # never fired".
+  actions: read
 
 jobs:
   watch:
@@ -297,6 +303,15 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+
+          # Provision the label HERE too, not just in the outage step above.
+          # That step is gated on `healthy == 'false'`, so on a repo where
+          # delivery is fine but a PR is stranded it never runs — and this
+          # step's `gh issue create --label` would then fail against a label
+          # that does not exist, losing the very alert it exists to raise.
+          gh label create autoblog-watchdog \
+            --color D93F0B --description "Autoblog delivery watchdog alert" \
+            >/dev/null 2>&1 || true
 
           TITLE="Autoblog watchdog: post(s) stuck in review"
           if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
