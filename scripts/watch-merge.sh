@@ -132,7 +132,18 @@ FORCE_BASELINE=""
 #
 # Returns 0 only when nothing is running and nothing is outstanding.
 revalidate() {
-  local rc eyes threads findings
+  local rc eyes threads findings now_head
+  # The head first. `--match-head-commit` protects the merge path, but the
+  # readiness report has no equivalent — without this it could recommend merging
+  # a commit that replaced the reviewed one while this poll was still gathering
+  # state, using the old head's approval and checks as justification.
+  if ! now_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null) \
+     || [ -z "$now_head" ] || [ "$now_head" = "null" ]; then
+    say "  -> could not revalidate the head; standing down"; return 1
+  fi
+  if [ "$now_head" != "$HEAD" ]; then
+    say "  -> head moved to ${now_head:0:10} while this poll was gathering state; standing down"; return 1
+  fi
   if ! rc=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
     say "  -> could not revalidate reviewer state; standing down this round"; return 1
   fi
