@@ -94,13 +94,19 @@ jobs:
         id: files
         run: |
           set -euo pipefail
+          # Match BOTH .md and .mdx. As a template this cannot assume the
+          # consumer's extension — autoblog-review.yml's path filters accept
+          # either, and under `set -euo pipefail` a grep that matches nothing
+          # kills the step before `file` is ever set, so a .md-based repo would
+          # find `/autoblog rewrite` simply unusable.
           CHANGED=$(git diff --name-only \
             "origin/${{ github.event.repository.default_branch }}...HEAD" \
-            | grep -E '^(content|src/content)/blog/.*\.md$' | head -n 1)
+            | grep -E '^(content|src/content)/blog/.*\.mdx?$' | head -n 1)
           echo "file=$CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Run AI rewrite
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           npx blog-engine-rewrite \
@@ -108,16 +114,30 @@ jobs:
             --review review-result.json \
             --site pulse \
             --business "HVAC Pulse" \
-            --service-areas "Sacramento,Roseville,Folsom,Elk Grove,Citrus Heights" \
+            --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
+            --model claude-sonnet-5 \
             --notes-out change-notes.md
 
       # Build the site against the rewritten post BEFORE committing. A rewrite
       # that mangles frontmatter (e.g. drops a field the page template reads)
-      # crashes the prerender; without this gate the broken post would be pushed
-      # and only fail later in the PR's own build. Failing here means nothing is
-      # pushed and the post is left in its prior state.
+      # crashes the Next.js prerender; without this gate the broken post would
+      # be pushed and only fail later in the PR's own build. Failing here means
+      # nothing is pushed and the post is left in its prior state.
       - name: Validate rewritten post builds
+        id: validate
         run: npm run build
+
+      # Gate on THIS step, not on bare `failure()`. `failure()` is true when any
+      # earlier step failed — a flaky artifact download or a model error would
+      # otherwise post "the build rejected your frontmatter" about a build that
+      # never ran, sending a human to edit a file that is fine.
+      - name: Report build failure
+        if: failure() && steps.validate.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr comment "$PR" --body "⚠️ Autoblog rewrite produced a post that fails \`npm run build\` — not pushing. The post is unchanged. A human edit is needed (likely malformed frontmatter)."
 
       - name: Commit revision
         run: |

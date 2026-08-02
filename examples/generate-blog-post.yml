@@ -1,0 +1,438 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/generate-blog-post.yml
+#
+# The most site-coupled of these templates — expect to adjust per repo:
+#   - the `npm run blog:generate` script and the paths it writes
+#     (data/blog-generation-runs/, content/blog/, public/images/blog/)
+#   - the Node setup step (.node-version file vs a pinned node-version)
+#   - the cron pair, which exists to cover PST/PDT; the schedule-guard job
+#     drops the duplicate so only one run per Pacific date proceeds
+#
+# Secrets: ANTHROPIC_API_KEY, GEMINI_API_KEY (fallback), PEXELS_API_KEY,
+# AUTOBLOG_PAT (so the pushed branch raises workflow events).
+#
+name: Generate Weekly Blog Post
+
+on:
+  schedule:
+    - cron: "0 8 * * 6"   # Saturday 1 AM PDT (summer)
+    - cron: "0 9 * * 6"   # Saturday 1 AM PST (winter)
+  workflow_dispatch:
+
+# Two runs on the same Pacific date share one branch — `blog/auto-${RUN_DATE}` —
+# and both force-push it. Overlapping, they can each see no existing PR, generate
+# different posts, and race: the PR ends up created against one run's head while
+# its body and its `autoblog-link-repair-needed` label come from the other. An
+# unresolved dead link could then land with its only merge-blocking label
+# describing a different post.
+#
+# `cancel-in-progress: false` because a cancelled generate run is the failure
+# this PR was opened about. The second run waits and then acts on a settled
+# branch instead.
+concurrency:
+  group: generate-blog-post
+  cancel-in-progress: false
+
+jobs:
+  schedule-guard:
+    name: Resolve Weekly Run Window
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.window.outputs.should_run }}
+      run_at: ${{ steps.window.outputs.run_at }}
+      run_date: ${{ steps.window.outputs.run_date }}
+
+    steps:
+      - name: Resolve Pacific run window
+        id: window
+        run: |
+          RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
+          RUN_DATE=${RUN_AT%%T*}
+
+          echo "run_at=$RUN_AT" >> "$GITHUB_OUTPUT"
+          echo "run_date=$RUN_DATE" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Two crons cover DST/PST so 1 AM PT always fires.
+          # Accept only the cron that matches the current Pacific offset
+          # so the workflow doesn't run twice every Saturday.
+          SCHED="${{ github.event.schedule }}"
+          UTC_OFFSET=$(TZ=America/Los_Angeles date +%z)   # -0700 (PDT) or -0800 (PST)
+          if [ "$UTC_OFFSET" = "-0700" ] && [ "$SCHED" = "0 8 * * 6" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$SCHED" = "0 9 * * 6" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  generate:
+    name: Generate Blog Draft
+    needs: schedule-guard
+    if: needs.schedule-guard.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      # Labels are an Issues API resource — needed to provision
+      # `autoblog-link-repair-needed` on a repo that does not have it yet.
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Push with GITHUB_TOKEN, which the job grants `contents: write`.
+          # AUTOBLOG_PAT is a pull-requests-only token (no `contents: write`),
+          # so using it as the git push credential 403s on `git push` — that
+          # broke the 2026-06-27 weekly run (post generated, PR never opened).
+          # The PR is still opened via `gh pr create` with AUTOBLOG_PAT below,
+          # so the autoblog review still auto-fires on new weekly PRs.
+          #
+          # A push made with GITHUB_TOKEN raises no `pull_request` event, so an
+          # existing PR's new head gets neither CI nor AI review. That used to be
+          # a cosmetic trade-off; it is not any more. This PR removed the inline
+          # build/smoke gates and made autoblog-merge-pending.yml require green
+          # checks, and a head with *no* checks fails that gate — so a same-day
+          # re-run would produce a publishable post that is skipped every day
+          # forever. The existing-PR path below reopens the PR to raise a real
+          # event; see the note there.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install ImageMagick
+        # Only the identify/convert CLIs are needed; --no-install-recommends drops
+        # the ~85MB recommends tree (ghostscript/fonts/poppler) that stalls the job
+        # on slow apt mirrors. Retries ride out transient mirror blips.
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 imagemagick
+
+      - name: Verify fixture-mode generator
+        run: npm run blog:test-fixtures
+
+      # PERSIST BEFORE GATE.
+      #
+      # This job used to run `npm run build` and the full @smoke suite HERE,
+      # between generation and the PR steps. On 2026-07-25 that cost a whole
+      # week of content: the post generated fine, then a denylist guard failed
+      # on two retired federal URLs, the job aborted, and the PR steps never
+      # ran. No branch, no PR, no artifact — five minutes of model output
+      # deleted over two URLs (actions/runs/30153351381).
+      #
+      # Both gates were also REDUNDANT: ci.yml runs build + the full regression
+      # suite (a superset of @smoke) on every pull_request, so the PR is gated
+      # either way — just without the power to destroy the work first.
+      #
+      # Generation output is now committed and pushed unconditionally. A broken
+      # post becomes a PR with red CI, which the auto-fix loop and a human can
+      # both act on. A discarded post is invisible and unrecoverable.
+
+      - name: Generate weekly blog post
+        run: npm run blog:generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          BLOG_GENERATOR_DATE: ${{ needs.schedule-guard.outputs.run_at }}
+
+      - name: Check for generated changes
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain -- data/blog-generation-runs/ content/blog/ public/images/blog/)" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update draft PR
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          # Open the PR with a user PAT when available so the resulting
+          # `opened`/`labeled` event triggers the autoblog review workflow.
+          # GitHub deliberately suppresses workflow triggers for events created
+          # with the built-in GITHUB_TOKEN, which is why the review never fired
+          # on the weekly cron. The GITHUB_TOKEN fallback is kept only so the
+          # expression stays valid — the guard at the top of the script now
+          # refuses to run without the PAT, because a PR whose events were
+          # suppressed can no longer be merged at all (see that comment).
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          # Secrets cannot be tested inside `run:`, so the presence check is
+          # lifted into the env. See the guard at the top of the script.
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          # Label creation is an Issues API call. The fine-grained PAT is
+          # provisioned for Contents + Pull requests only, so it 403s there;
+          # GITHUB_TOKEN has `issues: write` from the job permissions.
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
+        run: |
+          # NOTE: the missing-PAT check deliberately lives AFTER the push, not
+          # here. Failing before the branch exists would discard the generated
+          # post — the exact content loss this whole workflow was restructured
+          # to eliminate, reintroduced by its own guard.
+
+          REPORT="data/blog-generation-runs/${RUN_DATE}.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "Expected report file not found: $REPORT" >&2
+            exit 1
+          fi
+
+          STATUS=$(jq -r '.status' "$REPORT")
+          PLAN_TITLE=$(jq -r '.plan.title' "$REPORT")
+          SLUG=$(jq -r '.slug // ""' "$REPORT")
+          CONFIDENCE=$(jq -r '.imageReview.confidence // ""' "$REPORT")
+          IMAGE_URL=$(jq -r '.selectedImage.pageUrl // ""' "$REPORT")
+          IMAGE_ALT=$(jq -r '.selectedImage.featuredImageAlt // ""' "$REPORT")
+          SEARCH_QUERIES=$(jq -r '.plan.searchQueries[] | "- `\(.)`"' "$REPORT")
+          LINKS_CHECKED=$(jq -r '.linkAudit.checked // 0' "$REPORT")
+          LINKS_REMOVED=$(jq -r '.linkAudit.removed // [] | if length == 0 then "- none" else .[] | "- ❌ `\(.url)` — \(.reason)" end' "$REPORT")
+          LINKS_UNVERIFIED=$(jq -r '.linkAudit.unverified // [] | if length == 0 then "- none" else .[] | "- ⚠️ `\(.url)` — \(.reason)" end' "$REPORT")
+          # Dead URLs still in the article — bare prose links that cannot be
+          # deleted without breaking the sentence. Nothing else stops this post
+          # from auto-publishing with one: the @smoke guard only rejects URLs
+          # already recorded in policy, and a URL discovered dead this run is
+          # not there yet. The label below is the only gate.
+          LINKS_UNRESOLVED=$(jq -r '.linkAudit.unresolved // [] | if length == 0 then "- none" else .[] | "- 🚫 `\(.url)` — \(.reason)" end' "$REPORT")
+          UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
+
+          BRANCH="blog/auto-${RUN_DATE}"
+          PR_TITLE="Blog: ${RUN_DATE} auto-generated post"
+
+          BODY_FILE=$(mktemp)
+          {
+            echo "## Weekly Auto-Generated Blog Run"
+            echo
+            echo "- Status: \`$STATUS\`"
+            echo "- Planned title: $PLAN_TITLE"
+            if [ -n "$SLUG" ]; then
+              echo "- Slug: \`$SLUG\`"
+            fi
+            if [ -n "$CONFIDENCE" ] && [ "$CONFIDENCE" != "null" ]; then
+              echo "- Image confidence: \`$CONFIDENCE\`"
+            fi
+            echo
+            echo "### Search Queries"
+            echo "$SEARCH_QUERIES"
+            echo
+            echo "### Selected Image"
+            echo "- Source: $IMAGE_URL"
+            echo "- Alt text: $IMAGE_ALT"
+            echo
+            echo "### Outbound Link Audit"
+            echo "Every URL in this post was checked against \`content/policy/link-constraints.json\` and fetched with a real browser User-Agent before the file was written."
+            echo
+            echo "- URLs checked: \`$LINKS_CHECKED\`"
+            echo
+            echo "**Removed (proven dead):**"
+            echo "$LINKS_REMOVED"
+            echo
+            echo "**Kept but unverified** (bot-block or network flake — a link is never deleted on an unproven signal):"
+            echo "$LINKS_UNVERIFIED"
+            echo
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              echo "**🚫 Dead links STILL IN THIS POST — auto-merge is blocked:**"
+              echo "$LINKS_UNRESOLVED"
+              echo
+              echo "These are bare URLs in running prose. Removing the URL alone would publish a broken sentence (\`— see .\`), so the generator left the prose intact and flagged it instead."
+              echo
+              echo "**To unblock:** rewrite the sentence (drop the reference, or swap in a live source), then remove the \`autoblog-link-repair-needed\` label."
+              echo
+            fi
+            echo "### Review Checklist"
+            echo "- [ ] Read the full post for accuracy, tone, and Sacramento relevance"
+            echo "- [ ] Confirm service mentions, CTA, and phone number \`(916) 850-2221\`"
+            echo "- [ ] Check that the image matches the article and feels on-brand"
+            echo "- [ ] Edit freely, then merge when ready"
+          } > "$BODY_FILE"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add data/blog-generation-runs/ content/blog/ public/images/blog/
+          git commit -m "Add auto-generated blog artifacts for ${RUN_DATE}"
+
+          # PERSIST FIRST, to a ref that is not a branch and not a PR head.
+          #
+          # Everything below this line touches fallible APIs — the PR lookup,
+          # label provisioning, labelling. Any of them can fail transiently, and
+          # until the commit exists somewhere off the runner a failure discards
+          # the post. Pushing the real branch here instead would expose the head
+          # to review before its blocking label is attached, so the two
+          # invariants cannot both be met by reordering alone.
+          #
+          # `refs/autoblog-recovery/*` is outside `refs/heads/*`: it raises no
+          # workflow events, creates no branch, and cannot become a PR head — so
+          # it satisfies "never lose the work" without touching "never expose an
+          # ungated head". Overwritten each run; harmless to leave behind.
+          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_DATE}"; then
+            echo "::error::Could not persist the generated commit to a recovery ref — aborting before anything else can fail and lose it."
+            exit 1
+          fi
+          echo "Post preserved at refs/autoblog-recovery/${RUN_DATE} (git fetch origin 'refs/autoblog-recovery/*:refs/autoblog-recovery/*' to retrieve)."
+
+          # Same rule as everywhere else in this pipeline: a failed lookup is not
+          # "no PR exists". Collapsing the two sends a re-run down the create
+          # path against a branch that already has a PR.
+          #
+          # Resolved BEFORE the push, because the gate below has to be in place
+          # before this head is reviewable. Pushing is what starts the clock:
+          # autoblog-review.yml runs on the new head, can add
+          # autoblog-approved-pending, and autoblog-merge-pending.yml publishes
+          # 24h later on that label alone. This generation run failing is not a
+          # check on the PR, so a label applied afterwards — and failing — would
+          # leave a dead link auto-publishing with every signal green.
+          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number'); then
+            echo "::error::Could not list PRs for $BRANCH — refusing to guess whether one exists."
+            exit 1
+          fi
+
+          # Provision the blocking label before anything tries to attach it.
+          # `gh pr create --label` FAILS on a label the repo does not have, and
+          # it would fail after the branch was pushed — leaving the post with no
+          # PR and no gate, which is the state this label exists to prevent.
+          # Created with GITHUB_TOKEN because the fine-grained PAT carries no
+          # Issues permission, and `|| true` because "already exists" is the
+          # normal case; a genuine failure is caught by the read-back below.
+          if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+            GH_TOKEN="$LABEL_TOKEN" gh label create autoblog-link-repair-needed \
+              --color B60205 \
+              --description "Dead link still in the post — blocks auto-merge" \
+              >/dev/null 2>&1 || true
+          fi
+
+          if [ "$UNRESOLVED_COUNT" -gt 0 ] && [ -n "$EXISTING_PR" ]; then
+            echo "::warning::$UNRESOLVED_COUNT dead link(s) remain in the post — blocking auto-merge"
+            gh pr edit "$EXISTING_PR" --add-label autoblog-link-repair-needed
+          fi
+
+          git push --force -u origin "$BRANCH"
+
+          # The generated post is now safe on a branch. ONLY NOW is it sound to
+          # fail on a missing PAT: without it no `pull_request` event is raised,
+          # so the PR would get no CI and no AI review and could never merge —
+          # but the work survives for a human to pick up, instead of being
+          # thrown away by the guard.
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured. The post is pushed and safe on $BRANCH, but events raised with GITHUB_TOKEN do not trigger workflows, so a PR opened now would never receive CI or AI review and could never be merged. Add the secret and re-run, or open the PR by hand."
+            exit 1
+          fi
+
+          # Belt-and-braces behind the workflow-level concurrency group: confirm
+          # the remote head is still this run's commit before the PR body and
+          # the link-repair label are attached to it. Otherwise those describe
+          # one post while the head is another — and an unresolved dead link
+          # could ship under a label that was computed for different content.
+          LOCAL_SHA=$(git rev-parse HEAD)
+          if ! REMOTE_SHA=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1); then
+            echo "::error::Could not read the remote head of $BRANCH — refusing to label a head I cannot verify."
+            exit 1
+          fi
+          if [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then
+            echo "::error::$BRANCH moved to $REMOTE_SHA after this run pushed $LOCAL_SHA — another generation run is active. Aborting rather than describing someone else's head."
+            exit 1
+          fi
+
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            PR_NUM="$EXISTING_PR"
+
+            # Restore the `autoblog` marker before the reopen below.
+            # autoblog-review.yml admits a PR by the `autoblog` label OR an
+            # `autoblog/*` head — and this branch is `blog/auto-*`, so the label
+            # is the ONLY thing that admits it. The create path attaches it; this
+            # reuse path never did. If it had been removed, the reopen still
+            # raises the event but the review job evaluates its `if:` to false
+            # and skips — so the post gets no review, never earns
+            # `autoblog-approved-pending`, and can never merge, while every run
+            # in the chain reports success. Adding a label already present is a
+            # no-op, so this is safe on the normal path.
+            GH_TOKEN="$LABEL_TOKEN" gh label create autoblog \
+              --color 0E8A16 --description "Auto-generated blog post" \
+              >/dev/null 2>&1 || true
+            gh pr edit "$EXISTING_PR" --add-label autoblog
+
+            # The push above used GITHUB_TOKEN, which raises no `pull_request`
+            # event, so this new head has no CI and no AI review. Since
+            # autoblog-merge-pending.yml now requires green checks, a head with
+            # none is skipped every single day — the post would be silently
+            # unpublishable forever.
+            #
+            # Reopening with the PAT raises a real `reopened` event, which both
+            # ci.yml (default pull_request types) and autoblog-review.yml
+            # subscribe to. Close and reopen must be treated as one operation:
+            # a close that is not followed by a reopen leaves the post dead.
+            # Both halves are hard errors. A close that does not reopen loses the
+            # post outright; a close that never happened leaves a force-pushed
+            # head with no checks, which the merge gate rejects every day
+            # forever. Warning and carrying on would report success over a post
+            # that can never publish — the failure this PR exists to end.
+            echo "Re-raising pull_request events for #$PR_NUM so CI and review run on the new head."
+            if ! gh pr close "$PR_NUM"; then
+              echo "::error::Could not close PR #$PR_NUM to re-raise its events — its new head would have no CI or review and could never merge."
+              exit 1
+            fi
+            if ! gh pr reopen "$PR_NUM"; then
+              echo "::error::Closed PR #$PR_NUM but could not reopen it — reopen it by hand; the post is otherwise lost."
+              exit 1
+            fi
+          else
+            # Labels applied atomically at creation: there is no instant where
+            # this PR exists without its gate.
+            CREATE_LABELS=(--label autoblog)
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              echo "::warning::$UNRESOLVED_COUNT dead link(s) remain in the post — blocking auto-merge"
+              CREATE_LABELS+=(--label autoblog-link-repair-needed)
+            fi
+            gh pr create --draft "${CREATE_LABELS[@]}" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            PR_NUM=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
+          fi
+
+          if [ -z "$PR_NUM" ]; then
+            echo "::error::No PR number for $BRANCH — the link-repair gate cannot be verified."
+            exit 1
+          fi
+
+          # Verify the gate really is attached, whichever path applied it.
+          if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+            if ! PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")'); then
+              echo "::error::Could not read labels back from PR #$PR_NUM — cannot confirm auto-merge is blocked."
+              exit 1
+            fi
+            if ! echo "$PR_LABELS" | grep -q 'autoblog-link-repair-needed'; then
+              echo "::error::PR #$PR_NUM has $UNRESOLVED_COUNT dead link(s) but no autoblog-link-repair-needed label — it could auto-publish."
+              exit 1
+            fi
+          else
+            # Removing a label that is not there is not an error worth failing
+            # on, but a real API or permission failure is: the label would stay
+            # attached, autoblog-merge-pending.yml would skip this PR forever,
+            # and the run would report success. Check the labels rather than
+            # trusting the exit code of a call that is legitimately a no-op.
+            gh pr edit "$PR_NUM" --remove-label autoblog-link-repair-needed || true
+            # Capture the read-back separately. As the condition of an `if`, a
+            # failed `gh pr view` is indistinguishable from "label absent" and
+            # errexit does not fire — so the step would report success having
+            # verified nothing, which is the failure this check exists to catch.
+            if ! PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")'); then
+              echo "::error::Could not read labels back from PR #$PR_NUM — cannot confirm the merge gate is clear."
+              exit 1
+            fi
+            if echo "$PR_LABELS" | grep -q 'autoblog-link-repair-needed'; then
+              echo "::error::Could not clear autoblog-link-repair-needed from PR #$PR_NUM — it would never auto-merge."
+              exit 1
+            fi
+          fi

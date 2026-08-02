@@ -1,0 +1,400 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-watchdog.yml
+#
+# Adjust the two windows in the job-level `env` per repo: DELIVERY_STALE_DAYS
+# ("is the pipeline still producing?") and STRANDED_PR_DAYS ("is a finished
+# post stuck?"). Every alert title and body derives from them. Requires no
+# secrets beyond the built-in GITHUB_TOKEN.
+#
+# Autoblog delivery watchdog.
+#
+# The 2026-07-25 weekly post was never published and nobody noticed for two
+# days. Nothing in the pipeline ever asserted "a post actually shipped" — and
+# the Actions list actively hid it:
+#
+#   - The failed run (30153351381) was one red X among green ones.
+#   - The 10:26 run the same morning showed ✓ because the DST double-cron guard
+#     SKIPPED the generate job, and a skipped job reports success.
+#
+# So a total failure and a healthy no-op looked identical. This job closes that
+# hole by checking the OUTCOME (is there a recent post?) rather than the runs.
+#
+# It also catches the quieter failure the CI merge gate introduced: an approved
+# PR that can never merge because its checks are red would otherwise sit open
+# forever in silence.
+
+name: Autoblog Watchdog
+
+on:
+  schedule:
+    - cron: "0 18 * * 1"   # Monday ~10-11 AM PT — after Saturday generation + the 24h merge window
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  # `gh run list` below needs this. Without it the token cannot read workflow
+  # runs, the guarded fallback records "could not list runs", and every outage
+  # issue silently loses the generation-run history it exists to surface —
+  # exactly the evidence needed to tell "generation failed" from "generation
+  # never fired".
+  actions: read
+
+jobs:
+  watch:
+    name: Verify a post actually shipped
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Job-level so the alert text, the close-comment and the assessment cannot
+    # drift apart. These were previously set per-step while the issue titles and
+    # bodies hardcoded "10 days" — change the window and the alerts would keep
+    # quoting the old one, and the close step's title match (which must equal
+    # the alert step's title exactly) would silently stop matching.
+    #
+    # Two different questions, two different thresholds.
+    #
+    # DELIVERY_STALE_DAYS answers "is the pipeline still producing?" and tracks
+    # the weekly cadence plus the 24h merge window and a skipped week.
+    #
+    # STRANDED_PR_DAYS answers "is a finished post stuck?" and is deliberately
+    # longer: a post can sit legitimately through a slow review or an auto-fix
+    # cycle, and alarming at the delivery cadence would make an ordinary
+    # unhurried review look like a fault.
+    env:
+      DELIVERY_STALE_DAYS: 10
+      STRANDED_PR_DAYS: 21
+
+    steps:
+      - name: Assess autoblog delivery
+        id: assess
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job never checks out the repo — it is pure API. Without a git
+          # working tree `gh` cannot infer which repository it is talking about
+          # and every call dies with "not a git repository", so the watchdog
+          # failed on its first command and never assessed anything. GH_REPO
+          # supplies that context without paying for a checkout.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # A merged autoblog PR is the delivery event itself.
+          #
+          # "Last commit touching content/blog" looks equivalent and is not: any
+          # maintenance edit resets it. #253 (the Ahrefs link repair) did exactly
+          # that on 07-22 while the last real post was 07-19, so the watchdog
+          # would have read prose tweaks as a healthy delivery and stayed silent
+          # through the week it exists to catch. The link-health sweep in this
+          # PR writes to content/blog weekly on a schedule, which would have
+          # made that blind spot permanent.
+          #
+          # Three markers, because the repo has two routes to publication and a
+          # watchdog that knows only one raises a false outage on the other:
+          #   - label `autoblog`               — applied by generate-blog-post.yml
+          #   - label `autoblog-approved-pending` — applied by autoblog-review.yml,
+          #     and the only condition autoblog-merge-pending.yml merges on
+          #   - branch `autoblog/*` or `blog/auto-*` — autoblog-review.yml accepts
+          #     a PR by head-ref alone, so a post can ship with neither label
+          #
+          # Merge dates are not returned in order, so take the max, not row one.
+          LAST_ISO=$(gh pr list --state merged --limit 60 \
+            --json mergedAt,headRefName,labels \
+            --jq '[ .[]
+                    | select(.mergedAt != null)
+                    | select(
+                        ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+                        or (.headRefName | startswith("autoblog/"))
+                        or (.headRefName | startswith("blog/auto-"))
+                      )
+                    | .mergedAt ]
+                  | sort | last // empty')
+
+          if [ -z "$LAST_ISO" ]; then
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "last_delivery=unknown" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not find any merged autoblog PR"
+          else
+            LAST_TS=$(date -u -d "$LAST_ISO" +%s)
+            CUTOFF=$(date -u -d "${DELIVERY_STALE_DAYS} days ago" +%s)
+            echo "last_delivery=$(date -u -d "$LAST_ISO" +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+            if [ "$LAST_TS" -ge "$CUTOFF" ]; then
+              DELIVERY_OK=1
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              echo "✅ Last blog delivery: $LAST_ISO"
+            else
+              echo "healthy=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::No autoblog PR has merged since $LAST_ISO"
+            fi
+          fi
+
+          # A SEPARATE question, assessed independently and reported separately.
+          #
+          # "Did anything ship lately" cannot see a post that is stuck, because
+          # next week's post shipping resets the clock — one stranded PR can sit
+          # behind an unbroken run of deliveries forever. But a stranded PR is
+          # NOT a delivery outage, and saying so would raise an alert that
+          # contradicts its own `last_delivery` line.
+          #
+          # `autoblog-hold` is excluded outright: that label means a human
+          # paused publishing on purpose, and alarming about it weekly would
+          # train people to ignore this issue.
+          #
+          # gh's built-in --jq takes no --arg, so the filtering is done by real
+          # jq on the raw payload.
+          # Selected the same way the delivery check above selects: by label OR
+          # by head prefix. Filtering on `--label autoblog` alone would miss a
+          # PR that took the `autoblog/*` head-ref route — which
+          # autoblog-review.yml explicitly accepts and whose merge the delivery
+          # check already counts. Such a post could sit open indefinitely and
+          # never appear in the stranded tracker, which is the same blind spot
+          # this tracker was added to close.
+          if ! OPEN_JSON=$(gh pr list --state open --limit 100 \
+            --json number,title,createdAt,labels,headRefName); then
+            echo "::error::Could not list open PRs — cannot confirm none are stranded."
+            exit 1
+          fi
+
+          STRANDED_CUTOFF=$(date -u -d "${STRANDED_PR_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          STRANDED=$(jq -c --arg cutoff "$STRANDED_CUTOFF" '
+            [ .[]
+              | select(
+                  ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+                  or (.headRefName | startswith("autoblog/"))
+                  or (.headRefName | startswith("blog/auto-"))
+                )
+              | select(.createdAt < $cutoff)
+              | select([.labels[].name] | index("autoblog-hold") == null) ]' <<<"$OPEN_JSON")
+          STRANDED_COUNT=$(jq -r 'length' <<<"$STRANDED")
+
+          echo "stranded_count=$STRANDED_COUNT" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "| #\(.number) | \(.title) | \(.createdAt) | \([.labels[].name] | join(", ")) |"' \
+            <<<"$STRANDED" > stranded.md
+
+          if [ "$STRANDED_COUNT" -gt 0 ]; then
+            echo "::warning::$STRANDED_COUNT autoblog PR(s) open longer than ${STRANDED_PR_DAYS} days"
+            cat stranded.md
+          fi
+
+          # Nothing more to diagnose when delivery is fine; the stranded-PR
+          # step below reports on its own.
+          if [ "${DELIVERY_OK:-0}" = "1" ]; then
+            exit 0
+          fi
+
+          # Work out WHERE it stalled so the issue is actionable rather than
+          # just alarming.
+          {
+            echo "### Open autoblog PRs"
+            # Select exactly as the assessment above does — by label OR by head
+            # prefix. `--label autoblog` alone omits a PR that took the
+            # `autoblog/*` / `blog/auto-*` head-ref route, which the delivery
+            # check counts and autoblog-review.yml accepts. During an outage
+            # that PR is often the single most relevant row, and a diagnostics
+            # block that silently drops it points the reader away from the post
+            # that is actually stuck.
+            gh pr list --state open --limit 100 \
+              --json number,title,createdAt,isDraft,labels,headRefName \
+              --jq '.[]
+                    | select(
+                        ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+                        or (.headRefName | startswith("autoblog/"))
+                        or (.headRefName | startswith("blog/auto-"))
+                      )
+                    | "- #\(.number) \(.title) — draft=\(.isDraft), labels=[\([.labels[].name] | join(", "))], head=\(.headRefName), opened \(.createdAt)"' \
+              || echo "- (could not list PRs)"
+            echo
+            echo "### Recent Generate Weekly Blog Post runs"
+            gh run list --workflow "Generate Weekly Blog Post" --limit 5 \
+              --json databaseId,conclusion,createdAt,event \
+              --jq '.[] | "- [\(.conclusion // "in_progress")] \(.createdAt) (\(.event)) — run \(.databaseId)"' \
+              || echo "- (could not list runs)"
+          } > diagnosis.md
+
+          cat diagnosis.md
+
+      - name: Open or update the alert issue
+        if: steps.assess.outputs.healthy == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job never checks out the repo — it is pure API. Without a git
+          # working tree `gh` cannot infer which repository it is talking about
+          # and every call dies with "not a git repository", so the watchdog
+          # failed on its first command and never assessed anything. GH_REPO
+          # supplies that context without paying for a checkout.
+          GH_REPO: ${{ github.repository }}
+          LAST_DELIVERY: ${{ steps.assess.outputs.last_delivery }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # The label must exist before `gh issue create --label` uses it, or
+          # the outage alert cannot be filed during an outage.
+          gh label create autoblog-watchdog \
+            --color D93F0B --description "Autoblog delivery watchdog alert" \
+            >/dev/null 2>&1 || true
+
+          # The title is the issue's IDENTITY: both the update path here and the
+          # recovery path below locate the issue by exact title equality, so it
+          # must not depend on anything a maintainer might tune. Interpolating
+          # ${DELIVERY_STALE_DAYS} here would mean that changing the window
+          # mid-outage orphans the open issue — the next run files a duplicate
+          # under the new title, and recovery never closes the old one. The
+          # window belongs in the body, which is free to change.
+          TITLE="Autoblog watchdog: delivery has stalled"
+
+          BODY_FILE=$(mktemp)
+          {
+            echo "The weekly autoblog pipeline has not delivered a post in over ${DELIVERY_STALE_DAYS} days."
+            echo
+            echo "- Last merged \`autoblog\` PR: **${LAST_DELIVERY:-unknown}**"
+            echo "- Watchdog run: $RUN_URL"
+            echo
+            cat diagnosis.md
+            echo
+            echo "### Where to look"
+            echo "1. **PR open but unmerged** — check its CI. \`autoblog-merge-pending\` refuses to merge a PR whose checks are not green, by design."
+            echo "2. **PR labelled \`autoblog-review-failed\`** — the auto-fix loop hit its cap (\`AUTOBLOG_MAX_AUTOFIX\`) and wants a human."
+            echo "3. **No PR at all** — generation itself failed. Re-run *Generate Weekly Blog Post* via workflow_dispatch; output is now committed before any gate, so a partial failure still leaves a PR."
+            echo "4. **\`autoblog-hold\` label present** — publishing is paused on purpose."
+          } > "$BODY_FILE"
+
+          # Reuse one issue so a prolonged outage does not spam a new issue
+          # every Monday. A failed lookup must NOT read as "no issue exists" —
+          # that is how a prolonged outage ends up with one alert per week
+          # sitting beside the original.
+          # Match by TITLE, not `.[0]`. Two different watchdog issues now share
+          # the `autoblog-watchdog` label — this delivery outage and the
+          # stranded-PR tracker — so taking the first row would let one comment
+          # on the other and close it as recovered.
+          if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
+            echo "::error::Could not list existing watchdog issues — refusing to risk a duplicate alert."
+            exit 1
+          fi
+          EXISTING=$(TITLE="$TITLE" jq -r 'map(select(.title == env.TITLE)) | .[0].number // empty' <<<"$ISSUES")
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+            echo "Updated issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --label autoblog-watchdog --body-file "$BODY_FILE"
+          fi
+
+      - name: Close a stale alert once delivery recovers
+        if: steps.assess.outputs.healthy == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job never checks out the repo — it is pure API. Without a git
+          # working tree `gh` cannot infer which repository it is talking about
+          # and every call dies with "not a git repository", so the watchdog
+          # failed on its first command and never assessed anything. GH_REPO
+          # supplies that context without paying for a checkout.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Swallowing a failure here reports "recovered" while the outage alert
+          # stays open — the run says the all-clear and the issue says otherwise.
+          #
+          # Title-matched: closing `.[0]` would close the stranded-PR tracker
+          # instead, declaring stuck posts recovered because a *different* post
+          # shipped — the precise confusion this split exists to remove.
+          TITLE="Autoblog watchdog: delivery has stalled"
+          if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
+            echo "::error::Could not list watchdog issues — cannot confirm the stale alert was closed."
+            exit 1
+          fi
+          EXISTING=$(TITLE="$TITLE" jq -r 'map(select(.title == env.TITLE)) | .[0].number // empty' <<<"$ISSUES")
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment "Autoblog delivery has recovered — a post landed within the last ${DELIVERY_STALE_DAYS} days."
+          fi
+
+      # Reported separately from the delivery alert, on its own reusable issue.
+      # Folding it into the outage issue produced an alert whose headline
+      # ("no post published in the last 10 days") was contradicted by its own
+      # `last_delivery` line two rows down — and a contradictory alert is one
+      # people stop reading.
+      - name: Track autoblog PRs that are stranded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job never checks out the repo — it is pure API. Without a git
+          # working tree `gh` cannot infer which repository it is talking about
+          # and every call dies with "not a git repository", so the watchdog
+          # failed on its first command and never assessed anything. GH_REPO
+          # supplies that context without paying for a checkout.
+          GH_REPO: ${{ github.repository }}
+          STRANDED_COUNT: ${{ steps.assess.outputs.stranded_count }}
+          # Needed so this issue's opening line agrees with the outage issue
+          # rather than contradicting it during a combined incident.
+          HEALTHY: ${{ steps.assess.outputs.healthy }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Provision the label HERE too, not just in the outage step above.
+          # That step is gated on `healthy == 'false'`, so on a repo where
+          # delivery is fine but a PR is stranded it never runs — and this
+          # step's `gh issue create --label` would then fail against a label
+          # that does not exist, losing the very alert it exists to raise.
+          gh label create autoblog-watchdog \
+            --color D93F0B --description "Autoblog delivery watchdog alert" \
+            >/dev/null 2>&1 || true
+
+          TITLE="Autoblog watchdog: post(s) stuck in review"
+          if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
+            echo "::error::Could not list watchdog issues — refusing to risk a duplicate."
+            exit 1
+          fi
+          EXISTING=$(TITLE="$TITLE" jq -r 'map(select(.title == env.TITLE)) | .[0].number // empty' <<<"$ISSUES")
+
+          if [ "${STRANDED_COUNT:-0}" -eq 0 ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "No autoblog PR is stuck any more — every open post is within the expected review window."
+            fi
+            echo "No stranded autoblog PRs."
+            exit 0
+          fi
+
+          BODY_FILE=$(mktemp)
+          {
+            # The reassurance is only true when delivery is actually current.
+            # Asserting it unconditionally makes this issue contradict the
+            # outage issue during a combined incident — which is the same
+            # self-contradicting alert that splitting these two apart was
+            # meant to remove.
+            if [ "${HEALTHY}" = "true" ]; then
+              echo "**Delivery is working** — a post shipped within the last ${DELIVERY_STALE_DAYS} days. These posts are nevertheless individually stuck, which the delivery check cannot see: each new weekly post that ships resets that clock and leaves these sitting."
+            else
+              echo "**Delivery is ALSO failing** — see the separate outage issue. These posts are stuck on top of that, and will still need attention once delivery recovers."
+            fi
+            echo
+            echo "| PR | Title | Opened | Labels |"
+            echo "|---|---|---|---|"
+            cat stranded.md
+            echo
+            echo "PRs paused on purpose with \`autoblog-hold\` are excluded, so everything above is genuinely waiting on somebody."
+            echo
+            echo "- Watchdog run: $RUN_URL"
+            echo
+            echo "### Where to look"
+            echo "1. **Red CI** — \`autoblog-merge-pending\` refuses a PR whose checks are not green, by design."
+            echo "2. **\`autoblog-review-failed\`** — the auto-fix loop hit its cap and wants a human."
+            echo "3. **\`autoblog-link-repair-needed\`** — a dead link is still in the prose; rewrite the sentence and the gate clears."
+            echo "4. **No checks at all** — the head was pushed without raising events; close and reopen the PR to re-trigger."
+            echo
+            echo "_Updated by the weekly watchdog. Closed automatically once nothing is stuck._"
+          } > "$BODY_FILE"
+
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body-file "$BODY_FILE"
+            echo "Updated issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --label autoblog-watchdog --body-file "$BODY_FILE"
+          fi
+
+      - name: Fail the run so the alert is visible in the Actions list too
+        if: steps.assess.outputs.healthy == 'false'
+        run: |
+          echo "::error::Autoblog has not delivered a post in over ${DELIVERY_STALE_DAYS} days — see the tracking issue."
+          exit 1
