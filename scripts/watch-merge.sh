@@ -173,6 +173,13 @@ revalidate() {
   if [ "$findings" -gt 0 ]; then
     say "  -> $findings finding(s) appeared while this poll was gathering state"; return 1
   fi
+  # CI last. A workflow rerun on the SAME SHA can turn a green result pending or
+  # red without the head changing, so `--match-head-commit` cannot see it and the
+  # captured CHECKS_RC goes stale like everything else. rc 8 is pending, 1 is
+  # failing; neither is a basis for merging or for telling someone it is ready.
+  gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1 || {
+    say "  -> CI is no longer green (rc=$?); standing down"; return 1
+  }
   return 0
 }
 
