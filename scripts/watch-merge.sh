@@ -11,6 +11,7 @@
 #   5  PR is not in a mergeable state (closed, draft)
 #   6  merge was attempted and did NOT take effect
 #   7  merge outcome could not be verified (distinct from 6: unknown, not failed)
+#   8  clean and green, but approval is not commit-bound — merge it yourself
 #
 # DESIGN NOTE — why the obvious version of this is broken
 #
@@ -84,6 +85,20 @@ say() { printf '%s\n' "$*"; }
 # In normal use — push, then start the watcher — the head does not move and
 # neither cost applies.
 TRUST_EXISTING="${WATCH_MERGE_TRUST_EXISTING:-0}"
+# Off by default. A clean Codex pass emits no review object — only a 👍 — and a
+# reaction carries no SHA, so there is NO observable fact tying a clean verdict
+# to the head it judged. Five separate reports found five different routes to
+# that same gap (head moved mid-watch; review in flight at start; review queued
+# pre-watch whose 👀 appears later; review straddling a change; A->B->A between
+# polls), and each timing rule that closed one opened another, because the
+# missing information does not exist to be recovered.
+#
+# So the default is to require a review object, which carries commit_id and
+# therefore proves which head was judged. A PR that is clean but has only a 👍
+# exits 8: ready, but not machine-verifiable. Set WATCH_MERGE_TRUST_REACTION=1
+# to accept bare reactions, understanding that it rests on timing rather than
+# proof.
+TRUST_REACTION="${WATCH_MERGE_TRUST_REACTION:-0}"
 SEEN_HEAD=""
 SEEN_SINCE=""
 # Set when the head changes while a review is already in flight (👀 present).
@@ -250,6 +265,14 @@ for i in $(seq 1 "$MAX_POLLS"); do
 
   # A clean pass posts no review object, only a 👍, and a reaction carries no
   # SHA — it is bound solely by when it appeared.
+  if [ "$TRUST_REACTION" != "1" ] && [ "$REVIEWED" -eq 0 ] && [ -n "$APPROVE_TIME" ] \
+     && [ "$FINDINGS" -eq 0 ] && [ "$CHECKS_RC" -eq 0 ] && [ "$EYES" -eq 0 ]; then
+    say "  -> $REPO#$PR looks clean and green, but the only approval is a bare 👍."
+    say "     A clean pass emits no review object, so nothing ties that verdict to ${HEAD:0:10}."
+    say "     Merge it yourself, or re-run with WATCH_MERGE_TRUST_REACTION=1."
+    exit 8
+  fi
+
   if [ "$REACTION_UNTRUSTED" = "1" ] && [ -n "$APPROVE_TIME" ] && [ "$REVIEWED" -eq 0 ]; then
     # More than one head has existed during this watch, so a reaction — which
     # carries no SHA — cannot be attributed to any particular one. Timing
