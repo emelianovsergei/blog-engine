@@ -276,13 +276,15 @@ for i in $(seq 1 "$MAX_POLLS"); do
           repository(owner:$owner,name:$name){
             pullRequest(number:$pr){
               timelineItems(last:100, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
-                nodes{ ... on HeadRefForcePushedEvent { createdAt } }
+                nodes{ ... on HeadRefForcePushedEvent { id createdAt } }
               }
             }
           }
-        }' -q '[.data.repository.pullRequest.timelineItems.nodes[].createdAt]|sort|last // empty' 2>/dev/null); then
+        }' -q '[.data.repository.pullRequest.timelineItems.nodes[]]|sort_by(.createdAt)|last|"\(.id // "")\t\(.createdAt // "")"' 2>/dev/null); then
     say "[poll $i] could not read force-push history; retrying"; continue
   fi
+  FORCE_ID="${FORCE_PUSHED%%$'\t'*}"
+  FORCE_AT="${FORCE_PUSHED##*$'\t'}"
 
   gh pr checks "$PR" --repo "$REPO" >/dev/null 2>&1; CHECKS_RC=$?
 
@@ -301,14 +303,21 @@ for i in $(seq 1 "$MAX_POLLS"); do
     # history is fetched several calls AFTER the head is read, so a force-push
     # landing during the first read phase would otherwise be absorbed into the
     # baseline and never counted as a transition.
-    if [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$OBSERVED_AT" ]]; then
+    #
+    # `>=`, because both stamps are second-resolution: a push inside the same
+    # second as the observation is indistinguishable from one just before it.
+    # Treating it as a transition costs a demand for a commit-bound review;
+    # treating it as history could attribute another head's verdict to this one.
+    if [ -n "$FORCE_AT" ] && [[ ! "$FORCE_AT" < "$OBSERVED_AT" ]]; then
       HIDDEN_CHANGE=1
       say "[poll $i] a force-push landed while this watch was starting up"
     fi
-    FORCE_BASELINE="$FORCE_PUSHED"
-  elif [ "$FORCE_PUSHED" != "$FORCE_BASELINE" ]; then
+    FORCE_BASELINE="$FORCE_ID"
+  elif [ "$FORCE_ID" != "$FORCE_BASELINE" ]; then
+    # Compared by node id, not timestamp. Two force-pushes in the same second
+    # share a createdAt and would look like one event; ids are distinct.
     HIDDEN_CHANGE=1
-    FORCE_BASELINE="$FORCE_PUSHED"
+    FORCE_BASELINE="$FORCE_ID"
   fi
 
   if [ "$FIRST_POLL" = "1" ]; then
