@@ -10,6 +10,7 @@
 #   4  timed out waiting for a review — nothing merged
 #   5  PR is not in a mergeable state (closed, draft)
 #   6  merge was attempted and did NOT take effect
+#   7  merge outcome could not be verified (distinct from 6: unknown, not failed)
 #
 # DESIGN NOTE — why the obvious version of this is broken
 #
@@ -128,11 +129,15 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # outdated nor resolved is still open against this head. Note this makes
   # resolving a thread part of the workflow — replying alone will not clear it,
   # which is the point.
-  if ! THREADS=$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
-        query($owner:String!,$name:String!,$pr:Int!){
+  # `first: 100` is not "all". A PR with more threads than one page would hide an
+  # unresolved finding outside it, and an otherwise-green PR would merge carrying
+  # a known defect. Paginate and aggregate across every page.
+  if ! THREADS=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
           repository(owner:$owner,name:$name){
             pullRequest(number:$pr){
-              reviewThreads(first:100){
+              reviewThreads(first:100, after:$endCursor){
+                pageInfo{ hasNextPage endCursor }
                 nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
               }
             }
@@ -142,8 +147,9 @@ for i in $(seq 1 "$MAX_POLLS"); do
     # PR without findings, and the review signal alone could otherwise merge it.
     say "[poll $i] could not read review threads; retrying rather than assuming none"; continue
   fi
-  if ! FINDINGS=$(printf '%s' "$THREADS" | jq -r --arg bot "$BOT_LOGIN_BARE" '
-        [ .data.repository.pullRequest.reviewThreads.nodes[]
+  # --paginate emits one JSON document per page; slurp and sum across all of them.
+  if ! FINDINGS=$(printf '%s' "$THREADS" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
+        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
           | select(.comments.nodes[0].author.login == $bot)
           | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null); then
     say "[poll $i] could not evaluate review threads; retrying"; continue
@@ -180,12 +186,25 @@ for i in $(seq 1 "$MAX_POLLS"); do
   fi
 
   # Assert the outcome. A merge command exiting 0 is not evidence the PR merged.
-  sleep 5
-  FINAL=$(gh pr view "$PR" --repo "$REPO" --json state,mergedAt -q '"\(.state) \(.mergedAt // "")"' 2>/dev/null)
-  case "$FINAL" in
-    MERGED*) say "MERGED $REPO#$PR — $FINAL"; exit 0 ;;
-    *)       say "MERGE DID NOT TAKE EFFECT — PR is: $FINAL"; exit 6 ;;
-  esac
+  #
+  # This read gets its own retry loop, and an unreadable result exits 7, not 6.
+  # Reporting "the merge did not take effect" because the status could not be
+  # READ is the same unknown-as-definite collapse this script exists to avoid,
+  # merely pointing the other way — and it is worse here, because it would send
+  # someone to re-merge a PR that already merged.
+  for attempt in 1 2 3 4 5; do
+    sleep 5
+    if FINAL=$(gh pr view "$PR" --repo "$REPO" --json state,mergedAt \
+        -q '"\(.state) \(.mergedAt // "")"' 2>/dev/null) && [ -n "$FINAL" ]; then
+      case "$FINAL" in
+        MERGED*) say "MERGED $REPO#$PR — $FINAL"; exit 0 ;;
+        *)       say "MERGE DID NOT TAKE EFFECT — PR is: $FINAL"; exit 6 ;;
+      esac
+    fi
+    say "  -> post-merge read failed (attempt $attempt); retrying"
+  done
+  say "MERGE OUTCOME UNVERIFIABLE — the merge was issued but the PR state could not be read. Check $REPO#$PR by hand before retrying."
+  exit 7
 done
 
 say "TIMEOUT after $MAX_POLLS polls — Codex never cleared the head. Nothing merged."
