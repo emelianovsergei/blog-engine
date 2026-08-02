@@ -160,6 +160,20 @@ revalidate() {
   if [ "$eyes" -gt 0 ]; then
     say "  -> a review started while this poll was gathering state; standing down"; return 1
   fi
+  # The same fetch already contains the 👍 — check it rather than discarding it.
+  # Reactions can be REMOVED. When the approval is the only thing authorising
+  # this action, a 👍 withdrawn after the poll snapshot would otherwise still be
+  # acted on from the stale timestamp.
+  if [ "${REVIEWED:-0}" -eq 0 ]; then
+    local approve_now
+    approve_now=$(printf '%s' "$rc" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"+1\")|.created_at]|sort|last // empty" 2>/dev/null)
+    if [ -z "$approve_now" ]; then
+      say "  -> the approving 👍 is no longer present; standing down"; return 1
+    fi
+    if [[ "$approve_now" < "$SEEN_SINCE" ]]; then
+      say "  -> the remaining 👍 predates the current approval window; standing down"; return 1
+    fi
+  fi
   if ! threads=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
         query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
           repository(owner:$owner,name:$name){
@@ -283,7 +297,15 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # A -> B -> A case, where both samples read A and the change is invisible.
   HIDDEN_CHANGE=0
   if [ "$FIRST_POLL" = "1" ]; then
-    FORCE_BASELINE="$FORCE_PUSHED"          # history before the watch is not a change
+    # Only events that predate the head observation are history. The force
+    # history is fetched several calls AFTER the head is read, so a force-push
+    # landing during the first read phase would otherwise be absorbed into the
+    # baseline and never counted as a transition.
+    if [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$OBSERVED_AT" ]]; then
+      HIDDEN_CHANGE=1
+      say "[poll $i] a force-push landed while this watch was starting up"
+    fi
+    FORCE_BASELINE="$FORCE_PUSHED"
   elif [ "$FORCE_PUSHED" != "$FORCE_BASELINE" ]; then
     HIDDEN_CHANGE=1
     FORCE_BASELINE="$FORCE_PUSHED"
