@@ -1,7 +1,9 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/autoblog-watchdog.yml
 #
-# Adjust the content glob and the MAX_AGE_DAYS window per repo. Requires no
+# Adjust the two windows in the job-level `env` per repo: DELIVERY_STALE_DAYS
+# ("is the pipeline still producing?") and STRANDED_PR_DAYS ("is a finished
+# post stuck?"). Every alert title and body derives from them. Requires no
 # secrets beyond the built-in GITHUB_TOKEN.
 #
 # Autoblog delivery watchdog.
@@ -45,6 +47,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # Job-level so the alert text, the close-comment and the assessment cannot
+    # drift apart. These were previously set per-step while the issue titles and
+    # bodies hardcoded "10 days" — change the window and the alerts would keep
+    # quoting the old one, and the close step's title match (which must equal
+    # the alert step's title exactly) would silently stop matching.
+    #
+    # Two different questions, two different thresholds.
+    #
+    # DELIVERY_STALE_DAYS answers "is the pipeline still producing?" and tracks
+    # the weekly cadence plus the 24h merge window and a skipped week.
+    #
+    # STRANDED_PR_DAYS answers "is a finished post stuck?" and is deliberately
+    # longer: a post can sit legitimately through a slow review or an auto-fix
+    # cycle, and alarming at the delivery cadence would make an ordinary
+    # unhurried review look like a fault.
+    env:
+      DELIVERY_STALE_DAYS: 10
+      STRANDED_PR_DAYS: 21
+
     steps:
       - name: Assess autoblog delivery
         id: assess
@@ -56,18 +77,6 @@ jobs:
           # failed on its first command and never assessed anything. GH_REPO
           # supplies that context without paying for a checkout.
           GH_REPO: ${{ github.repository }}
-          # Two different questions, two different thresholds.
-          #
-          # DELIVERY_STALE_DAYS answers "is the pipeline still producing?" and
-          # tracks the weekly cadence plus the 24h merge window and a skipped
-          # week.
-          #
-          # STRANDED_PR_DAYS answers "is a finished post stuck?" and is
-          # deliberately longer: a post can sit legitimately through a slow
-          # review or an auto-fix cycle, and alarming at the delivery cadence
-          # would make an ordinary unhurried review look like a fault.
-          DELIVERY_STALE_DAYS: 10
-          STRANDED_PR_DAYS: 21
         run: |
           set -euo pipefail
 
@@ -179,9 +188,22 @@ jobs:
           # just alarming.
           {
             echo "### Open autoblog PRs"
-            gh pr list --label autoblog --state open \
-              --json number,title,createdAt,isDraft,labels \
-              --jq '.[] | "- #\(.number) \(.title) — draft=\(.isDraft), labels=[\([.labels[].name] | join(", "))], opened \(.createdAt)"' \
+            # Select exactly as the assessment above does — by label OR by head
+            # prefix. `--label autoblog` alone omits a PR that took the
+            # `autoblog/*` / `blog/auto-*` head-ref route, which the delivery
+            # check counts and autoblog-review.yml accepts. During an outage
+            # that PR is often the single most relevant row, and a diagnostics
+            # block that silently drops it points the reader away from the post
+            # that is actually stuck.
+            gh pr list --state open --limit 100 \
+              --json number,title,createdAt,isDraft,labels,headRefName \
+              --jq '.[]
+                    | select(
+                        ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+                        or (.headRefName | startswith("autoblog/"))
+                        or (.headRefName | startswith("blog/auto-"))
+                      )
+                    | "- #\(.number) \(.title) — draft=\(.isDraft), labels=[\([.labels[].name] | join(", "))], head=\(.headRefName), opened \(.createdAt)"' \
               || echo "- (could not list PRs)"
             echo
             echo "### Recent Generate Weekly Blog Post runs"
@@ -214,11 +236,11 @@ jobs:
             --color D93F0B --description "Autoblog delivery watchdog alert" \
             >/dev/null 2>&1 || true
 
-          TITLE="Autoblog watchdog: no post published in the last 10 days"
+          TITLE="Autoblog watchdog: no post published in the last ${DELIVERY_STALE_DAYS} days"
 
           BODY_FILE=$(mktemp)
           {
-            echo "The weekly autoblog pipeline has not delivered a post in over 10 days."
+            echo "The weekly autoblog pipeline has not delivered a post in over ${DELIVERY_STALE_DAYS} days."
             echo
             echo "- Last merged \`autoblog\` PR: **${LAST_DELIVERY:-unknown}**"
             echo "- Watchdog run: $RUN_URL"
@@ -271,14 +293,14 @@ jobs:
           # Title-matched: closing `.[0]` would close the stranded-PR tracker
           # instead, declaring stuck posts recovered because a *different* post
           # shipped — the precise confusion this split exists to remove.
-          TITLE="Autoblog watchdog: no post published in the last 10 days"
+          TITLE="Autoblog watchdog: no post published in the last ${DELIVERY_STALE_DAYS} days"
           if ! ISSUES=$(gh issue list --state open --label autoblog-watchdog --limit 100 --json number,title); then
             echo "::error::Could not list watchdog issues — cannot confirm the stale alert was closed."
             exit 1
           fi
           EXISTING=$(TITLE="$TITLE" jq -r 'map(select(.title == env.TITLE)) | .[0].number // empty' <<<"$ISSUES")
           if [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --comment "Autoblog delivery has recovered — a post landed within the last 10 days."
+            gh issue close "$EXISTING" --comment "Autoblog delivery has recovered — a post landed within the last ${DELIVERY_STALE_DAYS} days."
           fi
 
       # Reported separately from the delivery alert, on its own reusable issue.
@@ -299,7 +321,6 @@ jobs:
           # Needed so this issue's opening line agrees with the outage issue
           # rather than contradicting it during a combined incident.
           HEALTHY: ${{ steps.assess.outputs.healthy }}
-          DELIVERY_STALE_DAYS: 10
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -368,5 +389,5 @@ jobs:
       - name: Fail the run so the alert is visible in the Actions list too
         if: steps.assess.outputs.healthy == 'false'
         run: |
-          echo "::error::Autoblog has not delivered a post in over 10 days — see the tracking issue."
+          echo "::error::Autoblog has not delivered a post in over ${DELIVERY_STALE_DAYS} days — see the tracking issue."
           exit 1
