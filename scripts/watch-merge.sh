@@ -325,7 +325,44 @@ for i in $(seq 1 "$MAX_POLLS"); do
     continue
   fi
 
-  say "  -> approved, no findings on this head, checks green: merging"
+  # Revalidate at the boundary. Everything above is a snapshot: the reactions
+  # were read before the thread, force-push and check requests, so a rereview
+  # that starts during those calls still shows 👀=0 in the snapshot. Re-read the
+  # reviewer state immediately before acting, so the decision is made on the
+  # state that exists at the moment of merging rather than seconds earlier.
+  if ! RECHECK=$(gh api "repos/$REPO/issues/$PR/reactions" --paginate 2>/dev/null); then
+    say "  -> could not revalidate reviewer state; not merging this round"; continue
+  fi
+  EYES_NOW=$(printf '%s' "$RECHECK" | jq -s -r "[.[][]|select(.user.id==$BOT_ID)|select(.content==\"eyes\")]|length" 2>/dev/null)
+  case "$EYES_NOW" in (*[!0-9]*|"") say "  -> reviewer state unreadable at the merge boundary; not merging"; continue ;; esac
+  if [ "$EYES_NOW" -gt 0 ]; then
+    say "  -> a review started while this poll was gathering state; standing down"
+    continue
+  fi
+  if ! THREADS_NOW=$(gh api graphql --paginate -F owner="${REPO%%/*}" -F name="${REPO##*/}" -F pr="$PR" -f query='
+        query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequest(number:$pr){
+              reviewThreads(first:100, after:$endCursor){
+                pageInfo{ hasNextPage endCursor }
+                nodes{ isResolved isOutdated comments(first:1){ nodes{ author{ login } } } }
+              }
+            }
+          }
+        }' 2>/dev/null); then
+    say "  -> could not revalidate findings; not merging this round"; continue
+  fi
+  FINDINGS_NOW=$(printf '%s' "$THREADS_NOW" | jq -s -r --arg bot "$BOT_LOGIN_BARE" '
+        [ .[].data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.comments.nodes[0].author.login == $bot)
+          | select(.isResolved == false and .isOutdated == false) ] | length' 2>/dev/null)
+  case "$FINDINGS_NOW" in (*[!0-9]*|"") say "  -> findings unreadable at the merge boundary; not merging"; continue ;; esac
+  if [ "$FINDINGS_NOW" -gt 0 ]; then
+    say "  -> $FINDINGS_NOW finding(s) appeared while this poll was gathering state; not merging"
+    exit 3
+  fi
+
+  say "  -> approved, no findings on this head, checks green, revalidated: merging"
   if ! gh pr merge "$PR" --repo "$REPO" --squash --delete-branch --match-head-commit "$HEAD" >/dev/null 2>&1; then
     # `gh pr merge` reads projectCards, which errors on repos still carrying
     # Projects-classic. The REST endpoint does not.
