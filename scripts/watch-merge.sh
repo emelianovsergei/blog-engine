@@ -98,6 +98,12 @@ PREV_EYES=0
 # can no longer approve: only a review object, which carries commit_id and so
 # proves which head it judged. See the note on binding above.
 HEAD_EVER_CHANGED=0
+# Latest force-push seen so far. Compared against itself rather than against
+# SEEN_SINCE: with WATCH_MERGE_TRUST_EXISTING the window starts at the epoch, so
+# every historical force-push would look newer than it and a PR that had ever
+# been force-pushed would be treated as having moved mid-watch — defeating the
+# override it was asked to honour.
+FORCE_BASELINE=""
 
 for i in $(seq 1 "$MAX_POLLS"); do
   [ "$i" -gt 1 ] && sleep "$INTERVAL"
@@ -190,8 +196,11 @@ for i in $(seq 1 "$MAX_POLLS"); do
   # A force-push newer than the window means the head moved between polls — the
   # A -> B -> A case, where both samples read A and the change is invisible.
   HIDDEN_CHANGE=0
-  if [ "$FIRST_POLL" = "0" ] && [ -n "$FORCE_PUSHED" ] && [[ "$FORCE_PUSHED" > "$SEEN_SINCE" ]]; then
+  if [ "$FIRST_POLL" = "1" ]; then
+    FORCE_BASELINE="$FORCE_PUSHED"          # history before the watch is not a change
+  elif [ "$FORCE_PUSHED" != "$FORCE_BASELINE" ]; then
     HIDDEN_CHANGE=1
+    FORCE_BASELINE="$FORCE_PUSHED"
   fi
 
   if [ "$FIRST_POLL" = "1" ]; then
@@ -238,7 +247,11 @@ for i in $(seq 1 "$MAX_POLLS"); do
     # trusting reactions entirely and waits for a review object, which carries
     # commit_id. If none arrives the watch times out and merges nothing.
     say "[poll $i] head moved during this watch — a bare 👍 can no longer identify which head it judged; holding out for a commit-bound review"
-  elif [ -n "$APPROVE_TIME" ] && [[ "$APPROVE_TIME" > "$SEEN_SINCE" ]]; then
+  # `>=`, not `>`. Both sides carry only second precision, so a review finishing
+  # later in the SAME second as the observation compares equal — and a strict
+  # comparison would reject it permanently, with no second verdict ever coming.
+  # The cost is a sub-second window; the alternative is a good PR timing out.
+  elif [ -n "$APPROVE_TIME" ] && [[ ! "$APPROVE_TIME" < "$SEEN_SINCE" ]]; then
     if [ "$STALE_VERDICT_PENDING" = "1" ]; then
       say "[poll $i] ignoring 👍 at $APPROVE_TIME — verdict of the review that predates this head"
       STALE_VERDICT_PENDING=0
