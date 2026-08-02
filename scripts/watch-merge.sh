@@ -72,7 +72,9 @@ say() { printf '%s\n' "$*"; }
 #
 #   * A 👍 that predates the watcher is not trusted — nothing distinguishes it
 #     from one earned by a previous head. WATCH_MERGE_TRUST_EXISTING=1 accepts a
-#     pre-existing approval when you have checked it yourself.
+#     pre-existing approval when you have checked it yourself; it implies
+#     WATCH_MERGE_TRUST_REACTION, since accepting a bare 👍 is exactly what it
+#     is asking for.
 #
 #   * Bare 👍 approval is disabled for the rest of a run once the verdict can no
 #     longer be attributed — either the head moved, or a review was already
@@ -99,6 +101,12 @@ TRUST_EXISTING="${WATCH_MERGE_TRUST_EXISTING:-0}"
 # to accept bare reactions, understanding that it rests on timing rather than
 # proof.
 TRUST_REACTION="${WATCH_MERGE_TRUST_REACTION:-0}"
+# TRUST_EXISTING implies TRUST_REACTION. Its whole purpose is to accept a bare
+# 👍 that predates the watch, so requiring a second flag to actually honour it
+# would make the documented override silently do nothing — it would move the
+# window to the epoch and then still refuse to merge. An operator asking for a
+# pre-existing approval to count is already asking for reaction trust.
+[ "$TRUST_EXISTING" = "1" ] && TRUST_REACTION=1
 SEEN_HEAD=""
 SEEN_SINCE=""
 # Set when the head changes while a review is already in flight (👀 present).
