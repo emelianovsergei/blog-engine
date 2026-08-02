@@ -110,7 +110,7 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
-            --model claude-opus-4-8 \
+            --model claude-sonnet-5 \
             --notes-out change-notes.md
 
       # Build the site against the rewritten post BEFORE committing. A rewrite
