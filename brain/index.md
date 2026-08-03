@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-03"
 sources: []
 ---
 # Developer Knowledge Index
@@ -41,6 +41,8 @@ sources: []
 ## Core Concepts
 
 *   [[concepts/autofix-loop|Auto-Fix Loop (Review Failure Recovery)]]
+*   [[concepts/delivery-guarantee|Delivery Guarantee (Consumer Workflow Set + Watchdog)]]
 *   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]
 *   [[concepts/topic-deduplication|Topic Deduplication]]
+*   [[concepts/unreachable-success-path|Unreachable Success Paths (Silent Green)]]
 *   [[concepts/weather-season-targeting|Weather & Seasonal Targeting]]
