@@ -60,8 +60,13 @@ rejection, loosening worsens false acceptance.
 So `scripts/watch-merge.sh` stopped inferring activation and **witnesses** it:
 each poll records the head it sees, the approval window restarts when the head
 changes, and a 👍 counts only if it arrived after this process saw the current
-head in place. SHA-bound by construction rather than by inference, using no
-GitHub timestamp at all. Two costs, both chosen so the script declines rather
+head in place — SHA-bound by construction rather than by inference. This does
+not eliminate GitHub timestamps, it removes them from the *head-activation*
+question: the reaction's own `created_at` is still read and compared against the
+locally recorded observation time, so the comparison crosses two clocks (with a
+`>=` on second precision, because a verdict landing in the same second as the
+observation would otherwise be rejected forever). What it no longer does is ask
+GitHub when a SHA became head. Two costs, both chosen so the script declines rather
 than guesses — a 👍 predating the watcher is not trusted
 (`WATCH_MERGE_TRUST_EXISTING=1` to override), and bare-reaction approval is
 disabled for the rest of a run once the verdict can no longer be attributed

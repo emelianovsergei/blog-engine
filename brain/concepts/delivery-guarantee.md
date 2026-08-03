@@ -87,11 +87,15 @@ emits no review object — only a 👍 — and a reaction carries no SHA, so not
 observable ties that verdict to the head it judged. `WATCH_MERGE_TRUST_REACTION`
 therefore defaults to off: the script confirms the PR is clean and green and
 then **exits 8** — "ready, but not machine-verifiable" — rather than merging.
-Merging without intervention requires either a commit-bound review object
-(Codex had findings on an earlier head and re-reviewed) or an explicit
-`WATCH_MERGE_TRUST_REACTION=1`, which rests on timing rather than proof. An
-operator expecting the bare invocation to complete the merge will find it
-deliberately refusing.
+
+Merging on the default path needs a review object whose `commit_id` equals the
+current head, and Codex emits a review object only when it has something to say
+about *that* head. Fixing findings moves the head, and the clean pass on the new
+head is a bare 👍 again — so "findings, then a clean re-review" does **not**
+satisfy it. In practice a PR that ends clean exits 8, and
+`WATCH_MERGE_TRUST_REACTION=1` — which rests on timing rather than proof — is
+what completes the merge. An operator expecting the bare invocation to finish
+the job will find it deliberately refusing.
 
 Its approval binding, the proxies it rejects and its fail-closed behaviour are
 documented in [[concepts/unreachable-success-path]].
