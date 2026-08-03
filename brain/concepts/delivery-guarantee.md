@@ -80,6 +80,18 @@ never fired." That omission would be an instance of
 
 `scripts/watch-merge.sh` is the dev-side counterpart: poll a PR until Codex has
 reviewed and CI is green, then merge. It is not published (`files` is
-`["dist", "examples"]`). Its approval predicate, freshness cutoff and
-fail-closed behaviour are documented in
-[[concepts/unreachable-success-path]].
+`["dist", "examples"]`).
+
+**It does not auto-merge a clean first pass by default.** A clean Codex pass
+emits no review object — only a 👍 — and a reaction carries no SHA, so nothing
+observable ties that verdict to the head it judged. `WATCH_MERGE_TRUST_REACTION`
+therefore defaults to off: the script confirms the PR is clean and green and
+then **exits 8** — "ready, but not machine-verifiable" — rather than merging.
+Merging without intervention requires either a commit-bound review object
+(Codex had findings on an earlier head and re-reviewed) or an explicit
+`WATCH_MERGE_TRUST_REACTION=1`, which rests on timing rather than proof. An
+operator expecting the bare invocation to complete the merge will find it
+deliberately refusing.
+
+Its approval binding, the proxies it rejects and its fail-closed behaviour are
+documented in [[concepts/unreachable-success-path]].

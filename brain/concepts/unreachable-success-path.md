@@ -35,8 +35,9 @@ in Codex's review body against the PR head. But Codex posts a review body only
 when it *has* suggestions; a clean pass posts nothing and instead swaps its
 reaction from 👀 to 👍. The watcher could therefore fire only on rejection — on
 approval it spun to its timeout and reported the PR as still waiting, while the
-PR sat approved and green. Fixed in #22: read the reaction, and read
-`commit_id` rather than scraping prose.
+PR sat approved and green. Fixed in #22: read `commit_id` off the review object
+rather than scraping the rendered prose, and treat the reaction as the clean-pass
+signal — under the binding rules below.
 
 **Unknown collapsed into definite.**
 A failed review-comments fetch defaulted to zero findings, so a transient API
@@ -44,12 +45,28 @@ error could merge precisely the PR whose findings could not be read. Same shape
 one level down, inside the tool written to catch it. Every unreadable state now
 retries the poll instead of feeding a default into the decision (#22).
 
-**Stale signal read as current.**
-An approval older than the current head is a verdict on superseded code. The
-freshness cutoff cannot be the head commit's committer date — a force-push or
-reset can make an older commit the head. It is derived from when the SHA
-*became* head (earliest check-run start for that SHA, floored by the commit
-date) (#22).
+**Stale signal read as current — and the proxies that cannot fix it.**
+An approval older than the current head is a verdict on superseded code, so a 👍
+has to be bound to the SHA it judged. A reaction carries no SHA, so binding one
+means inferring "when did this SHA become head" — and every available proxy
+leaks: the committer date predates the push whenever a reset or fast-forward
+makes an older commit the head; check-run starts are absent right after a reset
+and a delayed matrix job or a manual re-run on an unchanged SHA shoves the
+cutoff *past* a valid 👍, rejecting a correct approval forever; force-push events
+miss ordinary synchronize pushes. Patching one proxy moved the hole to another,
+and the reports were in direct tension — tracking more activations worsens false
+rejection, loosening worsens false acceptance.
+
+So `scripts/watch-merge.sh` stopped inferring activation and **witnesses** it:
+each poll records the head it sees, the approval window restarts when the head
+changes, and a 👍 counts only if it arrived after this process saw the current
+head in place. SHA-bound by construction rather than by inference, using no
+GitHub timestamp at all. Two costs, both chosen so the script declines rather
+than guesses — a 👍 predating the watcher is not trusted
+(`WATCH_MERGE_TRUST_EXISTING=1` to override), and bare-reaction approval is
+disabled for the rest of a run once the verdict can no longer be attributed
+(head moved, or a review was already in flight at start), leaving only a
+commit-bound review object. Neither applies in normal use: push, then watch.
 
 **Success reported for work never committed.**
 `/autoblog rewrite` posted its change-notes comment gated on

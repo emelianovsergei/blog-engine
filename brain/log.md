@@ -29,9 +29,12 @@ sources: []
 - **#22** — added `scripts/watch-merge.sh` (dev tool, not published). Codex
   posts a review body only when it *has* findings, so the obvious
   "review-body SHA == head" approval predicate is unsatisfiable exactly when
-  the PR is fine; it reads the 👍 reaction instead, anchors freshness to when
-  the SHA became head, matches findings by `commit_id`, fails closed on any
-  unreadable state, and re-reads the PR after merging.
+  the PR is fine. It reads `commit_id` off the review object instead of the
+  prose, and binds a bare 👍 to a head by *witnessing* the head each poll rather
+  than inferring activation from committer dates or check-run starts (both
+  rejected as leaky). Bare-reaction merges are off by default — a clean, green
+  PR with only a 👍 exits 8 rather than merging. Fails closed on any unreadable
+  state and re-reads the PR after merging.
 - New concept pages: [[concepts/delivery-guarantee]],
   [[concepts/unreachable-success-path]].
 
