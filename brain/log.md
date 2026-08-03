@@ -8,6 +8,33 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-08-02] Delivery guarantee: examples/ resync, watchdog, watch-merge (#20, #21, #22)
+
+- No `src/` changes today — all three PRs are workflow/tooling. `wiki:ingest` is
+  hash-gated on `src/*.ts`, so it correctly reported "no pages updated"; the
+  wiki gap was at the concept level, documented here by hand. (That gap is
+  itself an instance of [[concepts/unreachable-success-path]]: the guard passed
+  because it cannot see this class of change.)
+- **#20** — resynced `examples/` with the copies running in pulse/promax (the
+  templates had drifted ~3 weeks and shipped a merge gate missing the CI gate,
+  head-SHA pin, label re-read, link-repair skip and `actions: read`), and added
+  the two missing workflows: `autoblog-watchdog.yml` and
+  `generate-blog-post.yml`. Rewrite moved to Sonnet 5. New concept page:
+  [[concepts/delivery-guarantee]].
+- **#21** — `/autoblog rewrite` posted a "revision landed" comment gated on
+  `hashFiles('change-notes.md')` alone, so a byte-identical model response
+  produced a green run and a sticky comment describing revisions that were
+  never committed. Now gated on the commit; the no-op path reuses the same
+  sticky header so it replaces a stale success comment.
+- **#22** — added `scripts/watch-merge.sh` (dev tool, not published). Codex
+  posts a review body only when it *has* findings, so the obvious
+  "review-body SHA == head" approval predicate is unsatisfiable exactly when
+  the PR is fine; it reads the 👍 reaction instead, anchors freshness to when
+  the SHA became head, matches findings by `commit_id`, fails closed on any
+  unreadable state, and re-reads the PR after merging.
+- New concept pages: [[concepts/delivery-guarantee]],
+  [[concepts/unreachable-success-path]].
+
 ## [2026-07-27] ingest | 1 module page(s) updated
 
 - [[modules/link-repair|Link Repair]] — The edits a link sweep makes to published MDX once `links.ts` has decided a URL is dead.
