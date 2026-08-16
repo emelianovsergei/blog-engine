@@ -15,6 +15,7 @@
 - Strive to update relevant modules or concepts in the wiki when adding new features, APIs, or changing architectural design decisions.
 - Maintain human developer notes in the `## Custom Notes` section of the respective page in `brain/modules/` or `brain/concepts/` (these are preserved by `npm run wiki:ingest`).
 - Run `npm run wiki:ingest` and `npm run wiki:lint` before opening a Pull Request to keep the graph healthy.
+- Cross-repo map: `~/Projects/operator-wiki`. File engine facts here in `brain/`. Do not copy them into the catalog.
 
 ### How `wiki:ingest` works (LLM-driven, Karpathy "LLM wiki")
 - Ingest is **LLM-driven**: for each changed `src/*.ts` / `src/cli/*.ts` it asks Claude (via the project's `makeReviewClient`) to write the module page — prose summary, per-export explanations, and `[[wikilink]]` cross-references. Core logic lives in [`src/wiki/ingest.ts`](file:///home/jaysonlee/Projects/blog-engine/src/wiki/ingest.ts); the orchestrator is [`scripts/wiki-ingest.ts`](file:///home/jaysonlee/Projects/blog-engine/scripts/wiki-ingest.ts).
