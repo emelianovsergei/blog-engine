@@ -200,3 +200,68 @@ export async function createGrokClient(opts: {
   };
   return grokAdapter({ client, ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}) });
 }
+
+/**
+ * xAI Grok Imagine image generation.
+ *
+ * Separate endpoint and model family from chat (`/v1/images/generations`,
+ * `grok-imagine-*`), so this is a standalone helper rather than part of the
+ * `GeminiLike` adapter — that interface only covers text + embeddings.
+ *
+ * Returns raw bytes: `response_format: "b64_json"` avoids a second round-trip
+ * to a signed URL that expires, which is what the caller wants when the image
+ * is about to be written to disk and committed.
+ */
+export interface GrokImageOptions {
+  apiKey: string;
+  prompt: string;
+  /** Defaults to grok-imagine-image-2.0, xAI's recommended image model. */
+  model?: string;
+  /** e.g. "16:9" (default), "1:1", "auto". */
+  aspectRatio?: string;
+  resolution?: "1k" | "2k";
+  /** Only honored by grok-imagine-image-2.0. */
+  quality?: "low" | "medium";
+  fetchImpl?: typeof fetch;
+}
+
+interface XaiImageResponse {
+  data?: Array<{ b64_json?: string; url?: string }>;
+}
+
+const XAI_IMAGE_URL = "https://api.x.ai/v1/images/generations";
+const DEFAULT_IMAGE_MODEL = "grok-imagine-image-2.0";
+
+export async function generateGrokImage(opts: GrokImageOptions): Promise<Buffer> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const body = {
+    model: opts.model ?? DEFAULT_IMAGE_MODEL,
+    prompt: opts.prompt,
+    n: 1,
+    response_format: "b64_json",
+    aspect_ratio: opts.aspectRatio ?? "16:9",
+    ...(opts.resolution ? { resolution: opts.resolution } : {}),
+    ...(opts.quality ? { quality: opts.quality } : {}),
+  };
+
+  const response = await fetchImpl(XAI_IMAGE_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${opts.apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new XaiHttpError(response.status, detail);
+  }
+
+  const payload = (await response.json()) as XaiImageResponse;
+  const b64 = payload.data?.[0]?.b64_json;
+  if (!b64) {
+    throw new Error("xAI image response contained no b64_json data");
+  }
+  return Buffer.from(b64, "base64");
+}
