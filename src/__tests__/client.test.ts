@@ -103,6 +103,37 @@ test("non-transient claude error falls back to gemini immediately (no retries)",
   assert.equal(cModels.length, 1); // tried once, non-transient → no retry, straight to fallback
 });
 
+test("grok-* models route to the xAI provider", async () => {
+  const xModels: string[] = [];
+  const xai = scriptedClient({ label: "grok", models: xModels });
+  const client = createCompositeClient({ xai, sleep: noSleep });
+
+  const res = await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+
+  assert.equal(res.text, "grok:grok-4.6");
+  assert.deepEqual(xModels, ["grok-4.6"]);
+});
+
+test("transient grok errors are retried then fall back to gemini", async () => {
+  const xModels: string[] = [];
+  const gModels: string[] = [];
+  const xai = scriptedClient({ label: "grok", failTimes: 99, models: xModels });
+  const gemini = scriptedClient({ label: "gemini", models: gModels });
+  const client = createCompositeClient({
+    xai,
+    gemini,
+    geminiFallbackModel: "gemini-2.5-flash",
+    retries: 3,
+    sleep: noSleep,
+  });
+
+  const res = await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+
+  assert.equal(res.text, "gemini:gemini-2.5-flash");
+  assert.equal(xModels.length, 3);
+  assert.deepEqual(gModels, ["gemini-2.5-flash"]);
+});
+
 test("gemini-* models route straight to gemini", async () => {
   const gModels: string[] = [];
   const gemini = scriptedClient({ label: "gemini", models: gModels });
@@ -141,6 +172,6 @@ test("no providers configured throws a clear error", async () => {
   const client = createCompositeClient({ sleep: noSleep });
   await assert.rejects(
     client.models.generateContent({ model: "claude-sonnet-4-6", contents: "x" }),
-    /no .*provider|ANTHROPIC_API_KEY|GEMINI_API_KEY/i,
+    /no .*provider|ANTHROPIC_API_KEY|GEMINI_API_KEY|XAI_API_KEY/i,
   );
 });

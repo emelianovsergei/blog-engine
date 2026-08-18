@@ -3,9 +3,9 @@ type: "module"
 title: "Blog Post Reviewer"
 description: "Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria."
 tags: ["review", "rubric", "quality-gate"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/review.ts"]
-source_hash: "6cfe995423edc72c"
+source_hash: "f73062d28f268f12"
 ---
 # Blog Post Reviewer
 

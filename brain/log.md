@@ -3,10 +3,23 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-08-18] ingest | 10 module page(s) updated
+
+- [[modules/candidates|Topic Candidate Generator]] — Generates a list of candidate weekly blog topics matching seasonal and weather conditions.
+- [[modules/client|Unified Model Client]] — Abstract client interface managing fallback routing, retries, and multi-model configuration.
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/keywords|Keyword Researcher]] — Extracts and clusters search query suggestions into structured keyword profiles.
+- [[modules/review|Blog Post Reviewer]] — Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria.
+- [[modules/rewrite|Blog Post Rewriter]] — Rewrites blog posts using LLMs to fix issues highlighted in the review rubric.
+- [[modules/xai|Xai]] — xAI Grok adapter that satisfies the structural `GeminiLike` interface, so it drops into every existing call site (candidates, review, rewrite) and the consumer 
+- [[modules/cli-review|Cli Review]] — blog-engine-review — AI quality review for a draft blog post.
+- [[modules/cli-rewrite|Cli Rewrite]] — blog-engine-rewrite — apply a previous review's feedback to revise a post.
+- [[modules/cli-shared|Cli Shared]] — Shared CLI helpers — argv parsing, config composition, Gemini client construction.
 
 ## [2026-08-02] Delivery guarantee: examples/ resync, watchdog, watch-merge (#20, #21, #22)
 

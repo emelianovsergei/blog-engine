@@ -92,20 +92,23 @@ export async function makeGeminiClient(): Promise<GeminiLike> {
 }
 
 /**
- * Build the composite client the review/rewrite CLIs use: Claude primary (when
- * `ANTHROPIC_API_KEY` is set) with a Gemini fallback (when a Gemini key is set).
- * Embeddings always route to Gemini. At least one key must be present.
+ * Build the composite client the review/rewrite CLIs use: Grok primary (when
+ * `XAI_API_KEY` is set), Claude if an Anthropic key is set, Gemini fallback
+ * (when a Gemini key is set). Embeddings always route to Gemini. At least
+ * one text key must be present.
  */
 export async function makeReviewClient(): Promise<GeminiLike> {
+  const xaiApiKey = process.env.XAI_API_KEY;
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY);
-  if (!anthropicApiKey && !hasGeminiKey) {
+  if (!xaiApiKey && !anthropicApiKey && !hasGeminiKey) {
     throw new Error(
-      "Missing model credentials: set ANTHROPIC_API_KEY (preferred) and/or GEMINI_API_KEY",
+      "Missing model credentials: set XAI_API_KEY (preferred) and/or ANTHROPIC_API_KEY and/or GEMINI_API_KEY",
     );
   }
   const geminiClient = hasGeminiKey ? await makeGeminiClient() : undefined;
   return createModelClient({
+    ...(xaiApiKey ? { xaiApiKey } : {}),
     ...(anthropicApiKey ? { anthropicApiKey } : {}),
     ...(geminiClient ? { geminiClient } : {}),
   });

@@ -3,9 +3,9 @@ type: "module"
 title: "Index"
 description: "Public API of the blog topic-selection engine."
 tags: ["module"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/index.ts"]
-source_hash: "86a7c2485c335d1f"
+source_hash: "d64f8ef833f25b2d"
 ---
 # Index
 

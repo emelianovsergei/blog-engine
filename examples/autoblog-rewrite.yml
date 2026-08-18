@@ -106,7 +106,7 @@ jobs:
 
       - name: Run AI rewrite
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           npx blog-engine-rewrite \
@@ -115,7 +115,7 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
-            --model claude-sonnet-5 \
+            --model grok-4.6 \
             --notes-out change-notes.md
 
       # Build the site against the rewritten post BEFORE committing. A rewrite

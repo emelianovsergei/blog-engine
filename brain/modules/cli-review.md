@@ -3,9 +3,9 @@ type: "module"
 title: "Cli Review"
 description: "blog-engine-review — AI quality review for a draft blog post. Exit codes: 0  PASS — review passed the gate. 2  FAIL — review ran but failed the gate. 1  ERROR — unexpected failure (bad args, no API key, model outage)."
 tags: ["module"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/cli/review.ts"]
-source_hash: "0dd49b0d4af971aa"
+source_hash: "ea697209f9890a09"
 ---
 # Cli Review
 

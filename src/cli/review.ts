@@ -25,7 +25,7 @@ function usage(): string {
                           --business "<Business Name>" \\
                           --service-areas "Sacramento,Roseville,..." \\
                           [--out review-summary.md] [--json-out result.json] \\
-                          [--model claude-sonnet-5]`;
+                          [--model grok-4.6]`;
 }
 
 async function main(): Promise<number> {
