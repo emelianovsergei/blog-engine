@@ -5,7 +5,7 @@ description: "Evaluates blog post drafts against SEO, keyword target, and qualit
 tags: ["review", "rubric", "quality-gate"]
 timestamp: "2026-08-18"
 sources: ["src/review.ts"]
-source_hash: "f73062d28f268f12"
+source_hash: "8b051a855deb44bf"
 ---
 # Blog Post Reviewer
 

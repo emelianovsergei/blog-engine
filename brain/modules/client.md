@@ -5,11 +5,11 @@ description: "Abstract client interface managing fallback routing, retries, and 
 tags: ["llm-client", "retry", "fallback"]
 timestamp: "2026-08-18"
 sources: ["src/client.ts"]
-source_hash: "7f6ee4ab06f50973"
+source_hash: "947481d24385a792"
 ---
 # Unified Model Client
 
-Composite `GeminiLike` client: Grok or Claude primary (with retry), Gemini fallback. Provider is chosen by the per-call model-id prefix, so every existing call site keeps passing its own model string: - "grok-*"    → Grok (transient-retry); on any failure, fall back to Gemini using `geminiFallbackModel`. If no Grok client is configured, go straight to the Gemini fallback. - "claude-*"  → Claude (transient-retry); same Gemini fallback. - "gemini-*"  → Gemini directly (same transient-retry). - embeddings  → always Gemini (neither Grok nor Claude has an embedding API). `@google/genai` 503 "high demand" outages, `@anthropic-ai/sdk` hiccups, and xAI HTTP blips are absorbed: transient errors retry with exponential backoff, and a dead primary degrades to the other provider rather than failing the run.
+Composite `GeminiLike` client: Grok or Claude primary (with retry), Gemini fallback. Provider is chosen by the per-call model-id prefix, so every existing call site keeps passing its own model string: - "grok-*"    → Grok (transient-retry); on any failure, fall back to Claude (if configured, remapped to `claudeFallbackModel`) then Gemini (`geminiFallbackModel`). Missing Grok uses the same chain so a 0.10.0 upgrade without XAI_API_KEY still hits Claude instead of silently downgrading to Flash. - "claude-*"  → Claude (transient-retry); same Gemini fallback. - "gemini-*"  → Gemini directly (same transient-retry). - embeddings  → always Gemini (neither Grok nor Claude has an embedding API). `@google/genai` 503 "high demand" outages, `@anthropic-ai/sdk` hiccups, and xAI HTTP blips are absorbed: transient errors retry with exponential backoff, and a dead primary degrades to the other provider rather than failing the run.
 
 **Source File**: [src/client.ts](file:///home/jaysonlee/Projects/blog-engine/src/client.ts)
 

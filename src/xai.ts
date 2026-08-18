@@ -23,7 +23,7 @@ export interface XaiChatRequest {
 }
 
 export interface XaiChatResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
 }
 
 /** Minimal structural view of the xAI chat client we use. */
@@ -40,7 +40,11 @@ export interface GrokAdapterOptions {
 const EMIT_SCHEMA_NAME = "emit_result";
 const DEFAULT_MAX_TOKENS = 16384;
 const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
-const REQUEST_TIMEOUT_MS = 60_000;
+// Match the Anthropic SDK's 10-minute default. A 16k-token rewrite plus
+// grok-4.6 reasoning routinely exceeds 60s; a short cap aborts and the
+// composite treats it as non-transient unless isTransientError is taught
+// about TimeoutError.
+const REQUEST_TIMEOUT_MS = 600_000;
 
 interface GenConfig {
   responseMimeType?: string;
@@ -79,9 +83,22 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
         }
 
         const response = await client.chatCompletions(body);
-        const text = response.choices?.[0]?.message?.content?.trim() ?? "";
-        if (wantsJson && !text) {
-          throw new Error("Grok returned empty content for a JSON-mode request");
+        const choice = response.choices?.[0];
+        const text = choice?.message?.content?.trim() ?? "";
+        if (wantsJson) {
+          if (!text) {
+            throw new Error("Grok returned empty content for a JSON-mode request — try again later");
+          }
+          if (choice?.finish_reason === "length") {
+            throw new Error(
+              "Grok JSON-mode response truncated (finish_reason=length) — try again later",
+            );
+          }
+          try {
+            JSON.parse(text);
+          } catch {
+            throw new Error("Grok JSON-mode response was not valid JSON — try again later");
+          }
         }
         return { text };
       },

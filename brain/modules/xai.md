@@ -5,7 +5,7 @@ description: "xAI Grok adapter that satisfies the structural `GeminiLike` interf
 tags: ["module"]
 timestamp: "2026-08-18"
 sources: ["src/xai.ts"]
-source_hash: "7e167236957844b2"
+source_hash: "3a0e394bc662c209"
 ---
 # Xai
 

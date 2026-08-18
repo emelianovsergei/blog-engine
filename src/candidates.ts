@@ -10,7 +10,7 @@ import type {
   WeatherContext,
 } from "./types.js";
 
-export const DEFAULT_GENERATION_MODEL = "grok-4.6";
+export const DEFAULT_GENERATION_MODEL = "gemini-2.5-flash";
 
 const candidateSchema = {
   type: "object",

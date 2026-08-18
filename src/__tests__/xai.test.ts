@@ -71,6 +71,38 @@ test("JSON-mode call sends json_schema and returns the message content", async (
   assert.equal(req.reasoning_effort, "low");
 });
 
+test("JSON-mode call throws a retryable error when finish_reason is length", async () => {
+  const client = makeFakeXai(() => ({
+    choices: [{ message: { content: '{"candidates":[' }, finish_reason: "length" }],
+  }));
+  const adapter = grokAdapter({ client });
+
+  await assert.rejects(
+    adapter.models.generateContent({
+      model: "grok-4.6",
+      contents: "x",
+      config: { responseMimeType: "application/json", responseSchema: { type: "object" } },
+    }),
+    /truncated|finish_reason=length|try again later/i,
+  );
+});
+
+test("JSON-mode call throws a retryable error when content is not valid JSON", async () => {
+  const client = makeFakeXai(() => ({
+    choices: [{ message: { content: "not-json" }, finish_reason: "stop" }],
+  }));
+  const adapter = grokAdapter({ client });
+
+  await assert.rejects(
+    adapter.models.generateContent({
+      model: "grok-4.6",
+      contents: "x",
+      config: { responseMimeType: "application/json", responseSchema: { type: "object" } },
+    }),
+    /not valid JSON|try again later/i,
+  );
+});
+
 test("JSON-mode call throws when the assistant content is empty", async () => {
   const client = makeFakeXai(() => ({ choices: [{ message: { content: "" } }] }));
   const adapter = grokAdapter({ client });

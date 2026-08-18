@@ -3,9 +3,9 @@ type: "module"
 title: "Type Definitions"
 description: "Centralized TypeScript interfaces and type definitions used throughout the engine."
 tags: ["types", "typescript", "interfaces"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/types.ts"]
-source_hash: "965b8f1a45e2d722"
+source_hash: "45274b2139bce10d"
 ---
 # Type Definitions
 

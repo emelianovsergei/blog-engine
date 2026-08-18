@@ -41,6 +41,16 @@ test("isTransientError matches 503/UNAVAILABLE/overloaded/429, not plain errors"
   assert.equal(isTransientError(new Error("400 bad request: schema")), false);
 });
 
+test("isTransientError treats fetch timeouts and network blips as retryable", () => {
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  assert.equal(isTransientError(timeout), true);
+  const abort = new Error("This operation was aborted");
+  abort.name = "AbortError";
+  assert.equal(isTransientError(abort), true);
+  assert.equal(isTransientError(new Error("TypeError: fetch failed")), true);
+});
+
 test("claude model routes to the claude provider", async () => {
   const cModels: string[] = [];
   const claude = scriptedClient({ label: "claude", models: cModels });
@@ -112,6 +122,68 @@ test("grok-* models route to the xAI provider", async () => {
 
   assert.equal(res.text, "grok:grok-4.6");
   assert.deepEqual(xModels, ["grok-4.6"]);
+});
+
+test("grok with no xAI client falls back to Claude when configured", async () => {
+  const cModels: string[] = [];
+  const claude = scriptedClient({ label: "claude", models: cModels });
+  const client = createCompositeClient({
+    claude,
+    claudeFallbackModel: "claude-sonnet-5",
+    sleep: noSleep,
+  });
+
+  const res = await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+
+  assert.equal(res.text, "claude:claude-sonnet-5");
+  assert.equal(res.model, "claude-sonnet-5");
+  assert.deepEqual(cModels, ["claude-sonnet-5"]);
+});
+
+test("grok failure falls back to Claude before Gemini", async () => {
+  const xModels: string[] = [];
+  const cModels: string[] = [];
+  const gModels: string[] = [];
+  const xai = scriptedClient({ label: "grok", failTimes: 99, models: xModels });
+  const claude = scriptedClient({ label: "claude", models: cModels });
+  const gemini = scriptedClient({ label: "gemini", models: gModels });
+  const client = createCompositeClient({
+    xai,
+    claude,
+    gemini,
+    claudeFallbackModel: "claude-sonnet-5",
+    geminiFallbackModel: "gemini-2.5-flash",
+    retries: 3,
+    sleep: noSleep,
+  });
+
+  const res = await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+
+  assert.equal(res.text, "claude:claude-sonnet-5");
+  assert.equal(res.model, "claude-sonnet-5");
+  assert.equal(xModels.length, 3);
+  assert.deepEqual(cModels, ["claude-sonnet-5"]);
+  assert.deepEqual(gModels, []);
+});
+
+test("grok fallback warns with requested and served model", async () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    const gemini = scriptedClient({ label: "gemini", models: [] });
+    const client = createCompositeClient({
+      gemini,
+      geminiFallbackModel: "gemini-2.5-flash",
+      sleep: noSleep,
+    });
+    await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+  } finally {
+    console.warn = original;
+  }
+  assert.match(warnings.join("\n"), /grok-4.6.*gemini-2.5-flash/i);
 });
 
 test("transient grok errors are retried then fall back to gemini", async () => {

@@ -210,5 +210,5 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
       ? parsed.changeNotes.trim()
       : "(no change notes provided)";
 
-  return { frontmatter, markdown, changeNotes, modelUsed: model };
+  return { frontmatter, markdown, changeNotes, modelUsed: response.model ?? model };
 }

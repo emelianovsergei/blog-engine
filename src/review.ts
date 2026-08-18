@@ -450,7 +450,7 @@ export async function reviewBlogPost(args: ReviewBlogPostArgs): Promise<ReviewRe
         suggestions,
         summary,
         thresholdReasoning: reasoning,
-        modelUsed: model,
+        modelUsed: response.model ?? model,
       };
     } catch (error) {
       lastError = error;

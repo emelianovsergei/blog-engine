@@ -5,7 +5,7 @@ description: "Rewrites blog posts using LLMs to fix issues highlighted in the re
 tags: ["rewrite", "llm-generation", "seo"]
 timestamp: "2026-08-18"
 sources: ["src/rewrite.ts"]
-source_hash: "8c212d242369461d"
+source_hash: "8f96b49a063d1444"
 ---
 # Blog Post Rewriter
 
