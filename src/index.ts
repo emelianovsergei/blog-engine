@@ -20,7 +20,7 @@ export {
 export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 
 export { claudeAdapter, createClaudeClient } from "./anthropic.js";
-export { grokAdapter, createGrokClient } from "./xai.js";
+export { grokAdapter, createGrokClient, generateGrokImage, XaiHttpError } from "./xai.js";
 export { createModelClient, createCompositeClient, isTransientError } from "./client.js";
 
 export {
@@ -77,6 +77,7 @@ export type {
   XaiChatRequest,
   XaiChatResponse,
   GrokAdapterOptions,
+  GrokImageOptions,
 } from "./xai.js";
 export type { CompositeClientOptions } from "./client.js";
 export type { FetchLike } from "./suggest.js";

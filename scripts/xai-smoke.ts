@@ -11,13 +11,14 @@
  *   4. truncation  tiny max_tokens, asserts the finish_reason=length throw.
  *   5. param probe informational: does a non-grok-4.5/4.6 model reject or
  *                  ignore reasoning_effort? Exercises the adaptive retry.
+ *   6. image       grok-imagine-image-2.0 returns decodable JPEG bytes.
  *
  * Requires XAI_API_KEY (never logged). Without it the script prints SKIP
  * and exits 0 so local runs and secretless CI stay green.
  *
  *   npm run smoke:xai
  */
-import { createGrokClient } from "../src/xai.js";
+import { createGrokClient, generateGrokImage } from "../src/xai.js";
 import { reviewSchema } from "../src/review.js";
 
 const API_KEY = process.env.XAI_API_KEY;
@@ -125,6 +126,19 @@ async function smokeTruncation(): Promise<SmokeResult> {
   }
 }
 
+async function smokeImage(): Promise<SmokeResult> {
+  const name = "image generation (grok-imagine-image-2.0)";
+  const buf = await generateGrokImage({
+    apiKey: API_KEY!,
+    prompt: "A clean editorial photo of an HVAC technician servicing a rooftop AC unit, bright daylight",
+  });
+  // JPEGs start FF D8 FF; anything else means we decoded something unusable.
+  const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  return isJpeg
+    ? { name, status: "PASS", detail: `${Math.round(buf.length / 1024)} KB JPEG` }
+    : { name, status: "FAIL", detail: `got ${buf.length} bytes, not a JPEG` };
+}
+
 async function smokeParamProbe(models: LanguageModel[]): Promise<SmokeResult> {
   const name = "reasoning_effort probe (non-4.5/4.6)";
   const target = models
@@ -166,7 +180,7 @@ async function main(): Promise<void> {
   const { result: discovery, models } = await discoverModels();
   results.push(discovery);
   if (discovery.status === "PASS") {
-    for (const step of [smokePlainText, smokeJsonMode, smokeTruncation]) {
+    for (const step of [smokePlainText, smokeJsonMode, smokeTruncation, smokeImage]) {
       try {
         results.push(await step());
       } catch (error) {

@@ -345,3 +345,82 @@ test("createGrokClient surfaces XaiHttpError with full body and retries stripped
   assert.ok(err.message.length <= "xAI HTTP 400: ".length + 200);
   assert.ok(err.body.endsWith(longTail));
 });
+
+test("generateGrokImage posts to the images endpoint and decodes b64_json", async () => {
+  const { generateGrokImage } = await import("../xai.js");
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const pixels = Buffer.from("fake-jpeg-bytes");
+  const fetchImpl: typeof fetch = async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ data: [{ b64_json: pixels.toString("base64") }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const buf = await generateGrokImage({
+    apiKey: "test-key",
+    prompt: "an HVAC technician on a Sacramento rooftop",
+    fetchImpl,
+  });
+
+  assert.deepEqual(buf, pixels);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, "https://api.x.ai/v1/images/generations");
+  assert.equal(calls[0]!.body.model, "grok-imagine-image-2.0");
+  assert.equal(calls[0]!.body.response_format, "b64_json");
+  assert.equal(calls[0]!.body.aspect_ratio, "16:9");
+  assert.equal(calls[0]!.body.n, 1);
+});
+
+test("generateGrokImage honors model, aspect ratio, resolution and quality overrides", async () => {
+  const { generateGrokImage } = await import("../xai.js");
+  const bodies: Array<Record<string, unknown>> = [];
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ data: [{ b64_json: "eA==" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await generateGrokImage({
+    apiKey: "k",
+    prompt: "p",
+    model: "grok-imagine-image",
+    aspectRatio: "1:1",
+    resolution: "2k",
+    quality: "low",
+    fetchImpl,
+  });
+
+  assert.equal(bodies[0]!.model, "grok-imagine-image");
+  assert.equal(bodies[0]!.aspect_ratio, "1:1");
+  assert.equal(bodies[0]!.resolution, "2k");
+  assert.equal(bodies[0]!.quality, "low");
+});
+
+test("generateGrokImage throws XaiHttpError on a failed request", async () => {
+  const { generateGrokImage } = await import("../xai.js");
+  const fetchImpl: typeof fetch = async () => new Response("model not available", { status: 404 });
+
+  await assert.rejects(
+    generateGrokImage({ apiKey: "k", prompt: "p", fetchImpl }),
+    (error: unknown) =>
+      error instanceof XaiHttpError && error.status === 404 && /model not available/.test(error.body),
+  );
+});
+
+test("generateGrokImage throws when the response carries no image data", async () => {
+  const { generateGrokImage } = await import("../xai.js");
+  const fetchImpl: typeof fetch = async () =>
+    new Response(JSON.stringify({ data: [{ url: "https://example.com/x.jpg" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  await assert.rejects(
+    generateGrokImage({ apiKey: "k", prompt: "p", fetchImpl }),
+    /no b64_json data/,
+  );
+});
