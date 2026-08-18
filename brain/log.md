@@ -8,6 +8,11 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-08-18] ingest | 2 module page(s) updated
+
+- [[modules/client|Unified Model Client]] — Abstract client interface managing fallback routing, retries, and multi-model configuration.
+- [[modules/xai|Xai]] — xAI Grok adapter that satisfies the structural `GeminiLike` interface, so it drops into every existing call site (candidates, review, rewrite) and the consumer 
+
 ## [2026-08-18] ingest | 6 module page(s) updated
 
 - [[modules/candidates|Topic Candidate Generator]] — Generates a list of candidate weekly blog topics matching seasonal and weather conditions.

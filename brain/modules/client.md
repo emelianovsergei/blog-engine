@@ -5,7 +5,7 @@ description: "Abstract client interface managing fallback routing, retries, and 
 tags: ["llm-client", "retry", "fallback"]
 timestamp: "2026-08-18"
 sources: ["src/client.ts"]
-source_hash: "947481d24385a792"
+source_hash: "f3ac63d7e4022e79"
 ---
 # Unified Model Client
 

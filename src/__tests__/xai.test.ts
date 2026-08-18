@@ -66,9 +66,21 @@ test("JSON-mode call sends json_schema and returns the message content", async (
   const req = capture[0]!;
   assert.deepEqual(req.response_format, {
     type: "json_schema",
-    json_schema: { name: "emit_result", strict: true, schema },
+    json_schema: { name: "emit_result", strict: false, schema },
   });
   assert.equal(req.reasoning_effort, "low");
+});
+
+test("plain-text call throws when finish_reason is length", async () => {
+  const client = makeFakeXai(() => ({
+    choices: [{ message: { content: "half a sent" }, finish_reason: "length" }],
+  }));
+  const adapter = grokAdapter({ client });
+
+  await assert.rejects(
+    adapter.models.generateContent({ model: "grok-4.6", contents: "write a post" }),
+    /truncated|finish_reason=length/i,
+  );
 });
 
 test("JSON-mode call throws a retryable error when finish_reason is length", async () => {

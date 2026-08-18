@@ -40,11 +40,10 @@ export interface GrokAdapterOptions {
 const EMIT_SCHEMA_NAME = "emit_result";
 const DEFAULT_MAX_TOKENS = 16384;
 const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
-// Match the Anthropic SDK's 10-minute default. A 16k-token rewrite plus
-// grok-4.6 reasoning routinely exceeds 60s; a short cap aborts and the
-// composite treats it as non-transient unless isTransientError is taught
-// about TimeoutError.
-const REQUEST_TIMEOUT_MS = 600_000;
+// Long enough for a 16k-token rewrite at reasoning_effort=low; short enough
+// that a hung xAI socket fails over to Claude instead of burning a CI runner.
+// Timeouts are *not* retried on the same provider (see isTransientError).
+const REQUEST_TIMEOUT_MS = 180_000;
 
 interface GenConfig {
   responseMimeType?: string;
@@ -76,7 +75,10 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
             type: "json_schema",
             json_schema: {
               name: EMIT_SCHEMA_NAME,
-              strict: true,
+              // Existing Gemini schemas omit additionalProperties:false and
+              // leave optional fields out of `required`. OpenAI-compatible
+              // strict mode rejects both; xAI still validates the shape.
+              strict: false,
               schema: cfg!.responseSchema,
             },
           };
@@ -85,14 +87,14 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
         const response = await client.chatCompletions(body);
         const choice = response.choices?.[0];
         const text = choice?.message?.content?.trim() ?? "";
+        if (choice?.finish_reason === "length") {
+          throw new Error(
+            "Grok response truncated (finish_reason=length) — try again later",
+          );
+        }
         if (wantsJson) {
           if (!text) {
             throw new Error("Grok returned empty content for a JSON-mode request — try again later");
-          }
-          if (choice?.finish_reason === "length") {
-            throw new Error(
-              "Grok JSON-mode response truncated (finish_reason=length) — try again later",
-            );
           }
           try {
             JSON.parse(text);

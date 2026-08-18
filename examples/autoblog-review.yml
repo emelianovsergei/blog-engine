@@ -18,6 +18,7 @@
 #
 # Required setup in the consumer repo:
 #   - Secret: XAI_API_KEY (review + auto-fix; Grok primary)
+#   - Secret: ANTHROPIC_API_KEY (Claude fallback if Grok is unset/down)
 #   - Secret: GEMINI_API_KEY (fallback text + embeddings)
 #   - Secret: AUTOBLOG_PAT — needs PUSH rights, not just PR rights:
 #       fine-grained PAT with Contents: Read and write + Pull requests:
@@ -104,6 +105,7 @@ jobs:
         if: steps.files.outputs.file != ''
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set +e
@@ -280,6 +282,7 @@ jobs:
         if: steps.autofix_gate.outputs.eligible == 'true'
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail

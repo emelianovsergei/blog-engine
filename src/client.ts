@@ -27,12 +27,10 @@ const DEFAULT_RETRIES = 3;
 /** True for retryable upstream errors (rate limits, 5xx, model-overload signals). */
 export function isTransientError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  const name = error instanceof Error ? error.name : "";
-  if (name === "TimeoutError" || name === "AbortError") return true;
   return (
     /\b(429|500|502|503|504)\b/.test(message) ||
     /UNAVAILABLE|RESOURCE_EXHAUSTED|INTERNAL|overloaded|high demand|try again later/i.test(message) ||
-    /aborted due to timeout|fetch failed/i.test(message)
+    /fetch failed/i.test(message)
   );
 }
 
@@ -57,6 +55,15 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 type GenReq = Parameters<GeminiLike["models"]["generateContent"]>[0];
 type GenRes = Awaited<ReturnType<GeminiLike["models"]["generateContent"]>>;
+
+/**
+ * Attach the served model id without spreading the provider response.
+ * `@google/genai`'s GenerateContentResponse exposes `text` as a prototype
+ * getter; `{ ...res, model }` drops it and every caller sees an empty reply.
+ */
+function withServedModel(res: GenRes, model: string): GenRes {
+  return { text: res.text, model };
+}
 
 async function withRetry(
   fn: () => Promise<GenRes>,
@@ -100,7 +107,7 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
       retries,
       sleep,
     );
-    return { ...res, model: geminiFallbackModel };
+    return withServedModel(res, geminiFallbackModel);
   };
 
   const claudeFallback = async (req: GenReq, reason?: unknown): Promise<GenRes> => {
@@ -112,7 +119,7 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
         retries,
         sleep,
       );
-      return { ...res, model: claudeFallbackModel };
+      return withServedModel(res, claudeFallbackModel);
     } catch (error) {
       if (!gemini) throw error;
       return geminiFallback(req, error);
@@ -126,7 +133,7 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
           if (xai) {
             try {
               const res = await withRetry(() => xai.models.generateContent(req), retries, sleep);
-              return { ...res, model: res.model ?? req.model };
+              return withServedModel(res, res.model ?? req.model);
             } catch (error) {
               return claudeFallback(req, error);
             }
@@ -137,7 +144,7 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
           if (claude) {
             try {
               const res = await withRetry(() => claude.models.generateContent(req), retries, sleep);
-              return { ...res, model: res.model ?? req.model };
+              return withServedModel(res, res.model ?? req.model);
             } catch (error) {
               if (!gemini) throw error;
               return geminiFallback(req, error);
@@ -150,7 +157,7 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
           throw new Error("No Gemini client configured for model " + req.model);
         }
         const res = await withRetry(() => gemini.models.generateContent(req), retries, sleep);
-        return { ...res, model: res.model ?? req.model };
+        return withServedModel(res, res.model ?? req.model);
       },
 
       async embedContent(req) {

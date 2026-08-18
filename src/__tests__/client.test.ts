@@ -41,14 +41,41 @@ test("isTransientError matches 503/UNAVAILABLE/overloaded/429, not plain errors"
   assert.equal(isTransientError(new Error("400 bad request: schema")), false);
 });
 
-test("isTransientError treats fetch timeouts and network blips as retryable", () => {
+test("isTransientError treats fetch failures as retryable but not timeouts", () => {
   const timeout = new Error("The operation was aborted due to timeout");
   timeout.name = "TimeoutError";
-  assert.equal(isTransientError(timeout), true);
+  assert.equal(isTransientError(timeout), false);
   const abort = new Error("This operation was aborted");
   abort.name = "AbortError";
-  assert.equal(isTransientError(abort), true);
+  assert.equal(isTransientError(abort), false);
   assert.equal(isTransientError(new Error("TypeError: fetch failed")), true);
+});
+
+test("composite preserves prototype text getters when attaching the served model", async () => {
+  class FakeGeminiRes {
+    candidates = [{ content: { parts: [{ text: "hello" }] } }];
+    get text() {
+      return "hello";
+    }
+  }
+  const gemini: GeminiLike = {
+    models: {
+      async generateContent() {
+        return new FakeGeminiRes();
+      },
+      async embedContent() {
+        return { embeddings: [] };
+      },
+    },
+  };
+  const client = createCompositeClient({ gemini, sleep: noSleep });
+  const direct = await client.models.generateContent({ model: "gemini-2.5-flash", contents: "x" });
+  assert.equal(direct.text, "hello");
+  assert.equal(direct.model, "gemini-2.5-flash");
+
+  const fallback = await client.models.generateContent({ model: "grok-4.6", contents: "x" });
+  assert.equal(fallback.text, "hello");
+  assert.equal(fallback.model, "gemini-2.5-flash");
 });
 
 test("claude model routes to the claude provider", async () => {
