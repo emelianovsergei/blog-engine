@@ -67,9 +67,14 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
         const body: XaiChatRequest = {
           model: req.model,
           max_tokens: maxTokens,
-          reasoning_effort: "low",
           messages: [{ role: "user", content: promptText }],
         };
+        // Per docs.x.ai/docs/guides/reasoning only grok-4.5 / grok-4.6 accept
+        // reasoning_effort; other models may reject it, and a 4xx here is a
+        // permanent (non-transient) fall-through to the Claude leg.
+        if (/^grok-4\.[56]/.test(req.model)) {
+          body.reasoning_effort = "low";
+        }
         if (wantsJson) {
           body.response_format = {
             type: "json_schema",

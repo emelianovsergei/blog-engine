@@ -47,6 +47,21 @@ test("plain-text call maps string contents to a user message with reasoning_effo
   assert.equal(capture[0]!.response_format, undefined);
 });
 
+test("reasoning_effort is omitted for models outside grok-4.5/4.6", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai(
+    () => ({ choices: [{ message: { content: "ok" } }] }),
+    capture,
+  );
+  const adapter = grokAdapter({ client });
+
+  await adapter.models.generateContent({ model: "grok-4-fast", contents: "the prompt" });
+
+  assert.equal(capture.length, 1);
+  assert.equal(capture[0]!.model, "grok-4-fast");
+  assert.equal(capture[0]!.reasoning_effort, undefined);
+});
+
 test("JSON-mode call sends json_schema and returns the message content", async () => {
   const capture: XaiChatRequest[] = [];
   const client = makeFakeXai(
