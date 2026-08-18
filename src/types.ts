@@ -14,7 +14,7 @@ export interface GeminiLike {
       model: string;
       contents: unknown;
       config?: unknown;
-    }): Promise<{ text?: string }>;
+    }): Promise<{ text?: string; model?: string }>;
     embedContent(req: {
       model: string;
       contents: unknown;

@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-08-03"
+timestamp: "2026-08-18"
 sources: []
 ---
 # Developer Knowledge Index
@@ -37,6 +37,7 @@ sources: []
 *   [[modules/suggest|Google Autocomplete Client]]
 *   [[modules/types|Type Definitions]]
 *   [[modules/weather|Weather Client]]
+*   [[modules/xai|Xai]]
 
 ## Core Concepts
 

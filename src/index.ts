@@ -20,6 +20,7 @@ export {
 export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 
 export { claudeAdapter, createClaudeClient } from "./anthropic.js";
+export { grokAdapter, createGrokClient } from "./xai.js";
 export { createModelClient, createCompositeClient, isTransientError } from "./client.js";
 
 export {
@@ -71,6 +72,12 @@ export type {
   AnthropicCreateRequest,
   ClaudeAdapterOptions,
 } from "./anthropic.js";
+export type {
+  XaiLike,
+  XaiChatRequest,
+  XaiChatResponse,
+  GrokAdapterOptions,
+} from "./xai.js";
 export type { CompositeClientOptions } from "./client.js";
 export type { FetchLike } from "./suggest.js";
 export type { KeywordResearch, ResearchKeywordsArgs, SearchIntent } from "./keywords.js";

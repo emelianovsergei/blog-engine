@@ -19,7 +19,7 @@
 
 ### How `wiki:ingest` works (LLM-driven, Karpathy "LLM wiki")
 - Ingest is **LLM-driven**: for each changed `src/*.ts` / `src/cli/*.ts` it asks Claude (via the project's `makeReviewClient`) to write the module page — prose summary, per-export explanations, and `[[wikilink]]` cross-references. Core logic lives in [`src/wiki/ingest.ts`](file:///home/jaysonlee/Projects/blog-engine/src/wiki/ingest.ts); the orchestrator is [`scripts/wiki-ingest.ts`](file:///home/jaysonlee/Projects/blog-engine/scripts/wiki-ingest.ts).
-- Set **`ANTHROPIC_API_KEY`** (Gemini fallback via `GEMINI_API_KEY`) for LLM enrichment. With no key it degrades gracefully to deterministic JSDoc-based generation, so CI/offline ingest still works.
-- **Incremental**: each page stores a `source_hash`; unchanged files are skipped (no LLM call, no diff). Use `npm run wiki:ingest -- --force` to re-generate every page (e.g. to re-enrich with a better model). Override the model with `WIKI_INGEST_MODEL` (default `claude-sonnet-5`).
+- Set **`XAI_API_KEY`** (Claude via `ANTHROPIC_API_KEY`, Gemini fallback via `GEMINI_API_KEY`) for LLM enrichment. With no key it degrades gracefully to deterministic JSDoc-based generation, so CI/offline ingest still works.
+- **Incremental**: each page stores a `source_hash`; unchanged files are skipped (no LLM call, no diff). Use `npm run wiki:ingest -- --force` to re-generate every page (e.g. to re-enrich with a better model). Override the model with `WIKI_INGEST_MODEL` (default `grok-4.6`).
 - Each run that changes pages appends a `## [YYYY-MM-DD] ingest | …` entry to `brain/log.md` and regenerates `brain/index.md`. Suggested `[[links]]` are validated against real pages, so `wiki:lint` stays green.
 - Scope note: this is slice 1 (LLM-driven **Ingest** + index/log). Query and LLM-synthesized concept/overview pages are planned follow-ups.

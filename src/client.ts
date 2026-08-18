@@ -1,22 +1,27 @@
 /**
- * Composite `GeminiLike` client: Claude primary (with retry), Gemini fallback.
+ * Composite `GeminiLike` client: Grok or Claude primary (with retry), Gemini fallback.
  *
  * Provider is chosen by the per-call model-id prefix, so every existing call
  * site keeps passing its own model string:
- *   - "claude-*"  → Claude (transient-retry); on any failure, fall back to Gemini
- *                   using `geminiFallbackModel`. If no Claude client is configured,
- *                   go straight to the Gemini fallback.
+ *   - "grok-*"    → Grok (transient-retry); on any failure, fall back to Claude
+ *                   (if configured, remapped to `claudeFallbackModel`) then
+ *                   Gemini (`geminiFallbackModel`). Missing Grok uses the same
+ *                   chain so a 0.10.0 upgrade without XAI_API_KEY still hits
+ *                   Claude instead of silently downgrading to Flash.
+ *   - "claude-*"  → Claude (transient-retry); same Gemini fallback.
  *   - "gemini-*"  → Gemini directly (same transient-retry).
- *   - embeddings  → always Gemini (Claude has no embedding API).
+ *   - embeddings  → always Gemini (neither Grok nor Claude has an embedding API).
  *
- * Both `@google/genai` 503 "high demand" outages and `@anthropic-ai/sdk` hiccups
- * are absorbed: transient errors retry with exponential backoff, and a dead
- * primary degrades to the other provider rather than failing the run.
+ * `@google/genai` 503 "high demand" outages, `@anthropic-ai/sdk` hiccups, and
+ * xAI HTTP blips are absorbed: transient errors retry with exponential backoff,
+ * and a dead primary degrades to the other provider rather than failing the run.
  */
 import { createClaudeClient } from "./anthropic.js";
+import { createGrokClient } from "./xai.js";
 import type { GeminiLike } from "./types.js";
 
 const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
+const DEFAULT_CLAUDE_FALLBACK_MODEL = "claude-sonnet-5";
 const DEFAULT_RETRIES = 3;
 
 /** True for retryable upstream errors (rate limits, 5xx, model-overload signals). */
@@ -24,16 +29,21 @@ export function isTransientError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     /\b(429|500|502|503|504)\b/.test(message) ||
-    /UNAVAILABLE|RESOURCE_EXHAUSTED|INTERNAL|overloaded|high demand|try again later/i.test(message)
+    /UNAVAILABLE|RESOURCE_EXHAUSTED|INTERNAL|overloaded|high demand|try again later/i.test(message) ||
+    /fetch failed/i.test(message)
   );
 }
 
 export interface CompositeClientOptions {
+  /** Grok-backed GeminiLike (primary for "grok-*" models). */
+  xai?: GeminiLike;
   /** Claude-backed GeminiLike (primary for "claude-*" models). */
   claude?: GeminiLike;
   /** Gemini-backed GeminiLike (fallback for text, sole provider for embeddings). */
   gemini?: GeminiLike;
-  /** Gemini model used when falling back from Claude. */
+  /** Claude model used when a grok-* request falls back to the Claude client. */
+  claudeFallbackModel?: string;
+  /** Gemini model used when falling back from Grok or Claude. */
   geminiFallbackModel?: string;
   /** Max attempts per provider for transient errors. Default 3. */
   retries?: number;
@@ -45,6 +55,15 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 type GenReq = Parameters<GeminiLike["models"]["generateContent"]>[0];
 type GenRes = Awaited<ReturnType<GeminiLike["models"]["generateContent"]>>;
+
+/**
+ * Attach the served model id without spreading the provider response.
+ * `@google/genai`'s GenerateContentResponse exposes `text` as a prototype
+ * getter; `{ ...res, model }` drops it and every caller sees an empty reply.
+ */
+function withServedModel(res: GenRes, model: string): GenRes {
+  return { text: res.text, model };
+}
 
 async function withRetry(
   fn: () => Promise<GenRes>,
@@ -65,30 +84,70 @@ async function withRetry(
 }
 
 export function createCompositeClient(opts: CompositeClientOptions): GeminiLike {
-  const { claude, gemini } = opts;
-  const fallbackModel = opts.geminiFallbackModel ?? DEFAULT_GEMINI_FALLBACK_MODEL;
+  const { xai, claude, gemini } = opts;
+  const geminiFallbackModel = opts.geminiFallbackModel ?? DEFAULT_GEMINI_FALLBACK_MODEL;
+  const claudeFallbackModel = opts.claudeFallbackModel ?? DEFAULT_CLAUDE_FALLBACK_MODEL;
   const retries = opts.retries ?? DEFAULT_RETRIES;
   const sleep = opts.sleep ?? defaultSleep;
 
-  const geminiFallback = (req: GenReq): Promise<GenRes> => {
+  const warnFallback = (requested: string, served: string, reason: unknown) => {
+    const detail = reason instanceof Error ? reason.message : reason ? String(reason) : "provider not configured";
+    console.warn(`[blog-engine] ${requested} unavailable (${detail}); serving ${served}`);
+  };
+
+  const geminiFallback = async (req: GenReq, reason?: unknown): Promise<GenRes> => {
     if (!gemini) {
       throw new Error(
-        "No model provider available (set ANTHROPIC_API_KEY and/or GEMINI_API_KEY)",
+        "No model provider available (set XAI_API_KEY and/or ANTHROPIC_API_KEY and/or GEMINI_API_KEY)",
       );
     }
-    return withRetry(() => gemini.models.generateContent({ ...req, model: fallbackModel }), retries, sleep);
+    warnFallback(req.model, geminiFallbackModel, reason);
+    const res = await withRetry(
+      () => gemini.models.generateContent({ ...req, model: geminiFallbackModel }),
+      retries,
+      sleep,
+    );
+    return withServedModel(res, geminiFallbackModel);
+  };
+
+  const claudeFallback = async (req: GenReq, reason?: unknown): Promise<GenRes> => {
+    if (!claude) return geminiFallback(req, reason);
+    warnFallback(req.model, claudeFallbackModel, reason);
+    try {
+      const res = await withRetry(
+        () => claude.models.generateContent({ ...req, model: claudeFallbackModel }),
+        retries,
+        sleep,
+      );
+      return withServedModel(res, claudeFallbackModel);
+    } catch (error) {
+      if (!gemini) throw error;
+      return geminiFallback(req, error);
+    }
   };
 
   return {
     models: {
       async generateContent(req) {
+        if (req.model.startsWith("grok")) {
+          if (xai) {
+            try {
+              const res = await withRetry(() => xai.models.generateContent(req), retries, sleep);
+              return withServedModel(res, res.model ?? req.model);
+            } catch (error) {
+              return claudeFallback(req, error);
+            }
+          }
+          return claudeFallback(req);
+        }
         if (req.model.startsWith("claude")) {
           if (claude) {
             try {
-              return await withRetry(() => claude.models.generateContent(req), retries, sleep);
+              const res = await withRetry(() => claude.models.generateContent(req), retries, sleep);
+              return withServedModel(res, res.model ?? req.model);
             } catch (error) {
               if (!gemini) throw error;
-              return geminiFallback(req);
+              return geminiFallback(req, error);
             }
           }
           return geminiFallback(req);
@@ -97,7 +156,8 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
         if (!gemini) {
           throw new Error("No Gemini client configured for model " + req.model);
         }
-        return withRetry(() => gemini.models.generateContent(req), retries, sleep);
+        const res = await withRetry(() => gemini.models.generateContent(req), retries, sleep);
+        return withServedModel(res, res.model ?? req.model);
       },
 
       async embedContent(req) {
@@ -111,15 +171,23 @@ export function createCompositeClient(opts: CompositeClientOptions): GeminiLike 
 }
 
 /**
- * Build the composite client from credentials. Claude is included only when an
- * Anthropic key is supplied; otherwise the client degrades to Gemini-only.
+ * Build the composite client from credentials. Grok is included when an xAI
+ * key is supplied; Claude when an Anthropic key is supplied. Otherwise the
+ * client degrades to Gemini-only (embeddings still require Gemini).
  */
 export async function createModelClient(opts: {
+  xaiApiKey?: string;
   anthropicApiKey?: string;
   geminiClient?: GeminiLike;
   geminiFallbackModel?: string;
   maxTokens?: number;
 }): Promise<GeminiLike> {
+  const xai = opts.xaiApiKey
+    ? await createGrokClient({
+        apiKey: opts.xaiApiKey,
+        ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+      })
+    : undefined;
   const claude = opts.anthropicApiKey
     ? await createClaudeClient({
         apiKey: opts.anthropicApiKey,
@@ -127,6 +195,7 @@ export async function createModelClient(opts: {
       })
     : undefined;
   return createCompositeClient({
+    ...(xai ? { xai } : {}),
     ...(claude ? { claude } : {}),
     ...(opts.geminiClient ? { gemini: opts.geminiClient } : {}),
     ...(opts.geminiFallbackModel ? { geminiFallbackModel: opts.geminiFallbackModel } : {}),

@@ -8,7 +8,9 @@
 #   - the cron pair, which exists to cover PST/PDT; the schedule-guard job
 #     drops the duplicate so only one run per Pacific date proceeds
 #
-# Secrets: ANTHROPIC_API_KEY, GEMINI_API_KEY (fallback), PEXELS_API_KEY,
+# Secrets: ANTHROPIC_API_KEY (consumer generate scripts still read this),
+# XAI_API_KEY (once the consumer script passes xaiApiKey), GEMINI_API_KEY
+# (embeddings + fallback), PEXELS_API_KEY,
 # AUTOBLOG_PAT (so the pushed branch raises workflow events).
 #
 name: Generate Weekly Blog Post
@@ -145,6 +147,7 @@ jobs:
         run: npm run blog:generate
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           BLOG_GENERATOR_DATE: ${{ needs.schedule-guard.outputs.run_at }}

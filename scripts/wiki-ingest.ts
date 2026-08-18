@@ -7,12 +7,12 @@
  * ingest entry to `brain/log.md`. Unchanged files are skipped entirely (no LLM
  * call, no diff).
  *
- * The LLM path uses the project's existing Claude-primary client
- * (`makeReviewClient`). When no `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` is set the
- * script falls back to deterministic generation from JSDoc so `wiki:ingest` still
- * works offline and in CI.
+ * The LLM path uses the project's existing Grok-primary client
+ * (`makeReviewClient`). When no `XAI_API_KEY` / `ANTHROPIC_API_KEY` /
+ * `GEMINI_API_KEY` is set the script falls back to deterministic generation
+ * from JSDoc so `wiki:ingest` still works offline and in CI.
  *
- *   Model override:  WIKI_INGEST_MODEL   (default "claude-sonnet-5")
+ *   Model override:  WIKI_INGEST_MODEL   (default "grok-4.6")
  */
 import fs from "fs";
 import path from "path";
@@ -38,7 +38,7 @@ const MODULES_DIR = path.join(BRAIN_DIR, "modules");
 const CONCEPTS_DIR = path.join(BRAIN_DIR, "concepts");
 const REPORTS_DIR = path.join(BRAIN_DIR, "reports");
 const SRC_DIR = path.join(ROOT, "src");
-const MODEL = process.env.WIKI_INGEST_MODEL || "claude-sonnet-5";
+const MODEL = process.env.WIKI_INGEST_MODEL || "grok-4.6";
 const TODAY = new Date().toISOString().split("T")[0]!;
 /** `--force` regenerates every page even when its source is unchanged — use it
  * to re-enrich existing pages with a better model after the source has settled. */
@@ -141,7 +141,7 @@ async function main() {
     client = await makeReviewClient();
     console.log(`  LLM mode: ${MODEL}`);
   } catch {
-    console.warn("  No model credentials (ANTHROPIC_API_KEY / GEMINI_API_KEY) — deterministic fallback.");
+    console.warn("  No model credentials (XAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY) — deterministic fallback.");
   }
 
   const moduleEntries: Array<{ pageId: string; title: string }> = [];

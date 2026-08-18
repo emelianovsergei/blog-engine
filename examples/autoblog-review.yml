@@ -17,8 +17,9 @@
 # post directly or comment `/autoblog rewrite` (autoblog-rewrite.yml).
 #
 # Required setup in the consumer repo:
-#   - Secret: ANTHROPIC_API_KEY (review + auto-fix; Claude primary)
-#   - Secret: GEMINI_API_KEY (fallback provider)
+#   - Secret: XAI_API_KEY (review + auto-fix; Grok primary)
+#   - Secret: ANTHROPIC_API_KEY (Claude fallback if Grok is unset/down)
+#   - Secret: GEMINI_API_KEY (fallback text + embeddings)
 #   - Secret: AUTOBLOG_PAT — needs PUSH rights, not just PR rights:
 #       fine-grained PAT with Contents: Read and write + Pull requests:
 #       Read and write, or a classic PAT with repo scope. Needed so the
@@ -103,6 +104,7 @@ jobs:
         id: review
         if: steps.files.outputs.file != ''
         env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -112,7 +114,7 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
-            --model claude-sonnet-5 \
+            --model grok-4.6 \
             --out review-summary.md \
             --json-out review-result.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
@@ -279,6 +281,7 @@ jobs:
       - name: 'Auto-fix: rewrite post'
         if: steps.autofix_gate.outputs.eligible == 'true'
         env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -289,7 +292,7 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
-            --model claude-sonnet-5 \
+            --model grok-4.6 \
             --notes-out change-notes.md
 
       # Build the site against the rewritten post BEFORE committing. A

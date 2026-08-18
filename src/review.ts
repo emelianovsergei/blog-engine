@@ -12,7 +12,7 @@ import type {
   GeminiLike,
 } from "./types.js";
 
-export const DEFAULT_REVIEW_MODEL = "claude-sonnet-5";
+export const DEFAULT_REVIEW_MODEL = "grok-4.6";
 
 export type ReviewDimension = "contentQuality" | "seoMetadata" | "brandVoiceFit";
 
@@ -79,13 +79,13 @@ export interface ReviewBlogPostArgs {
   markdown: string;
   /** Optional published-post list — included in the prompt as duplication context. */
   existingPosts?: ExistingPostLike[];
-  /** Defaults to `claude-sonnet-5`. */
+  /** Defaults to `grok-4.6`. */
   model?: string;
   /** Overrides the default gate (testing / forced-strict mode). */
   gate?: ReviewGate;
 }
 
-const reviewSchema = {
+export const reviewSchema = {
   type: "object",
   properties: {
     scores: {
@@ -450,7 +450,7 @@ export async function reviewBlogPost(args: ReviewBlogPostArgs): Promise<ReviewRe
         suggestions,
         summary,
         thresholdReasoning: reasoning,
-        modelUsed: model,
+        modelUsed: response.model ?? model,
       };
     } catch (error) {
       lastError = error;

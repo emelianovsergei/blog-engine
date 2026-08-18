@@ -3,9 +3,9 @@ type: "module"
 title: "Cli Shared"
 description: "Shared CLI helpers — argv parsing, config composition, Gemini client construction."
 tags: ["module"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/cli/shared.ts"]
-source_hash: "50a0524783c3e25f"
+source_hash: "a48026b1127743ce"
 ---
 # Cli Shared
 
@@ -43,7 +43,7 @@ Shared CLI helpers — argv parsing, config composition, Gemini client construct
 Dynamically loads `@google/genai` and constructs a client. Kept dynamic so the library has no hard runtime dep on it — peer dep only.
 
 ### `makeReviewClient`
-Build the composite client the review/rewrite CLIs use: Claude primary (when `ANTHROPIC_API_KEY` is set) with a Gemini fallback (when a Gemini key is set). Embeddings always route to Gemini. At least one key must be present.
+Build the composite client the review/rewrite CLIs use: Grok primary (when `XAI_API_KEY` is set), Claude if an Anthropic key is set, Gemini fallback (when a Gemini key is set). Embeddings always route to Gemini. At least one text key must be present.
 
 ## Custom Notes
 

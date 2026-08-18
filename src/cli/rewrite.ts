@@ -28,7 +28,7 @@ function usage(): string {
   return `Usage: blog-engine-rewrite --post <path.md> --review <result.json> --site pulse|promax \\
                            --business "<Business Name>" \\
                            --service-areas "Sacramento,Roseville,..." \\
-                           [--notes-out change-notes.md] [--model claude-sonnet-5]`;
+                           [--notes-out change-notes.md] [--model grok-4.6]`;
 }
 
 async function main(): Promise<number> {

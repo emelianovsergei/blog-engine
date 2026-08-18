@@ -3,9 +3,9 @@ type: "module"
 title: "Blog Post Rewriter"
 description: "Rewrites blog posts using LLMs to fix issues highlighted in the review rubric."
 tags: ["rewrite", "llm-generation", "seo"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-18"
 sources: ["src/rewrite.ts"]
-source_hash: "85552eb680f7d0ba"
+source_hash: "8f96b49a063d1444"
 ---
 # Blog Post Rewriter
 
