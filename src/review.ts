@@ -85,7 +85,7 @@ export interface ReviewBlogPostArgs {
   gate?: ReviewGate;
 }
 
-const reviewSchema = {
+export const reviewSchema = {
   type: "object",
   properties: {
     scores: {

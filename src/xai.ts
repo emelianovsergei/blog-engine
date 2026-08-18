@@ -31,6 +31,42 @@ export interface XaiLike {
   chatCompletions(req: XaiChatRequest): Promise<XaiChatResponse>;
 }
 
+/**
+ * HTTP failure from the xAI endpoint. The message keeps the established
+ * `xAI HTTP <status>: <detail>` shape (truncated, matched by
+ * isTransientError in client.ts); `body` carries the untruncated response
+ * so the adapter can inspect what the API actually rejected.
+ */
+export class XaiHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`xAI HTTP ${status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+    this.name = "XaiHttpError";
+  }
+}
+
+const REASONING_EFFORT_REJECTION = /reasoning[_\s.-]*effort/i;
+
+/**
+ * True when the error is a non-transient 4xx whose body names the
+ * `reasoning_effort` parameter — i.e. this model rejects the param rather
+ * than the request being otherwise malformed. Requiring the parameter name
+ * (not generic "unknown parameter" phrasing) keeps unrelated 400s failing
+ * over to Claude instead of poisoning the unsupported-model memo.
+ */
+function isReasoningEffortRejection(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status =
+    error instanceof XaiHttpError
+      ? error.status
+      : Number(/\bxAI HTTP (4\d{2})\b/.exec(error.message)?.[1] ?? NaN);
+  if (!(status >= 400 && status < 500) || status === 429) return false;
+  const haystack = error instanceof XaiHttpError ? error.body : error.message;
+  return REASONING_EFFORT_REJECTION.test(haystack);
+}
+
 export interface GrokAdapterOptions {
   client: XaiLike;
   /** Output token ceiling. Generous default covers the longest article. */
@@ -54,6 +90,10 @@ interface GenConfig {
 export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
   const { client } = opts;
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
+  // Models observed to reject reasoning_effort (see the behavioral probe
+  // below). Per-adapter, so one process pays at most one stripped retry
+  // per model.
+  const reasoningEffortUnsupported = new Set<string>();
 
   return {
     models: {
@@ -69,10 +109,11 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
           max_tokens: maxTokens,
           messages: [{ role: "user", content: promptText }],
         };
-        // Per docs.x.ai/docs/guides/reasoning only grok-4.5 / grok-4.6 accept
-        // reasoning_effort; other models may reject it, and a 4xx here is a
-        // permanent (non-transient) fall-through to the Claude leg.
-        if (/^grok-4\.[56]/.test(req.model)) {
+        // Behavioral probe: the xAI models API exposes no capability flags,
+        // and docs.x.ai/docs/guides/reasoning only documents reasoning_effort
+        // for grok-4.5/grok-4.6 — so send it by default and learn from a
+        // rejection (below) instead of hardcoding a model list.
+        if (!reasoningEffortUnsupported.has(req.model)) {
           body.reasoning_effort = "low";
         }
         if (wantsJson) {
@@ -89,7 +130,18 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
           };
         }
 
-        const response = await client.chatCompletions(body);
+        let response: XaiChatResponse;
+        try {
+          response = await client.chatCompletions(body);
+        } catch (error) {
+          if (body.reasoning_effort !== undefined && isReasoningEffortRejection(error)) {
+            reasoningEffortUnsupported.add(req.model);
+            const { reasoning_effort: _rejected, ...stripped } = body;
+            response = await client.chatCompletions(stripped);
+          } else {
+            throw error;
+          }
+        }
         const choice = response.choices?.[0];
         const text = choice?.message?.content?.trim() ?? "";
         if (choice?.finish_reason === "length") {
@@ -141,7 +193,7 @@ export async function createGrokClient(opts: {
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
-        throw new Error(`xAI HTTP ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+        throw new XaiHttpError(response.status, detail);
       }
       return (await response.json()) as XaiChatResponse;
     },

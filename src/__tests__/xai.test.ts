@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { grokAdapter } from "../xai.js";
+import { grokAdapter, XaiHttpError } from "../xai.js";
 import type { XaiChatRequest, XaiChatResponse, XaiLike } from "../xai.js";
 
 function makeFakeXai(
@@ -47,7 +47,7 @@ test("plain-text call maps string contents to a user message with reasoning_effo
   assert.equal(capture[0]!.response_format, undefined);
 });
 
-test("reasoning_effort is omitted for models outside grok-4.5/4.6", async () => {
+test("reasoning_effort is sent by default for any grok model", async () => {
   const capture: XaiChatRequest[] = [];
   const client = makeFakeXai(
     () => ({ choices: [{ message: { content: "ok" } }] }),
@@ -59,7 +59,145 @@ test("reasoning_effort is omitted for models outside grok-4.5/4.6", async () => 
 
   assert.equal(capture.length, 1);
   assert.equal(capture[0]!.model, "grok-4-fast");
-  assert.equal(capture[0]!.reasoning_effort, undefined);
+  assert.equal(capture[0]!.reasoning_effort, "low");
+});
+
+test("a 400 naming reasoning_effort strips the param and retries once", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.reasoning_effort !== undefined) {
+      throw new XaiHttpError(400, "Argument not supported: reasoning_effort");
+    }
+    return { choices: [{ message: { content: "ok" } }] };
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  const res = await adapter.models.generateContent({ model: "grok-3-fast", contents: "hi" });
+
+  assert.equal(res.text, "ok");
+  assert.equal(capture.length, 2);
+  assert.equal(capture[0]!.reasoning_effort, "low");
+  assert.equal(capture[1]!.reasoning_effort, undefined);
+});
+
+test("a rejected model is memoized: later calls omit the param without a probe", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.reasoning_effort !== undefined) {
+      throw new XaiHttpError(400, "Argument not supported: reasoning_effort");
+    }
+    return { choices: [{ message: { content: "ok" } }] };
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  await adapter.models.generateContent({ model: "grok-3-fast", contents: "first" });
+  await adapter.models.generateContent({ model: "grok-3-fast", contents: "second" });
+
+  assert.equal(capture.length, 3); // probe + stripped retry, then one clean call
+  assert.equal(capture[2]!.reasoning_effort, undefined);
+});
+
+test("memoization is per model string", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.model === "grok-3-fast" && req.reasoning_effort !== undefined) {
+      throw new XaiHttpError(400, "Argument not supported: reasoning_effort");
+    }
+    return { choices: [{ message: { content: "ok" } }] };
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  await adapter.models.generateContent({ model: "grok-3-fast", contents: "a" });
+  await adapter.models.generateContent({ model: "grok-4.6", contents: "b" });
+
+  const last = capture.at(-1)!;
+  assert.equal(last.model, "grok-4.6");
+  assert.equal(last.reasoning_effort, "low");
+});
+
+test("a memoized model keeps response_format in JSON mode", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.reasoning_effort !== undefined) {
+      throw new XaiHttpError(400, "Argument not supported: reasoning_effort");
+    }
+    return { choices: [{ message: { content: '{"ok":true}' } }] };
+  }, capture);
+  const adapter = grokAdapter({ client });
+  await adapter.models.generateContent({ model: "grok-3-fast", contents: "warm the memo" });
+
+  await adapter.models.generateContent({
+    model: "grok-3-fast",
+    contents: "json please",
+    config: { responseMimeType: "application/json", responseSchema: { type: "object" } },
+  });
+
+  const last = capture.at(-1)!;
+  assert.equal(last.reasoning_effort, undefined);
+  assert.equal(last.response_format?.type, "json_schema");
+});
+
+test("an unrelated 400 is rethrown after a single call (Claude fail-over path)", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai(() => {
+    throw new XaiHttpError(400, "invalid schema for response_format");
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  await assert.rejects(
+    adapter.models.generateContent({ model: "grok-4.6", contents: "hi" }),
+    /xAI HTTP 400: invalid schema/,
+  );
+  assert.equal(capture.length, 1);
+});
+
+test("when the stripped retry also fails, the second error surfaces", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.reasoning_effort !== undefined) {
+      throw new XaiHttpError(400, "Argument not supported: reasoning_effort");
+    }
+    throw new XaiHttpError(400, "prompt too long");
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  await assert.rejects(
+    adapter.models.generateContent({ model: "grok-3-fast", contents: "hi" }),
+    /xAI HTTP 400: prompt too long/,
+  );
+  assert.equal(capture.length, 2);
+});
+
+test("transient errors are rethrown unstripped even if the body mentions the param", async () => {
+  for (const status of [429, 503]) {
+    const capture: XaiChatRequest[] = [];
+    const client = makeFakeXai(() => {
+      throw new XaiHttpError(status, "overloaded; retry reasoning_effort request later");
+    }, capture);
+    const adapter = grokAdapter({ client });
+
+    await assert.rejects(
+      adapter.models.generateContent({ model: "grok-4.6", contents: "hi" }),
+      new RegExp(`xAI HTTP ${status}`),
+    );
+    assert.equal(capture.length, 1);
+  }
+});
+
+test("plain Error with the established message shape is still recognized", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai((req) => {
+    if (req.reasoning_effort !== undefined) {
+      throw new Error("xAI HTTP 400: Argument not supported: reasoning_effort");
+    }
+    return { choices: [{ message: { content: "ok" } }] };
+  }, capture);
+  const adapter = grokAdapter({ client });
+
+  const res = await adapter.models.generateContent({ model: "grok-3-fast", contents: "hi" });
+
+  assert.equal(res.text, "ok");
+  assert.equal(capture.length, 2);
 });
 
 test("JSON-mode call sends json_schema and returns the message content", async () => {
@@ -175,4 +313,35 @@ test("embedContent is unsupported on the Grok adapter", async () => {
     adapter.models.embedContent({ model: "x", contents: ["a"] }),
     /not support|Gemini/i,
   );
+});
+
+test("createGrokClient surfaces XaiHttpError with full body and retries stripped", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const longTail = "x".repeat(300);
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(body);
+    if (body.reasoning_effort !== undefined) {
+      return new Response(`Argument not supported: reasoning_effort ${longTail}`, { status: 400 });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const { createGrokClient } = await import("../xai.js");
+  const adapter = await createGrokClient({ apiKey: "test-key", fetchImpl });
+  const res = await adapter.models.generateContent({ model: "grok-3-fast", contents: "hi" });
+
+  assert.equal(res.text, "hi");
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0]!.reasoning_effort, "low");
+  assert.equal(bodies[1]!.reasoning_effort, undefined);
+
+  // The error shape itself: message truncates the body at 200 chars, .body keeps it all.
+  const err = new XaiHttpError(400, `detail ${longTail}`);
+  assert.ok(err.message.startsWith("xAI HTTP 400: detail"));
+  assert.ok(err.message.length <= "xAI HTTP 400: ".length + 200);
+  assert.ok(err.body.endsWith(longTail));
 });

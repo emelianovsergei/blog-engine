@@ -25,6 +25,7 @@
     "prepare": "npm run build",
     "clean": "rm -rf dist",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "smoke:xai": "npx tsx scripts/xai-smoke.ts",
     "wiki:ingest": "npx tsx scripts/wiki-ingest.ts",
     "wiki:lint": "npx tsx scripts/wiki-lint.ts"
   },
