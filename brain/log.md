@@ -8,6 +8,11 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-08-19] ingest | 2 module page(s) updated
+
+- [[modules/gsc|Gsc]] — Google Search Console — the only first-party demand signal available.
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+
 ## [2026-08-19] ingest | 5 module page(s) updated
 
 - [[modules/demand|Search Demand Scorer]] — Scores candidate blog topics against real search suggest frequency signals.
