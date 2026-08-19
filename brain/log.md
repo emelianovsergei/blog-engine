@@ -8,6 +8,47 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-08-19] Grok migration + six-phase quality rework
+
+Moved the whole pipeline to Grok, then fixed the quality machinery underneath
+it. Engine v0.11.0 -> v0.16.0, tests 204 -> 256, every phase verified on live
+production runs rather than in tests alone.
+
+- **Grok everywhere.** Text on `grok-4.6` (topic selection, planning, keyword
+  research, writing, review, rewrite); images on `grok-imagine-image-2.0` via
+  `generateGrokImage()`. Embeddings stay on Gemini — xAI has none. Fallback
+  chain grok -> claude -> gemini is unchanged. `reasoning_effort` is gated by a
+  behavioural probe rather than a hardcoded model list, because the xAI models
+  API exposes no capability flags: send it, and on a 4xx naming the parameter,
+  strip, memoise and retry. Confirmed live that `grok-4.20-0309-non-reasoning`
+  rejects it while grok-4.6 accepts it.
+- **Image generation had been silently broken.** `imagen-4.0-ultra-generate-001`
+  was retired upstream and returned 404 on every run, so every recent post
+  quietly used Pexels stock art. Now live AI images again.
+- **Rewrite-path parity.** The auto-fix rewrite had no link policy and no audit,
+  and reintroduced a denylisted URL that generation had stripped — leaving the
+  post permanently red. See [[concepts/ci-heal]].
+- **One rubric.** Writer, planner, reviewer and the deterministic checker now
+  render from a single rule array. See [[concepts/shared-rubric]].
+- **`humanVoice` dimension**, shipped advisory: scored and reported, excluded
+  from the gate until there are enough real scores to calibrate. `overall` is an
+  unweighted mean, so enforcing a cold dimension would move the bar for every
+  post at once. Clear `DEFAULT_GATE.advisoryDimensions` to enforce. Scoring
+  8.0-8.5 on every post so far.
+- **Real demand signal.** See [[concepts/demand-signal]] — the previous one was
+  unavailable in half of all runs and ~27% junk.
+- **Search Console wired in.** [[modules/gsc]]. Note for future confusion: GSC
+  was already set up in the *lead-scout* repo (SA granted 2026-07-16); it had
+  simply never been connected to this pipeline. The service account with actual
+  property access on both sites is `visibility-fetcher@pulse-hvac-automation`,
+  NOT the similarly-named `google-search-console-mcp`, which has none.
+
+**Deferred to next week:** feed `findOpportunities()` into candidate
+*generation*. Topics are still invented blind and demand only re-sorts them, so
+a near-miss like `ac installation citrus heights` (2,630 impressions at position
+9.4) cannot surface unless the model happens to propose it. Held back so the
+first fully autonomous cron run tests the shipped state on its own.
+
 ## [2026-08-19] ingest | 2 module page(s) updated
 
 - [[modules/gsc|Gsc]] — Google Search Console — the only first-party demand signal available.

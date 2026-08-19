@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-08-19T04:21:45.907Z*
+*Generated on: 2026-08-19T13:53:00.558Z*
 
 ## Summary
 
-*   **Total Wiki Files**: 39
+*   **Total Wiki Files**: 42
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 8
+*   **Orphan Pages**: 9
 *   **Stale Pages**: 0
 
 > [!NOTE]
@@ -17,12 +17,13 @@
 
 *The following pages have no incoming links:*
 
-*   [[concepts/topic-deduplication]]
+*   [[concepts/ci-heal]]
+*   [[concepts/demand-signal]]
+*   [[concepts/shared-rubric]]
 *   [[concepts/weather-season-targeting]]
 *   [[modules/cli-repair]]
 *   [[modules/cli-review]]
 *   [[modules/cli-rewrite]]
-*   [[modules/gsc]]
 *   [[modules/index]]
 *   [[modules/keywords]]
 
