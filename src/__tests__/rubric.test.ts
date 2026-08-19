@@ -57,13 +57,25 @@ test("code-appended FAQ tells the writer not to write one and the reviewer not t
 });
 
 test("constraints propagate to writer, reviewer and checker in lockstep", () => {
-  const c: RubricConstraints = { ...C, minWords: 1200, maxWords: 1500 };
+  const c: RubricConstraints = {
+    ...C,
+    minWords: 1200,
+    maxWords: 1500,
+    hardMinWords: 1150,
+    hardMaxWords: 1600,
+  };
 
   assert.match(writerRubricRules(c), /between 1200 and 1500 words/);
-  assert.match(reviewer(c), /roughly 1200-1500 words/);
-  assert.deepEqual(
+  assert.match(reviewer(c), /targets 1200-1500 words/);
+  assert.equal(
     checkArticleBody("word ".repeat(900), c).filter((v) => v.rule === "word-count").length,
     1,
+    "900 words is below the 1150 floor",
+  );
+  assert.equal(
+    checkArticleBody("word ".repeat(1550), c).filter((v) => v.rule === "word-count").length,
+    0,
+    "1550 is over target but inside the tolerance band",
   );
 });
 
