@@ -5,7 +5,7 @@ description: "Evaluates blog post drafts against SEO, keyword target, and qualit
 tags: ["review", "rubric", "quality-gate"]
 timestamp: "2026-08-19"
 sources: ["src/review.ts"]
-source_hash: "b44173d4c49eb62d"
+source_hash: "f6b8c7cf863ef26f"
 ---
 # Blog Post Reviewer
 
@@ -15,6 +15,7 @@ AI-powered quality review of a draft blog post. Mirrors the structured-JSON patt
 
 ## Related
 
+- [[modules/rubric]]
 - [[modules/types]]
 
 ## API Interface
@@ -24,6 +25,9 @@ AI-powered quality review of a draft blog post. Mirrors the structured-JSON patt
 
 ### `ReviewDimension`
 *No description provided.*
+
+### `DIMENSION_LABELS`
+Rubric headings, shared by the prompt renderer.
 
 ### `DimensionScore`
 *No description provided.*

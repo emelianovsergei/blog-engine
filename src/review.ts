@@ -6,6 +6,11 @@
  * compute the pass/fail gate ourselves so the verdict is deterministic and
  * never just trusted from the model.
  */
+import {
+  DEFAULT_RUBRIC_CONSTRAINTS,
+  reviewerRubric,
+  type RubricConstraints,
+} from "./rubric.js";
 import type {
   EngineConfig,
   ExistingPostLike,
@@ -15,6 +20,20 @@ import type {
 export const DEFAULT_REVIEW_MODEL = "grok-4.6";
 
 export type ReviewDimension = "contentQuality" | "seoMetadata" | "brandVoiceFit";
+
+/** Rubric headings, shared by the prompt renderer. */
+export const DIMENSION_LABELS: Record<string, string> = {
+  contentQuality: "CONTENT QUALITY",
+  seoMetadata: "SEO & METADATA",
+  brandVoiceFit: "BRAND VOICE & SITE FIT",
+};
+
+/** Title-case variants used in the rendered review report. */
+const REPORT_LABELS: Record<string, string> = {
+  contentQuality: "Content Quality",
+  seoMetadata: "SEO & Metadata",
+  brandVoiceFit: "Brand Voice & Fit",
+};
 
 const ALL_DIMENSIONS: readonly ReviewDimension[] = [
   "contentQuality",
@@ -83,6 +102,8 @@ export interface ReviewBlogPostArgs {
   model?: string;
   /** Overrides the default gate (testing / forced-strict mode). */
   gate?: ReviewGate;
+  /** Site-specific rubric numbers; defaults to DEFAULT_RUBRIC_CONSTRAINTS. */
+  rubric?: RubricConstraints;
 }
 
 export const reviewSchema = {
@@ -198,6 +219,7 @@ export function buildVerifiedFacts(frontmatter: BlogPostFrontmatter): string {
 
 function buildPrompt(args: ReviewBlogPostArgs): string {
   const { config, frontmatter, markdown, existingPosts } = args;
+  const rubric = args.rubric ?? DEFAULT_RUBRIC_CONSTRAINTS;
   const categoryLines = config.categories
     .map((c) => `- ${c.id} (${c.label}): ${c.guidance}`)
     .join("\n");
@@ -220,30 +242,13 @@ ${categoryLines}
 
 Rubric — score each dimension 0 to 10 (10 = excellent, 7 = solid publish, 5 = needs work, 0 = unusable). Flag concrete issues with severity (blocker | major | minor) and a concrete suggested fix.
 
-1. CONTENT QUALITY (contentQuality)
+${reviewerRubric(rubric, { dimensionLabels: DIMENSION_LABELS })}
+
+Site-wide requirements that apply regardless of dimension:
    - Factually plausible for HVAC / appliance / home-services domain. No obvious technical errors.
-   - Concrete and actionable: specific steps, numbers, model names — not generic filler.
    - Well structured: clear intro, scannable subheads, sensible conclusion.
-   - Body length roughly 600-1500 words for a weekly post.
-   - No hallucinated stats, dollar amounts, model numbers, or rebate values.
-   - GEO (answer-first): the opening sentence — and the first sentence under each H2 — should directly answer the question, not warm up. Reward at least one cited statistic from an authoritative source early on. Any numbers/prices in an FAQ MUST match the body (no contradictions).
-
-2. SEO & METADATA (seoMetadata)
-   - frontmatter.title present, 40-65 characters, includes a primary keyword.
-   - frontmatter.description present, 120-160 characters, includes a keyword variant.
-   - frontmatter.slug kebab-case, descriptive, under 60 characters.
-   - frontmatter.tags 2-6 items, relevant.
-   - frontmatter.category MUST be one of: ${allowedIds}.
-   - Body uses logical H2/H3 structure. Service-area mentions feel natural, not stuffed.
-   - Keyword targeting (GEO): if frontmatter has a primary/target keyword (e.g. frontmatter.targetKeyword), it should be front-loaded in the title and appear naturally in the description and the first ~100 words of the body. Penalise keyword stuffing — e.g. raw keyword phrases jammed into sentences or FAQ answers (a known ranking penalty).
-   - FAQ for AI search: reward a genuine FAQ section answering real questions (and matching FAQPage frontmatter.faqs) — it is a strong signal for citation by AI search engines. A missing FAQ is a minor gap, not a blocker.
-
-3. BRAND VOICE & SITE FIT (brandVoiceFit)
-   - Tone: knowledgeable, helpful, plainspoken — like a trusted local contractor.
-   - Topic clearly fits this site's category set (above). Off-scope topics fail this dimension.
-   - References Sacramento context naturally where relevant (climate, utilities like SMUD, local building styles).
-   - No off-brand content (politics, unrelated services, generic national filler).
-   - If a CTA mentions the business, it does so naturally — not over-promotional.
+   - Topic clearly fits this site's category set (above). Off-scope topics fail brandVoiceFit.
+   - frontmatter.category is set by the pipeline, not by the writer — treat "${allowedIds}" as ground truth and never raise an issue about it.
 
 Recent published titles for duplication awareness:
 ${recentTitles}
@@ -466,15 +471,8 @@ export async function reviewBlogPost(args: ReviewBlogPostArgs): Promise<ReviewRe
  */
 export function renderReviewMarkdown(result: ReviewResult): string {
   const verdict = result.pass ? "PASS" : "FAIL";
-  const scoreRow = (s: DimensionScore): string => {
-    const label =
-      s.dimension === "contentQuality"
-        ? "Content Quality"
-        : s.dimension === "seoMetadata"
-          ? "SEO & Metadata"
-          : "Brand Voice & Fit";
-    return `| ${label} | ${s.score.toFixed(1)}/10 | ${s.reasoning} |`;
-  };
+  const scoreRow = (s: DimensionScore): string =>
+    `| ${REPORT_LABELS[s.dimension] ?? s.dimension} | ${s.score.toFixed(1)}/10 | ${s.reasoning} |`;
 
   const issuesBlock =
     result.issues.length === 0
