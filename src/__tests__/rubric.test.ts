@@ -139,3 +139,21 @@ test("an FAQ written into the body is caught when FAQs are code-appended", () =>
   const violations = checkArticleBody("## Frequently Asked Questions\n\nQ?");
   assert.ok(violations.some((v) => v.rule === "faq-authorship"));
 });
+
+// Ported from promax's writer prompt, which was richer than pulse's. Sharing
+// the rules must level UP the weaker site, never level down the stronger one.
+test("hedge-heavy prose is caught, occasional conditional language is not", () => {
+  const hedgy =
+    "It might be the capacitor. It could possibly be the fan, and it probably seems to need service.";
+  assert.ok(checkArticleBody(hedgy).some((v) => v.rule === "no-hedging"));
+
+  const direct =
+    "Replace the capacitor. A failing fan motor can draw more amps as bearings wear, so measure it.";
+  assert.ok(!checkArticleBody(direct).some((v) => v.rule === "no-hedging"));
+});
+
+test("writer gets the hedge list and the citation format", () => {
+  const rendered = writerRubricRules();
+  assert.match(rendered, /Forbidden hedges: might, maybe/);
+  assert.match(rendered, /\[anchor text\]\(https:\/\/example\.gov\/page\)/);
+});
