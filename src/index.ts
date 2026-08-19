@@ -85,6 +85,14 @@ export {
 } from "./suggest.js";
 export { researchKeywords, keywordGuidance, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
 export { scoreDemand, toSearchQuery } from "./demand.js";
+export {
+  loadGscSignal,
+  fetchSearchAnalytics,
+  parseServiceAccountJson,
+  buildJwtAssertion,
+  findOpportunities,
+  mergeDemand,
+} from "./gsc.js";
 
 export type {
   EngineConfig,
@@ -123,6 +131,15 @@ export type {
   KeywordProvenance,
 } from "./keywords.js";
 export type { DemandResult, ScoreDemandArgs, CandidateDemand } from "./demand.js";
+export type {
+  GscCredentials,
+  GscQueryRow,
+  GscSignal,
+  GscStatus,
+  OpportunityQuery,
+  MergedDemand,
+  LoadGscSignalArgs,
+} from "./gsc.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
 export type {
