@@ -16,6 +16,8 @@ export {
   renderReviewMarkdown,
   DEFAULT_REVIEW_MODEL,
   DEFAULT_GATE,
+  DIMENSION_LABELS,
+  buildVerifiedFacts,
 } from "./review.js";
 export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 
@@ -39,6 +41,21 @@ export {
   checkLinks,
   citationGuidance,
 } from "./links.js";
+
+export {
+  DEFAULT_RUBRIC_CONSTRAINTS,
+  RUBRIC_RULES,
+  writerRubricRules,
+  plannerRubricRules,
+  reviewerRubric,
+  checkArticleBody,
+} from "./rubric.js";
+export type {
+  RubricConstraints,
+  RubricRule,
+  RubricAudience,
+  RubricViolation,
+} from "./rubric.js";
 
 export {
   auditLinks,
