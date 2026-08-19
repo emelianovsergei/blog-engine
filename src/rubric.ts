@@ -41,6 +41,8 @@ export interface RubricConstraints {
   requiredHeadings: readonly string[];
   bannedWords: readonly string[];
   bannedOpeners: readonly string[];
+  /** Weasel verbs that turn advice into a non-answer. */
+  bannedHedges: readonly string[];
   /** Max em-dashes per 150 words before it reads as machine-written. */
   maxEmDashesPer150Words: number;
   businessName?: string;
@@ -70,6 +72,17 @@ export const DEFAULT_RUBRIC_CONSTRAINTS: RubricConstraints = {
     "It's important to note",
     "In conclusion",
     "Whether you're",
+  ],
+  bannedHedges: [
+    "might",
+    "maybe",
+    "perhaps",
+    "possibly",
+    "arguably",
+    "probably",
+    "seems to",
+    "appears to",
+    "tends to",
   ],
   maxEmDashesPer150Words: 1,
 };
@@ -120,6 +133,30 @@ export const RUBRIC_RULES: readonly RubricRule[] = [
       "Include at least one cited statistic or concrete authoritative data point within the first 200 words, attributed to a source from your citation list. State the number, not just the link.",
     criterion: () =>
       "Rewards at least one cited statistic from an authoritative source early on — a bare link with no figure does not count.",
+  },
+  {
+    id: "no-hedging",
+    dimension: "contentQuality",
+    audience: ["writer", "reviewer"],
+    instruction: (c) =>
+      `State findings and guidance directly. Forbidden hedges: ${c.bannedHedges.join(", ")}. ("may" and "can" are fine when describing a real conditional outcome, not as stylistic softeners.) No rhetorical questions and no "it depends" openers.`,
+    criterion: () =>
+      "Direct and committed — a homeowner gets an actual recommendation. Penalise stacked hedging, rhetorical-question openers and \"it depends\" non-answers.",
+    check: (body, c) => {
+      const hits = c.bannedHedges.filter((h) =>
+        new RegExp(`\\b${h.replace(/\s+/g, "\\s+")}\\b`, "i").test(body),
+      );
+      return hits.length >= 3
+        ? `prose hedges repeatedly (${hits.slice(0, 4).join(", ")})`
+        : null;
+    },
+  },
+  {
+    id: "citation-format",
+    dimension: "contentQuality",
+    audience: ["writer"],
+    instruction: () =>
+      "Format every citation as a markdown link — `[anchor text](https://example.gov/page)`. The figure must be verifiable at the URL you cite; never attach a real source to an invented number.",
   },
   {
     id: "concrete-not-filler",
