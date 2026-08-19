@@ -296,6 +296,34 @@ export const RUBRIC_RULES: readonly RubricRule[] = [
     criterion: () =>
       "Tone is knowledgeable, helpful, plainspoken — like a trusted local contractor. No off-brand or generic national filler. Any CTA mentions the business naturally, not over-promotionally.",
   },
+  // ---- humanVoice ---------------------------------------------------------
+  {
+    id: "no-ai-tells",
+    dimension: "humanVoice",
+    audience: ["writer", "reviewer"],
+    instruction: (c) =>
+      `Do not write like a language model. Never open a paragraph with ${c.bannedOpeners.map((o) => `"${o}"`).join(", ")}. Vary sentence length — put a four-word sentence next to a thirty-word one. Vary paragraph length too; uniform blocks are the clearest tell. Do not stack three identically shaped bullet lists. Keep em-dashes rare.`,
+    criterion: () =>
+      "Reads as written by a person, not generated. Penalise uniform paragraph rhythm, stock openers, three identically shaped lists in a row, heavy em-dash use, and a closing paragraph that only restates the intro.",
+  },
+  {
+    id: "field-specificity",
+    dimension: "humanVoice",
+    audience: ["writer", "reviewer"],
+    instruction: () =>
+      "Include at least one concrete scenario with a real detail — the kind of thing only someone who has done the work would say (a 2009 unit in a 1970s tract house, a filter nobody had changed since the last owner, what the technician actually found). Specific beats comprehensive.",
+    criterion: () =>
+      "Rewards at least one concrete, lived-in scenario with real detail over generic advice that could describe any house in any city.",
+  },
+  {
+    id: "opinionated",
+    dimension: "humanVoice",
+    audience: ["writer", "reviewer"],
+    instruction: () =>
+      "Take a position and give the reason for it. Name the real trade-off rather than listing every option neutrally — e.g. \"skip annual duct cleaning unless you have had rodents or a remodel, because it rarely changes airflow enough to notice.\"",
+    criterion: () =>
+      "Rewards a clear recommendation with its reasoning, and a named trade-off. Penalise neutral option-listing that leaves the homeowner without an answer.",
+  },
   {
     id: "required-headings",
     dimension: "brandVoiceFit",

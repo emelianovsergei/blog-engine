@@ -19,13 +19,18 @@ import type {
 
 export const DEFAULT_REVIEW_MODEL = "grok-4.6";
 
-export type ReviewDimension = "contentQuality" | "seoMetadata" | "brandVoiceFit";
+export type ReviewDimension =
+  | "contentQuality"
+  | "seoMetadata"
+  | "brandVoiceFit"
+  | "humanVoice";
 
 /** Rubric headings, shared by the prompt renderer. */
 export const DIMENSION_LABELS: Record<string, string> = {
   contentQuality: "CONTENT QUALITY",
   seoMetadata: "SEO & METADATA",
   brandVoiceFit: "BRAND VOICE & SITE FIT",
+  humanVoice: "HUMAN VOICE",
 };
 
 /** Title-case variants used in the rendered review report. */
@@ -33,12 +38,14 @@ const REPORT_LABELS: Record<string, string> = {
   contentQuality: "Content Quality",
   seoMetadata: "SEO & Metadata",
   brandVoiceFit: "Brand Voice & Fit",
+  humanVoice: "Human Voice",
 };
 
 const ALL_DIMENSIONS: readonly ReviewDimension[] = [
   "contentQuality",
   "seoMetadata",
   "brandVoiceFit",
+  "humanVoice",
 ];
 
 export interface DimensionScore {
@@ -61,12 +68,24 @@ export interface ReviewGate {
   minOverall: number;
   minPerDimension: number;
   blockOnAnyBlocker: boolean;
+  /**
+   * Dimensions that are scored and reported but never gate a publish —
+   * excluded from the overall mean, the per-dimension floor, and blockers.
+   * Lets a new dimension run in production long enough to calibrate before
+   * it can strand posts.
+   */
+  advisoryDimensions?: readonly ReviewDimension[];
 }
 
 export const DEFAULT_GATE: ReviewGate = {
   minOverall: 7.0,
   minPerDimension: 6.0,
   blockOnAnyBlocker: true,
+  // humanVoice ships advisory: scored, reported and fed to the rewriter, but
+  // excluded from the gate until there are enough real scores to calibrate
+  // against. `overall` is an unweighted mean, so gating on a cold dimension
+  // silently moves the bar for every post at once. Set to [] to enforce.
+  advisoryDimensions: ["humanVoice"],
 };
 
 export interface ReviewResult {
@@ -116,7 +135,7 @@ export const reviewSchema = {
         properties: {
           dimension: {
             type: "string",
-            enum: ["contentQuality", "seoMetadata", "brandVoiceFit"],
+            enum: ["contentQuality", "seoMetadata", "brandVoiceFit", "humanVoice"],
           },
           score: { type: "number", description: "0 to 10" },
           reasoning: { type: "string", description: "1-2 sentences justifying the score" },
@@ -131,7 +150,7 @@ export const reviewSchema = {
         properties: {
           dimension: {
             type: "string",
-            enum: ["contentQuality", "seoMetadata", "brandVoiceFit"],
+            enum: ["contentQuality", "seoMetadata", "brandVoiceFit", "humanVoice"],
           },
           severity: { type: "string", enum: ["blocker", "major", "minor"] },
           message: { type: "string" },
@@ -301,15 +320,12 @@ function parseScores(raw: unknown): DimensionScore[] {
   for (const entry of raw as RawScore[]) {
     if (!entry || typeof entry !== "object") continue;
     const dim = entry.dimension;
-    if (
-      dim !== "contentQuality" &&
-      dim !== "seoMetadata" &&
-      dim !== "brandVoiceFit"
-    ) {
-      continue;
-    }
-    byDim.set(dim, {
-      dimension: dim,
+    // Derived from ALL_DIMENSIONS so adding a dimension cannot silently drop
+    // it here while the missing-dimension check below rejects the response.
+    if (!ALL_DIMENSIONS.includes(dim as ReviewDimension)) continue;
+    const dimension = dim as ReviewDimension;
+    byDim.set(dimension, {
+      dimension,
       score: clamp01to10(entry.score),
       reasoning: typeof entry.reasoning === "string" ? entry.reasoning : "",
     });
@@ -371,11 +387,16 @@ function computeGate(
   issues: ReviewIssue[],
   gate: ReviewGate,
 ): { pass: boolean; overall: number; reasoning: string } {
-  const overall =
-    scores.reduce((sum, s) => sum + s.score, 0) / scores.length;
-  const failingDim = scores.find((s) => s.score < gate.minPerDimension);
+  const advisory = new Set(gate.advisoryDimensions ?? []);
+  const gating = scores.filter((s) => !advisory.has(s.dimension));
+  // Falling back to `scores` keeps a gate that marks every dimension advisory
+  // from dividing by zero; such a config simply never fails.
+  const counted = gating.length > 0 ? gating : scores;
+  const overall = counted.reduce((sum, s) => sum + s.score, 0) / counted.length;
+  const failingDim = counted.find((s) => s.score < gate.minPerDimension);
   const hasBlocker =
-    gate.blockOnAnyBlocker && issues.some((i) => i.severity === "blocker");
+    gate.blockOnAnyBlocker &&
+    issues.some((i) => i.severity === "blocker" && !advisory.has(i.dimension));
 
   if (failingDim) {
     return {
@@ -469,10 +490,56 @@ export async function reviewBlogPost(args: ReviewBlogPostArgs): Promise<ReviewRe
  * Renders a `ReviewResult` as a Markdown summary suitable for posting as a
  * sticky PR comment. Deterministic — used by the CLI.
  */
-export function renderReviewMarkdown(result: ReviewResult): string {
+/**
+ * Load a ReviewResult that was written to disk, possibly by an older engine.
+ *
+ * `parseScores` stays strict for fresh model output — a model that omits a
+ * dimension is a real failure the retry loop should absorb. Persisted JSON is
+ * different: a review-result.json written before humanVoice existed is still
+ * perfectly usable as rewrite input, and the CLI previously did a bare
+ * `JSON.parse(raw) as ReviewResult` with no validation at all.
+ */
+export function parseReviewResult(raw: unknown): ReviewResult {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Review result is not an object");
+  }
+  const r = raw as Record<string, unknown>;
+  const scores = Array.isArray(r.scores)
+    ? r.scores
+        .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
+        .filter((s) => ALL_DIMENSIONS.includes(s.dimension as ReviewDimension))
+        .map((s) => ({
+          dimension: s.dimension as ReviewDimension,
+          score: typeof s.score === "number" ? s.score : 0,
+          reasoning: typeof s.reasoning === "string" ? s.reasoning : "",
+        }))
+    : [];
+  const issues = Array.isArray(r.issues)
+    ? r.issues.filter((i): i is ReviewIssue => typeof i === "object" && i !== null)
+    : [];
+
+  return {
+    pass: r.pass === true,
+    overallScore: typeof r.overallScore === "number" ? r.overallScore : 0,
+    scores,
+    issues,
+    suggestions: Array.isArray(r.suggestions)
+      ? r.suggestions.filter((x): x is string => typeof x === "string")
+      : [],
+    summary: typeof r.summary === "string" ? r.summary : "",
+    thresholdReasoning: typeof r.thresholdReasoning === "string" ? r.thresholdReasoning : "",
+    modelUsed: typeof r.modelUsed === "string" ? r.modelUsed : "unknown",
+  };
+}
+
+export function renderReviewMarkdown(result: ReviewResult, gate: ReviewGate = DEFAULT_GATE): string {
   const verdict = result.pass ? "PASS" : "FAIL";
-  const scoreRow = (s: DimensionScore): string =>
-    `| ${REPORT_LABELS[s.dimension] ?? s.dimension} | ${s.score.toFixed(1)}/10 | ${s.reasoning} |`;
+  const advisory = new Set(gate.advisoryDimensions ?? []);
+  const scoreRow = (s: DimensionScore): string => {
+    const label = REPORT_LABELS[s.dimension] ?? s.dimension;
+    const tag = advisory.has(s.dimension) ? " _(advisory — not gated)_" : "";
+    return `| ${label}${tag} | ${s.score.toFixed(1)}/10 | ${s.reasoning} |`;
+  };
 
   const issuesBlock =
     result.issues.length === 0

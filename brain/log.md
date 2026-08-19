@@ -13,6 +13,13 @@ sources: []
 - [[modules/index|Index]] — Public API of the blog topic-selection engine.
 - [[modules/review|Blog Post Reviewer]] — Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria.
 - [[modules/rubric|Rubric]] — The single source of truth for what a good post is.
+- [[modules/cli-rewrite|Cli Rewrite]] — blog-engine-rewrite — apply a previous review's feedback to revise a post.
+
+## [2026-08-19] ingest | 4 module page(s) updated
+
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/review|Blog Post Reviewer]] — Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria.
+- [[modules/rubric|Rubric]] — The single source of truth for what a good post is.
 - [[modules/cli-review|Cli Review]] — blog-engine-review — AI quality review for a draft blog post.
 
 ## [2026-08-19] ingest | 9 module page(s) updated
