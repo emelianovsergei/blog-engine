@@ -3,9 +3,9 @@ type: "module"
 title: "Blog Post Reviewer"
 description: "Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria."
 tags: ["review", "rubric", "quality-gate"]
-timestamp: "2026-08-18"
+timestamp: "2026-08-19"
 sources: ["src/review.ts"]
-source_hash: "8b051a855deb44bf"
+source_hash: "b44173d4c49eb62d"
 ---
 # Blog Post Reviewer
 
@@ -44,6 +44,9 @@ AI-powered quality review of a draft blog post. Mirrors the structured-JSON patt
 *No description provided.*
 
 ### `ReviewBlogPostArgs`
+*No description provided.*
+
+### `reviewSchema`
 *No description provided.*
 
 ### `buildVerifiedFacts`

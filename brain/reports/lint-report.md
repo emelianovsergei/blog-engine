@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-08-18T18:16:02.658Z*
+*Generated on: 2026-08-19T00:29:16.746Z*
 
 ## Summary
 
-*   **Total Wiki Files**: 35
+*   **Total Wiki Files**: 37
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 9
+*   **Orphan Pages**: 7
 *   **Stale Pages**: 0
 
 > [!NOTE]
@@ -19,11 +19,9 @@
 
 *   [[concepts/topic-deduplication]]
 *   [[concepts/weather-season-targeting]]
+*   [[modules/cli-repair]]
 *   [[modules/cli-review]]
 *   [[modules/cli-rewrite]]
 *   [[modules/index]]
 *   [[modules/keywords]]
-*   [[modules/link-repair]]
-*   [[modules/links]]
-*   [[modules/planning]]
 

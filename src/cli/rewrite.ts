@@ -14,6 +14,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { rewriteBlogPost } from "../rewrite.js";
+import { auditAndRepairFile } from "../link-audit.js";
+import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
 import type { ReviewResult } from "../review.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
 import {
@@ -28,7 +30,9 @@ function usage(): string {
   return `Usage: blog-engine-rewrite --post <path.md> --review <result.json> --site pulse|promax \\
                            --business "<Business Name>" \\
                            --service-areas "Sacramento,Roseville,..." \\
-                           [--notes-out change-notes.md] [--model grok-4.6]`;
+                           [--notes-out change-notes.md] [--model grok-4.6] \\
+                           [--link-policy content/policy/link-constraints.json] \\
+                           [--audit-out rewrite-audit.json] [--no-link-audit]`;
 }
 
 async function main(): Promise<number> {
@@ -42,7 +46,23 @@ async function main(): Promise<number> {
   const reviewPath = resolve(requireFlag(args, "review"));
   const notesOut = optionalFlag(args, "notes-out");
   const model = optionalFlag(args, "model");
+  const linkPolicyPath = optionalFlag(args, "link-policy");
+  const auditOut = optionalFlag(args, "audit-out");
+  const skipAudit = args.flags.has("no-link-audit");
   const config = composeConfig(args);
+
+  // A missing or unreadable policy must not stop the fix — degrade to "no
+  // policy" and let the @smoke guard remain the backstop, exactly as the
+  // generation path does.
+  let linkPolicy = EMPTY_LINK_POLICY;
+  if (linkPolicyPath) {
+    try {
+      linkPolicy = parseLinkPolicy(JSON.parse(await readFile(resolve(linkPolicyPath), "utf8")));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`blog-engine-rewrite: link policy unreadable (${linkPolicyPath}): ${msg}\n`);
+    }
+  }
 
   const source = await readFile(postPath, "utf8");
   const { frontmatter, body } = parseDocument(source);
@@ -56,10 +76,28 @@ async function main(): Promise<number> {
     frontmatter,
     markdown: body,
     reviewFeedback,
+    linkPolicy,
     ...(model ? { model } : {}),
   });
 
-  const revisedDoc = serializeDocument(result.frontmatter, result.markdown);
+  // Audit AFTER serialization: the model can reintroduce a denylisted URL in
+  // either the body or a frontmatter citation, and both live in the file.
+  let revisedDoc = serializeDocument(result.frontmatter, result.markdown);
+  let auditSummary: unknown;
+  if (!skipAudit) {
+    const { text, audit } = await auditAndRepairFile(revisedDoc, linkPolicy);
+    revisedDoc = text;
+    auditSummary = audit;
+    for (const { url, reason } of audit.removed) {
+      process.stderr.write(`\u{1F517} removed dead link ${url} — ${reason}\n`);
+    }
+    for (const { url, reason } of audit.unresolved) {
+      process.stderr.write(`\u{1F517} UNRESOLVED ${url} — ${reason} (needs a human)\n`);
+    }
+    if (auditOut) {
+      await writeFile(resolve(auditOut), `${JSON.stringify(audit, null, 2)}\n`, "utf8");
+    }
+  }
   await writeFile(postPath, revisedDoc, "utf8");
 
   if (notesOut) {
@@ -70,7 +108,9 @@ async function main(): Promise<number> {
     );
   }
 
-  process.stdout.write(`${JSON.stringify({ changeNotes: result.changeNotes, modelUsed: result.modelUsed }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ changeNotes: result.changeNotes, modelUsed: result.modelUsed, linkAudit: auditSummary }, null, 2)}\n`,
+  );
   return 0;
 }
 

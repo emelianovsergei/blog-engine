@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { rewriteBlogPost } from "../rewrite.js";
 import type { BlogPostFrontmatter, ReviewResult } from "../review.js";
+import { parseLinkPolicy } from "../links.js";
 import { makeFakeGemini, sampleConfig } from "./fakes.js";
 import type { GenerateContentCall } from "./fakes.js";
 
@@ -130,4 +131,74 @@ test("prompt embeds the failing review's issues and dimension scores", async () 
   assert.match(prompt, /Mention SMUD/);
   // Includes site context.
   assert.match(prompt, new RegExp(sampleConfig.businessName));
+});
+
+// Regression: on 2026-08-18 generation stripped a denylisted DOE URL, the
+// reviewer asked for a cited statistic, and the auto-fix rewrite put the same
+// URL straight back — because the rewrite prompt had never heard of the link
+// policy. The post failed @smoke and could never merge (pulse a99f27b).
+test("rewrite prompt carries the dead-link policy when one is supplied", async () => {
+  const calls: GenerateContentCall[] = [];
+  const gemini = makeFakeGemini({
+    generateText: JSON.stringify({
+      frontmatter: { ...frontmatter, description: "x".repeat(130) },
+      markdown,
+      changeNotes: "Lengthened the description.",
+    }),
+    capture: calls,
+  });
+
+  await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter,
+    markdown,
+    reviewFeedback: failingReview,
+    linkPolicy: parseLinkPolicy({ deniedUrlFragments: ["energy.gov/energysaver/"] }),
+  });
+
+  const prompt = String(calls[0]!.contents);
+  assert.match(prompt, /energy\.gov\/energysaver\//);
+  assert.match(prompt, /NEVER reintroduce/i);
+});
+
+test("rewrite prompt still includes accuracy rules and citable sources", async () => {
+  const calls: GenerateContentCall[] = [];
+  const gemini = makeFakeGemini({
+    generateText: JSON.stringify({ frontmatter, markdown, changeNotes: "No change." }),
+    capture: calls,
+  });
+
+  await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: {
+      ...frontmatter,
+      citations: [{ name: "ASHRAE", url: "https://www.ashrae.org" }],
+    },
+    markdown,
+    reviewFeedback: failingReview,
+  });
+
+  const prompt = String(calls[0]!.contents);
+  assert.match(prompt, /Do NOT invent statistics/);
+  assert.match(prompt, /ASHRAE: https:\/\/www\.ashrae\.org/);
+});
+
+test("without a policy the rewrite prompt gains no link section", async () => {
+  const calls: GenerateContentCall[] = [];
+  const gemini = makeFakeGemini({
+    generateText: JSON.stringify({ frontmatter, markdown, changeNotes: "No change." }),
+    capture: calls,
+  });
+
+  await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter,
+    markdown,
+    reviewFeedback: failingReview,
+  });
+
+  assert.doesNotMatch(String(calls[0]!.contents), /Outbound links/);
 });

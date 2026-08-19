@@ -14,6 +14,8 @@
  * which CI owns.
  */
 import type { EngineConfig, GeminiLike } from "./types.js";
+import { citationGuidance, EMPTY_LINK_POLICY, type LinkPolicy } from "./links.js";
+import { writerAccuracyRules } from "./planning.js";
 import type {
   BlogPostFrontmatter,
   ReviewIssue,
@@ -32,6 +34,15 @@ export interface RewriteBlogPostArgs {
   reviewFeedback: ReviewResult;
   /** Defaults to `grok-4.6`. */
   model?: string;
+  /**
+   * Dead-link policy. Without it a rewrite can reintroduce exactly the URL
+   * generation just stripped — the reviewer asks for a citation, and the only
+   * prompt in the pipeline that never heard of the policy supplies one.
+   * Defaults to `EMPTY_LINK_POLICY` (pre-0.12.0 behavior).
+   */
+  linkPolicy?: LinkPolicy;
+  /** Grounding sources; falls back to `frontmatter.citations`. */
+  citations?: ReadonlyArray<{ name?: string; url?: string }>;
 }
 
 export interface RewriteResult {
@@ -67,6 +78,18 @@ const rewriteSchema = {
   required: ["frontmatter", "markdown", "changeNotes"],
 };
 
+/** Frontmatter is loosely typed; keep only well-formed citation entries. */
+function frontmatterCitations(
+  frontmatter: BlogPostFrontmatter,
+): ReadonlyArray<{ name?: string; url?: string }> | undefined {
+  const raw = frontmatter.citations;
+  if (!Array.isArray(raw)) return undefined;
+  const entries = raw.filter(
+    (c): c is { name?: string; url?: string } => typeof c === "object" && c !== null,
+  );
+  return entries.length > 0 ? entries : undefined;
+}
+
 function formatIssue(i: ReviewIssue): string {
   const loc = i.location ? ` [${i.location}]` : "";
   return `- ${i.severity.toUpperCase()} (${i.dimension})${loc}: ${i.message}\n  Fix: ${i.suggestion}`;
@@ -74,6 +97,15 @@ function formatIssue(i: ReviewIssue): string {
 
 function buildPrompt(args: RewriteBlogPostArgs): string {
   const { config, frontmatter, markdown, reviewFeedback } = args;
+  const policy = args.linkPolicy ?? EMPTY_LINK_POLICY;
+  const guidance = citationGuidance(policy);
+  // The review that triggered this rewrite frequently asks for a citation.
+  // Without the policy in front of it the model reaches for the same retired
+  // agency page generation just removed, and the post fails @smoke forever.
+  const linkRules = guidance
+    ? `\nOutbound links — these are hard requirements:\n${guidance}\n- NEVER reintroduce a URL that was removed from this post. If a claim needs a source and every obvious URL is denied above, state the finding qualitatively and cite the organisation by name without linking.`
+    : "";
+  const accuracyRules = `\n${writerAccuracyRules(args.citations ?? frontmatterCitations(frontmatter))}`;
   const categoryLines = config.categories
     .map((c) => `- ${c.id} (${c.label}): ${c.guidance}`)
     .join("\n");
@@ -126,7 +158,9 @@ Return JSON conforming to the provided schema with:
 Constraints:
 - Do NOT change the post's topic or category unless an issue explicitly demands it.
 - Keep the same approximate length (within +/- 25%).
-- Maintain the post's tone and Sacramento-local framing.`;
+- Maintain the post's tone and Sacramento-local framing.
+${linkRules}
+${accuracyRules}`;
 }
 
 interface RawRewriteFrontmatter {
