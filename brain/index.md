@@ -46,8 +46,11 @@ sources: []
 ## Core Concepts
 
 *   [[concepts/autofix-loop|Auto-Fix Loop (Review Failure Recovery)]]
+*   [[concepts/ci-heal|Red-CI Self-Heal]]
 *   [[concepts/delivery-guarantee|Delivery Guarantee (Consumer Workflow Set + Watchdog)]]
+*   [[concepts/demand-signal|Search-Demand Signal]]
 *   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]
+*   [[concepts/shared-rubric|One Rubric, Many Prompts]]
 *   [[concepts/topic-deduplication|Topic Deduplication]]
 *   [[concepts/unreachable-success-path|Unreachable Success Paths (Silent Green)]]
 *   [[concepts/weather-season-targeting|Weather & Seasonal Targeting]]
