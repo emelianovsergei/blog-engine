@@ -5,7 +5,7 @@ description: "Evaluates blog post drafts against SEO, keyword target, and qualit
 tags: ["review", "rubric", "quality-gate"]
 timestamp: "2026-08-19"
 sources: ["src/review.ts"]
-source_hash: "f6b8c7cf863ef26f"
+source_hash: "f4bca706dfe64880"
 ---
 # Blog Post Reviewer
 
@@ -59,8 +59,11 @@ Deterministic structural facts injected into the review prompt. The reviewer mod
 ### `reviewBlogPost`
 Reviews a draft blog post. Throws if the model returned an empty response, invalid JSON, or a body missing the required dimension scores. All other shape oddities are clamped/defaulted so we always emit a usable result.
 
+### `parseReviewResult`
+Load a ReviewResult that was written to disk, possibly by an older engine. `parseScores` stays strict for fresh model output — a model that omits a dimension is a real failure the retry loop should absorb. Persisted JSON is different: a review-result.json written before humanVoice existed is still perfectly usable as rewrite input, and the CLI previously did a bare `JSON.parse(raw) as ReviewResult` with no validation at all.
+
 ### `renderReviewMarkdown`
-Renders a `ReviewResult` as a Markdown summary suitable for posting as a sticky PR comment. Deterministic — used by the CLI.
+*No description provided.*
 
 ## Custom Notes
 

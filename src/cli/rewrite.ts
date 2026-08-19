@@ -16,7 +16,7 @@ import { resolve } from "node:path";
 import { rewriteBlogPost } from "../rewrite.js";
 import { auditAndRepairFile } from "../link-audit.js";
 import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
-import type { ReviewResult } from "../review.js";
+import { parseReviewResult } from "../review.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
 import {
   composeConfig,
@@ -67,7 +67,7 @@ async function main(): Promise<number> {
   const source = await readFile(postPath, "utf8");
   const { frontmatter, body } = parseDocument(source);
   const reviewRaw = await readFile(reviewPath, "utf8");
-  const reviewFeedback = JSON.parse(reviewRaw) as ReviewResult;
+  const reviewFeedback = parseReviewResult(JSON.parse(reviewRaw));
 
   const gemini = await makeReviewClient();
   const result = await rewriteBlogPost({

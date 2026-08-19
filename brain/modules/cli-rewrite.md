@@ -5,7 +5,7 @@ description: "blog-engine-rewrite — apply a previous review's feedback to revi
 tags: ["module"]
 timestamp: "2026-08-19"
 sources: ["src/cli/rewrite.ts"]
-source_hash: "5a70f2d9ef3ede6c"
+source_hash: "6f39b80d14416cdb"
 ---
 # Cli Rewrite
 

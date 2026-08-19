@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reviewBlogPost, renderReviewMarkdown, buildVerifiedFacts } from "../review.js";
+import {
+  buildVerifiedFacts,
+  parseReviewResult,
+  renderReviewMarkdown,
+  reviewBlogPost,
+} from "../review.js";
 import type { ReviewDimension } from "../review.js";
 import type { BlogPostFrontmatter } from "../review.js";
 import { makeFakeGemini, sampleConfig } from "./fakes.js";
@@ -41,12 +46,21 @@ function sequencedGemini(texts: string[]): {
   };
 }
 
+// The model must return every dimension, so fixtures fill any the test does
+// not care about with a neutral passing score.
+const ALL_TEST_DIMENSIONS: ReviewDimension[] = [
+  "contentQuality",
+  "seoMetadata",
+  "brandVoiceFit",
+  "humanVoice",
+];
+
 function scoreEntries(
-  values: Record<ReviewDimension, number>,
+  values: Partial<Record<ReviewDimension, number>>,
 ): Array<{ dimension: ReviewDimension; score: number; reasoning: string }> {
-  return (Object.keys(values) as ReviewDimension[]).map((d) => ({
+  return ALL_TEST_DIMENSIONS.map((d) => ({
     dimension: d,
-    score: values[d],
+    score: values[d] ?? 8,
     reasoning: `r-${d}`,
   }));
 }
@@ -89,7 +103,7 @@ test("passes a well-formed post when all scores are above the floor", async () =
 
   assert.equal(result.pass, true);
   assert.ok(result.overallScore > 8 && result.overallScore < 9);
-  assert.equal(result.scores.length, 3);
+  assert.equal(result.scores.length, 4);
   assert.match(result.thresholdReasoning, /Passed/);
   assert.equal(result.modelUsed, "grok-4.6");
 });
@@ -218,6 +232,7 @@ test("clamps out-of-range scores to [0, 10]", async () => {
         { dimension: "contentQuality", score: 12, reasoning: "" },
         { dimension: "seoMetadata", score: -3, reasoning: "" },
         { dimension: "brandVoiceFit", score: 7, reasoning: "" },
+        { dimension: "humanVoice", score: 8, reasoning: "" },
       ],
       issues: [],
       suggestions: [],
@@ -334,7 +349,7 @@ test("retries when the model returns a response missing the scores array, then s
 
   assert.equal(calls(), 2, "should retry once after the scores-less response");
   assert.equal(result.pass, true);
-  assert.equal(result.scores.length, 3);
+  assert.equal(result.scores.length, 4);
 });
 
 test("throws after exhausting retries when scores never appears", async () => {
@@ -406,6 +421,7 @@ test("review prompt includes the verified structural facts block", async () => {
       { dimension: "contentQuality", score: 8, reasoning: "solid" },
       { dimension: "seoMetadata", score: 8, reasoning: "solid" },
       { dimension: "brandVoiceFit", score: 8, reasoning: "solid" },
+      { dimension: "humanVoice", score: 8, reasoning: "solid" },
     ],
     issues: [],
     suggestions: [],
@@ -433,4 +449,125 @@ test("review prompt includes the verified structural facts block", async () => {
 
   assert.match(captured[0]!, /VERIFIED STRUCTURAL FACTS/);
   assert.match(captured[0]!, /frontmatter\.faqs: 1 entries, all well-formed/);
+});
+
+test("an advisory dimension is scored but excluded from the mean and the floor", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      // humanVoice below the 6.0 floor and far below the mean — it must not
+      // fail the post while it is advisory.
+      scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8, humanVoice: 3 }),
+      issues: [],
+      suggestions: [],
+      summary: "ok",
+    },
+  });
+
+  const result = await reviewBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: goodFrontmatter,
+    markdown: goodMarkdown,
+  });
+
+  assert.equal(result.pass, true);
+  assert.equal(result.overallScore, 8, "advisory dimension excluded from the mean");
+  assert.equal(result.scores.length, 4, "but still scored and reported");
+  assert.equal(result.scores.find((s) => s.dimension === "humanVoice")?.score, 3);
+});
+
+test("a blocker raised on an advisory dimension does not fail the post", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8, humanVoice: 4 }),
+      issues: [
+        {
+          dimension: "humanVoice",
+          severity: "blocker",
+          message: "Reads as generated.",
+          suggestion: "Vary the rhythm.",
+        },
+      ],
+      suggestions: [],
+      summary: "ok",
+    },
+  });
+
+  const result = await reviewBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: goodFrontmatter,
+    markdown: goodMarkdown,
+  });
+
+  assert.equal(result.pass, true);
+});
+
+test("clearing advisoryDimensions makes humanVoice gate immediately", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8, humanVoice: 3 }),
+      issues: [],
+      suggestions: [],
+      summary: "ok",
+    },
+  });
+
+  const result = await reviewBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: goodFrontmatter,
+    markdown: goodMarkdown,
+    gate: { minOverall: 7, minPerDimension: 6, blockOnAnyBlocker: true, advisoryDimensions: [] },
+  });
+
+  assert.equal(result.pass, false);
+  assert.match(result.thresholdReasoning, /humanVoice=3\.0 below floor/);
+});
+
+test("parseReviewResult accepts a legacy three-dimension result written on disk", () => {
+  const legacy = {
+    pass: false,
+    overallScore: 6.7,
+    scores: [
+      { dimension: "contentQuality", score: 7, reasoning: "a" },
+      { dimension: "seoMetadata", score: 6, reasoning: "b" },
+      { dimension: "brandVoiceFit", score: 7, reasoning: "c" },
+    ],
+    issues: [],
+    suggestions: [],
+    summary: "s",
+    thresholdReasoning: "t",
+    modelUsed: "grok-4.6",
+  };
+
+  const parsed = parseReviewResult(legacy);
+
+  assert.equal(parsed.scores.length, 3, "no humanVoice, and that is fine for rewrite input");
+  assert.equal(parsed.overallScore, 6.7);
+  assert.equal(parsed.modelUsed, "grok-4.6");
+});
+
+test("parseReviewResult tolerates junk fields rather than throwing", () => {
+  const parsed = parseReviewResult({ scores: [{ dimension: "nope", score: "x" }] });
+
+  assert.equal(parsed.scores.length, 0);
+  assert.equal(parsed.pass, false);
+  assert.equal(parsed.modelUsed, "unknown");
+});
+
+test("the rendered report tags advisory dimensions", () => {
+  const md = renderReviewMarkdown({
+    pass: true,
+    overallScore: 8,
+    scores: scoreEntries({ contentQuality: 8, seoMetadata: 8, brandVoiceFit: 8, humanVoice: 5 }),
+    issues: [],
+    suggestions: [],
+    summary: "ok",
+    thresholdReasoning: "Passed.",
+    modelUsed: "grok-4.6",
+  });
+
+  assert.match(md, /Human Voice _\(advisory — not gated\)_/);
+  assert.doesNotMatch(md, /Content Quality _\(advisory/);
 });

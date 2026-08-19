@@ -18,6 +18,7 @@ export {
   DEFAULT_GATE,
   DIMENSION_LABELS,
   buildVerifiedFacts,
+  parseReviewResult,
 } from "./review.js";
 export { rewriteBlogPost, DEFAULT_REWRITE_MODEL } from "./rewrite.js";
 

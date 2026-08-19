@@ -5,7 +5,7 @@ description: "The single source of truth for what a good post is. Writer, planne
 tags: ["module"]
 timestamp: "2026-08-19"
 sources: ["src/rubric.ts"]
-source_hash: "3c17bd76b0757b70"
+source_hash: "f7c1676b61737e93"
 ---
 # Rubric
 
