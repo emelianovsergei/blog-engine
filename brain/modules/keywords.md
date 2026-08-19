@@ -3,9 +3,9 @@ type: "module"
 title: "Keyword Researcher"
 description: "Extracts and clusters search query suggestions into structured keyword profiles."
 tags: ["seo", "keywords", "clustering"]
-timestamp: "2026-08-18"
+timestamp: "2026-08-19"
 sources: ["src/keywords.ts"]
-source_hash: "7f3e71ee9a62a743"
+source_hash: "677028c0a0ac160a"
 ---
 # Keyword Researcher
 
@@ -26,6 +26,12 @@ Keyword research: turns the selected topic into a real search-demand signal (via
 ### `SearchIntent`
 *No description provided.*
 
+### `DemandSignal`
+*No description provided.*
+
+### `KeywordProvenance`
+*No description provided.*
+
 ### `KeywordResearch`
 *No description provided.*
 
@@ -34,6 +40,9 @@ Keyword research: turns the selected topic into a real search-demand signal (via
 
 ### `researchKeywords`
 *No description provided.*
+
+### `keywordGuidance`
+The keyword block injected into the planner and writer prompts. Lives here rather than in each consumer because the consumer copies said "real Google Autocomplete demand" unconditionally — including when zero suggestions had been fetched and every phrase was model-invented.
 
 ## Custom Notes
 

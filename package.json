@@ -1,6 +1,6 @@
 {
   "name": "blog-engine",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "",
   "type": "module",
   "main": "dist/index.js",
@@ -27,6 +27,7 @@
     "clean": "rm -rf dist",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "smoke:xai": "npx tsx scripts/xai-smoke.ts",
+    "smoke:demand": "npx tsx scripts/demand-smoke.ts",
     "wiki:ingest": "npx tsx scripts/wiki-ingest.ts",
     "wiki:lint": "npx tsx scripts/wiki-lint.ts"
   },

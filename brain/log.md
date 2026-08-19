@@ -8,6 +8,14 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-08-19] ingest | 5 module page(s) updated
+
+- [[modules/demand|Search Demand Scorer]] — Scores candidate blog topics against real search suggest frequency signals.
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/keywords|Keyword Researcher]] — Extracts and clusters search query suggestions into structured keyword profiles.
+- [[modules/rank|Topic Ranker]] — Ranks candidate topics by combining category mix, weather anomaly, and demand scores.
+- [[modules/suggest|Google Autocomplete Client]] — Retrieves autocomplete suggestions from Google's search suggest API.
+
 ## [2026-08-19] ingest | 4 module page(s) updated
 
 - [[modules/index|Index]] — Public API of the blog topic-selection engine.

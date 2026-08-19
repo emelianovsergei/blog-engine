@@ -3,9 +3,9 @@ type: "module"
 title: "Topic Ranker"
 description: "Ranks candidate topics by combining category mix, weather anomaly, and demand scores."
 tags: ["ranking", "candidates", "pipeline"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-19"
 sources: ["src/rank.ts"]
-source_hash: "7aa36392cce526e8"
+source_hash: "119b06fb53e5c9fb"
 ---
 # Topic Ranker
 

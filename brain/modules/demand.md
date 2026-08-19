@@ -3,9 +3,9 @@ type: "module"
 title: "Search Demand Scorer"
 description: "Scores candidate blog topics against real search suggest frequency signals."
 tags: ["demand", "ranking", "seo"]
-timestamp: "2026-07-27"
+timestamp: "2026-08-19"
 sources: ["src/demand.ts"]
-source_hash: "4cee627e221b1d3e"
+source_hash: "f3b2704fab4907ab"
 ---
 # Search Demand Scorer
 
@@ -29,8 +29,11 @@ Reduces a topic sentence to a short keyword query suitable for autocomplete.
 ### `ScoreDemandArgs`
 *No description provided.*
 
+### `CandidateDemand`
+*No description provided.*
+
 ### `scoreDemand`
-Scores each candidate by how many real autocomplete suggestions its core query yields that are actually relevant to the topic (share a content word). More relevant completions => more demonstrated search demand.
+Scores each candidate by how many relevant autocomplete completions its prefix-shaped seed queries yield. Availability is tracked PER CANDIDATE. It used to be a single global OR: if one candidate out of six got completions, every candidate was treated as having a demand signal, and the five whose queries returned nothing scored zero — an arbitrary penalty indistinguishable from genuinely low demand.
 
 ## Custom Notes
 

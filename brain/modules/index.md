@@ -5,7 +5,7 @@ description: "Public API of the blog topic-selection engine."
 tags: ["module"]
 timestamp: "2026-08-19"
 sources: ["src/index.ts"]
-source_hash: "3f8323d8485b71ef"
+source_hash: "1b1dd3cdf056b827"
 ---
 # Index
 

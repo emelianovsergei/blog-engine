@@ -74,8 +74,16 @@ export type { LinkAuditResult, AuditLinksOptions, FileAudit } from "./link-audit
 
 export { unlinkUrl, stripDeadCitations, repairContent } from "./link-repair.js";
 
-export { fetchAutocomplete, expandSeedQueries } from "./suggest.js";
-export { researchKeywords, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
+export {
+  fetchAutocomplete,
+  fetchAutocompleteResult,
+  buildSeedQueries,
+  headTerm,
+  isRelevantSuggestion,
+  DEFAULT_SUGGESTION_DENYLIST,
+  expandSeedQueries,
+} from "./suggest.js";
+export { researchKeywords, keywordGuidance, DEFAULT_KEYWORD_MODEL } from "./keywords.js";
 export { scoreDemand, toSearchQuery } from "./demand.js";
 
 export type {
@@ -106,9 +114,15 @@ export type {
   GrokImageOptions,
 } from "./xai.js";
 export type { CompositeClientOptions } from "./client.js";
-export type { FetchLike } from "./suggest.js";
-export type { KeywordResearch, ResearchKeywordsArgs, SearchIntent } from "./keywords.js";
-export type { DemandResult, ScoreDemandArgs } from "./demand.js";
+export type { FetchLike, SuggestOutcome, SeedQuery, SeedKind } from "./suggest.js";
+export type {
+  KeywordResearch,
+  ResearchKeywordsArgs,
+  SearchIntent,
+  DemandSignal,
+  KeywordProvenance,
+} from "./keywords.js";
+export type { DemandResult, ScoreDemandArgs, CandidateDemand } from "./demand.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
 export type {
