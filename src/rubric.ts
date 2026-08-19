@@ -17,8 +17,16 @@
 import type { ReviewDimension } from "./review.js";
 
 export interface RubricConstraints {
+  /** Target range the writer is asked for. */
   minWords: number;
   maxWords: number;
+  /**
+   * Enforcement band for the deterministic check. Wider than the target on
+   * purpose: rejecting a 1,108-word body against an 1,100-word target burns a
+   * full regeneration for eight words. Aim tight, tolerate slightly wider.
+   */
+  hardMinWords: number;
+  hardMaxWords: number;
   titleMinChars: number;
   titleMaxChars: number;
   descriptionMinChars: number;
@@ -42,6 +50,8 @@ export interface RubricConstraints {
 export const DEFAULT_RUBRIC_CONSTRAINTS: RubricConstraints = {
   minWords: 800,
   maxWords: 1100,
+  hardMinWords: 750,
+  hardMaxWords: 1300,
   titleMinChars: 40,
   titleMaxChars: 65,
   descriptionMinChars: 120,
@@ -135,11 +145,12 @@ export const RUBRIC_RULES: readonly RubricRule[] = [
     audience: ["writer", "reviewer"],
     instruction: (c) =>
       `Write between ${c.minWords} and ${c.maxWords} words. Do not exceed ${c.maxWords}.`,
-    criterion: (c) => `Body length is roughly ${c.minWords}-${c.maxWords} words.`,
+    criterion: (c) =>
+      `Body length targets ${c.minWords}-${c.maxWords} words. Anything within ${c.hardMinWords}-${c.hardMaxWords} is acceptable — do not raise an issue for a marginal overrun.`,
     check: (body, c) => {
       const n = countWords(body);
-      if (n < c.minWords) return `body is ${n} words, below the ${c.minWords}-word minimum`;
-      if (n > c.maxWords) return `body is ${n} words, above the ${c.maxWords}-word maximum`;
+      if (n < c.hardMinWords) return `body is ${n} words, below the ${c.hardMinWords}-word floor`;
+      if (n > c.hardMaxWords) return `body is ${n} words, above the ${c.hardMaxWords}-word ceiling`;
       return null;
     },
   },
