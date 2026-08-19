@@ -3,10 +3,22 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-08-18"
+timestamp: "2026-08-19"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-08-19] ingest | 9 module page(s) updated
+
+- [[modules/candidates|Topic Candidate Generator]] — Generates a list of candidate weekly blog topics matching seasonal and weather conditions.
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/link-audit|Link Audit]] — Outbound-link auditing and repair, shared by every path that writes a post.
+- [[modules/links|Links]] — Outbound-link policy and liveness checking for generated blog content.
+- [[modules/review|Blog Post Reviewer]] — Evaluates blog post drafts against SEO, keyword target, and quality rubric criteria.
+- [[modules/rewrite|Blog Post Rewriter]] — Rewrites blog posts using LLMs to fix issues highlighted in the review rubric.
+- [[modules/xai|Xai]] — xAI Grok adapter that satisfies the structural `GeminiLike` interface, so it drops into every existing call site (candidates, review, rewrite) and the consumer 
+- [[modules/cli-repair|Cli Repair]] — blog-engine-repair — deterministically strip dead/denylisted links from a post.
+- [[modules/cli-rewrite|Cli Rewrite]] — blog-engine-rewrite — apply a previous review's feedback to revise a post.
 
 ## [2026-08-18] ingest | 2 module page(s) updated
 

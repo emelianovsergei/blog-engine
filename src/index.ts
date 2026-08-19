@@ -39,12 +39,20 @@ export {
   checkLinks,
   citationGuidance,
 } from "./links.js";
+
+export {
+  auditLinks,
+  unlinkDeadUrls,
+  auditAndRepairFile,
+} from "./link-audit.js";
 export type {
   LinkPolicy,
   LinkCheckResult,
   CheckLinkOptions,
   CheckLinksOptions,
+  ExtractLinksOptions,
 } from "./links.js";
+export type { LinkAuditResult, AuditLinksOptions, FileAudit } from "./link-audit.js";
 
 export { unlinkUrl, stripDeadCitations, repairContent } from "./link-repair.js";
 

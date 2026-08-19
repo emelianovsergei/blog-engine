@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-08-18"
+timestamp: "2026-08-19"
 sources: []
 ---
 # Developer Knowledge Index
@@ -17,6 +17,7 @@ sources: []
 *   [[modules/candidates|Topic Candidate Generator]]
 *   [[modules/categories|Category Classifier]]
 *   [[modules/cli-frontmatter|Cli Frontmatter]]
+*   [[modules/cli-repair|Cli Repair]]
 *   [[modules/cli-review|Cli Review]]
 *   [[modules/cli-rewrite|Cli Rewrite]]
 *   [[modules/cli-shared|Cli Shared]]
@@ -26,6 +27,7 @@ sources: []
 *   [[modules/demand|Search Demand Scorer]]
 *   [[modules/index|Index]]
 *   [[modules/keywords|Keyword Researcher]]
+*   [[modules/link-audit|Link Audit]]
 *   [[modules/link-repair|Link Repair]]
 *   [[modules/links|Links]]
 *   [[modules/orchestrator|Topic Selection Orchestrator]]

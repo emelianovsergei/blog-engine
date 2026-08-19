@@ -82,7 +82,10 @@ function normalizeUrl(url: string): string {
 
 function hostnameOf(url: string): string | undefined {
   try {
-    return new URL(url).hostname.toLowerCase();
+    // Schemeless matches (`energy.gov/energysaver/x`) reach here from the
+    // policy pass; `new URL` rejects them, so give it a scheme to parse.
+    const parsable = /^[a-z]+:\/\//i.test(url) ? url : `https://${url}`;
+    return new URL(parsable).hostname.toLowerCase();
   } catch {
     return undefined;
   }
@@ -152,7 +155,16 @@ function trimUrlTail(candidate: string): string {
  * body links alike. The 2026-07 sweep found dead links in post *bodies* that a
  * frontmatter-only scan missed, so this deliberately scans the whole file.
  */
-export function extractLinks(mdx: string): string[] {
+export interface ExtractLinksOptions {
+  /**
+   * Also match URLs written without a scheme (`energy.gov/energysaver/x`).
+   * Off by default: those strings are not reliably fetchable, so only the
+   * deterministic policy pass wants them.
+   */
+  includeSchemeless?: boolean;
+}
+
+export function extractLinks(mdx: string, options?: ExtractLinksOptions): string[] {
   // Stops at whitespace and at the delimiters that close an autolink, an HTML
   // attribute, or a YAML string — which covers every form these URLs appear in
   // without needing four separate patterns. `)` is deliberately *not* a
@@ -168,6 +180,21 @@ export function extractLinks(mdx: string): string[] {
     const url = trimUrlTail(match[0]);
     if (url.length > 0) seen.add(url);
   }
+
+  if (options?.includeSchemeless) {
+    // A model that writes a citation as bare prose — `(energy.gov/energysaver/
+    // thermostats)` — produces a string the absolute-only pattern cannot see,
+    // but which the @smoke denylist greps for verbatim. Require a path segment
+    // so ordinary prose ("the U.S. Dept. of Energy") is not mistaken for a URL.
+    const schemeless = /(?<![/@.\w])((?:[a-z0-9-]+\.)+[a-z]{2,})\/[^\s<>"'`\]})*]+/gi;
+    for (const match of mdx.matchAll(schemeless)) {
+      const url = trimUrlTail(match[0]);
+      if (url.length > 0 && !seen.has(`https://${url}`) && !seen.has(`http://${url}`)) {
+        seen.add(url);
+      }
+    }
+  }
+
   return [...seen];
 }
 
