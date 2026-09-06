@@ -299,6 +299,21 @@ jobs:
       # rewrite that mangles frontmatter crashes the prerender; failing
       # here means nothing is pushed, the failed label stays, and the loop
       # ends this round.
+      # Structural guard on the rewrite BEFORE the build and the commit. The
+      # consumer's `npm run blog:check` (scripts/check-blog-post.ts) compares
+      # the rewritten file with the PR head: an FAQ section written into the
+      # body, a required heading dropped or re-cased, or a change to a
+      # protected frontmatter key (faqs, summary, citations, …) fails here,
+      # so nothing is pushed and the loop ends this round. Without it the
+      # 2026-08-29 promax autofix deleted a post's visible FAQ while the
+      # FAQPage JSON-LD stayed — a Google FAQ-policy violation that shipped.
+      - name: 'Auto-fix: structural guard'
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        run: >
+          npm run blog:check --
+          "${{ steps.files.outputs.file }}"
+          --base "${{ github.event.pull_request.head.sha }}"
+
       - name: 'Auto-fix: validate build'
         if: steps.autofix_gate.outputs.eligible == 'true'
         run: npm run build
