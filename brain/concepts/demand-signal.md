@@ -73,13 +73,25 @@ flat percentage.
 - **A blocked response is not zero demand.** `SuggestOutcome` separates
   `ok | empty | blocked | error`.
 
-## Known gap (next step)
+## Closed in v0.17: opportunities seed generation
 
-`generateCandidates` still receives **no demand input**. Topics are invented
-blind and demand only re-sorts them, so a high-volume query the model never
-proposed can never surface. The intended fix is to feed
-`findOpportunities()` — queries at positions 8-25 with real impressions — into
-candidate *generation* as hints. Deferred deliberately so the first fully
-autonomous cron run tests the shipped state first.
+`selectWeeklyTopic` accepts a preloaded `gscSignal` (the consumer calls
+`loadGscSignal` with its service-account secret). When the status is `ok`:
+
+1. `findOpportunities()` — page-two queries (positions 8-25) with real
+   impressions — minus any whose head term an existing post title already
+   carries, are offered to the planner as a **Search Console opportunities**
+   block (`candidates.ts`). At least half the candidates must answer one and
+   mark it as `hintQuery`; `supportsSlug` lets the planner propose a
+   supporting post for an existing URL instead.
+2. Ranking blends GSC volume with autocomplete breadth per candidate via
+   `mergeDemand` (`head` = the candidate's `hintQuery`, else `headTerm(topic)`).
+3. `SelectedTopic.gsc` records the status, the winning hint and its
+   impressions for the run report.
+
+`unauthorized` is logged loudly (the service account lacks the property) and
+`absent`/`error` quietly; in every non-`ok` case the run is byte-identical to
+the pre-0.17 behaviour. The 2,630-impression "ac installation citrus heights"
+miss from `log.md` is exactly the case this closes.
 
 See [[concepts/topic-deduplication]] for how dedup interacts with clustering.

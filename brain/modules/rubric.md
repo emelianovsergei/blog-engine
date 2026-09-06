@@ -3,9 +3,9 @@ type: "module"
 title: "Rubric"
 description: "The single source of truth for what a good post is. Writer, planner, reviewer and the deterministic checker used to carry their own hand-written copies of these rules, which drifted badly: the writer was told \"use only ## headings\" while the reviewer rewarded H2/H3 nesting, and told \"do NOT write an FAQ section\" while the reviewer graded FAQ presence. A post was routinely marked down for rules it had never been shown — 6.7 on one site versus 8.2 on the other, whose prompt happened to include two of the missing rules. So the rules live here ONCE, as data. Each rule declares which audiences see it, an imperative form (for the writer/planner), an evaluative form (for the reviewer), and optionally a deterministic check. Adding a rule updates every surface in one edit; a contradiction between two surfaces is unrepresentable."
 tags: ["module"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-06"
 sources: ["src/rubric.ts"]
-source_hash: "f7c1676b61737e93"
+source_hash: "cd4400cc9a18f6c9"
 ---
 # Rubric
 
@@ -29,6 +29,15 @@ The single source of truth for what a good post is. Writer, planner, reviewer an
 *No description provided.*
 
 ### `RubricRule`
+*No description provided.*
+
+### `hasFaqHeading`
+True when the body carries an FAQ heading in any syntax MDX renders as a heading: ATX, Setext, or a raw HTML/JSX heading element.
+
+### `hasExactH2`
+True when `heading` is present as a complete H2 line (exact text and case, not a substring, not demoted to H3, not extended).
+
+### `countWords`
 *No description provided.*
 
 ### `RUBRIC_RULES`

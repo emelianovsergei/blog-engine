@@ -3,9 +3,9 @@ type: "module"
 title: "Topic Selection Orchestrator"
 description: "Orchestrates the selection of weekly blog topics using seasonal, weather, and keyword demand signals."
 tags: ["orchestrator", "topic-selection", "pipeline"]
-timestamp: "2026-07-27"
+timestamp: "2026-09-06"
 sources: ["src/orchestrator.ts"]
-source_hash: "9600be70dff63497"
+source_hash: "b78ac9576eb7f84a"
 ---
 # Topic Selection Orchestrator
 
@@ -22,7 +22,7 @@ Ties the engine modules together into the public `selectWeeklyTopic` entry point
 - [[modules/rank]]
 - [[modules/season]]
 - [[modules/weather]]
-- [[modules/types]]
+- [[modules/gsc]]
 
 ## API Interface
 

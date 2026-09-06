@@ -3,10 +3,23 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-06"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-06] ingest | 10 module page(s) updated
+
+- [[modules/candidates|Topic Candidate Generator]] — Generates a list of candidate weekly blog topics matching seasonal and weather conditions.
+- [[modules/gsc|Gsc]] — Google Search Console — the only first-party demand signal available.
+- [[modules/index|Index]] — Public API of the blog topic-selection engine.
+- [[modules/orchestrator|Topic Selection Orchestrator]] — Orchestrates the selection of weekly blog topics using seasonal, weather, and keyword demand signals.
+- [[modules/refresh|Refresh]] — Refresh an existing post against the Search Console queries it already ranks for.
+- [[modules/rewrite|Blog Post Rewriter]] — Rewrites blog posts using LLMs to fix issues highlighted in the review rubric.
+- [[modules/rubric|Rubric]] — The single source of truth for what a good post is.
+- [[modules/types|Type Definitions]] — Centralized TypeScript interfaces and type definitions used throughout the engine.
+- [[modules/cli-refresh|Cli Refresh]] — blog-engine-refresh — refresh a published post against the Search Console queries it ranks for, or backfill its GEO frontmatter fields.
+- [[modules/cli-rewrite|Cli Rewrite]] — blog-engine-rewrite — apply a previous review's feedback to revise a post.
 
 ## [2026-08-19] Grok migration + six-phase quality rework
 

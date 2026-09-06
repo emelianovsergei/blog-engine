@@ -3,18 +3,19 @@ type: "module"
 title: "Type Definitions"
 description: "Centralized TypeScript interfaces and type definitions used throughout the engine."
 tags: ["types", "typescript", "interfaces"]
-timestamp: "2026-08-18"
+timestamp: "2026-09-06"
 sources: ["src/types.ts"]
-source_hash: "45274b2139bce10d"
+source_hash: "8d760807bcd91419"
 ---
 # Type Definitions
 
-Public types for the blog topic-selection engine. The engine has zero hard dependency on `@google/genai`: it accepts an injected `GeminiLike` client described structurally below, so a real `GoogleGenAI` instance satisfies it and tests can pass lightweight fakes.
+*No summary available.*
 
 **Source File**: [src/types.ts](file:///home/jaysonlee/Projects/blog-engine/src/types.ts)
 
 ## Related
 
+- [[modules/gsc]]
 - [[modules/suggest]]
 
 ## API Interface
