@@ -107,9 +107,13 @@ const FAQ_HEADING_ATX = /^ {0,3}#{1,6}[ \t]*(?:frequently[ \t]+asked[ \t]+questi
 /** Setext form: the FAQ text on its own line, underlined with `===` or `---`. */
 const FAQ_HEADING_SETEXT = /^ {0,3}(?:frequently[ \t]+asked[ \t]+questions|faqs?)\b[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/im;
 
-/** True when the body carries an FAQ heading in any Markdown heading syntax. */
+/** Raw HTML/JSX form — MDX renders `<h2>FAQ</h2>` as a heading too. */
+const FAQ_HEADING_HTML = /<h[1-6]\b[^>]*>\s*(?:frequently\s+asked\s+questions|faqs?)\b/i;
+
+/** True when the body carries an FAQ heading in any syntax MDX renders as a
+ * heading: ATX, Setext, or a raw HTML/JSX heading element. */
 export function hasFaqHeading(body: string): boolean {
-  return FAQ_HEADING_ATX.test(body) || FAQ_HEADING_SETEXT.test(body);
+  return FAQ_HEADING_ATX.test(body) || FAQ_HEADING_SETEXT.test(body) || FAQ_HEADING_HTML.test(body);
 }
 
 function escapeRegex(s: string): string {

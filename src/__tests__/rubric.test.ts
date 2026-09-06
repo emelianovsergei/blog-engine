@@ -165,7 +165,14 @@ import { checkArticleBody as checkBodyForms } from "../rubric.js";
 test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () => {
   const body = (heading: string) =>
     `Intro.\n\n## Section\n\n${Array.from({ length: 800 }, () => "word").join(" ")}\n\n${heading}\n\n**Q?**\n\nA.`;
-  for (const heading of ["## FAQ", "   ## FAQs", "### Frequently asked questions", "Frequently Asked Questions\n---"]) {
+  for (const heading of [
+    "## FAQ",
+    "   ## FAQs",
+    "### Frequently asked questions",
+    "Frequently Asked Questions\n---",
+    "<h2>Frequently Asked Questions</h2>",
+    '<h3 className="faq">FAQ</h3>',
+  ]) {
     const ids = checkBodyForms(body(heading)).map((v) => v.rule);
     assert.ok(ids.includes("faq-authorship"), `${JSON.stringify(heading)} should be flagged`);
   }
