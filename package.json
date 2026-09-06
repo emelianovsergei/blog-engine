@@ -15,14 +15,15 @@
   "bin": {
     "blog-engine-review": "./dist/cli/review.js",
     "blog-engine-rewrite": "./dist/cli/rewrite.js",
-    "blog-engine-repair": "./dist/cli/repair.js"
+    "blog-engine-repair": "./dist/cli/repair.js",
+    "blog-engine-refresh": "./dist/cli/refresh.js"
   },
   "files": [
     "dist",
     "examples"
   ],
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('dist/cli/review.js', 0o755); require('fs').chmodSync('dist/cli/rewrite.js', 0o755); require('fs').chmodSync('dist/cli/repair.js', 0o755);\"",
+    "build": "tsc && node -e \"require('fs').chmodSync('dist/cli/review.js', 0o755); require('fs').chmodSync('dist/cli/rewrite.js', 0o755); require('fs').chmodSync('dist/cli/repair.js', 0o755); require('fs').chmodSync('dist/cli/refresh.js', 0o755);\"",
     "prepare": "npm run build",
     "clean": "rm -rf dist",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",

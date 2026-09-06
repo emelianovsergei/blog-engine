@@ -157,3 +157,18 @@ test("writer gets the hedge list and the citation format", () => {
   assert.match(rendered, /Forbidden hedges: might, maybe/);
   assert.match(rendered, /\[anchor text\]\(https:\/\/example\.gov\/page\)/);
 });
+
+// ─── faq-authorship recognises every Markdown heading form (v0.17) ──────────
+
+import { checkArticleBody as checkBodyForms } from "../rubric.js";
+
+test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () => {
+  const body = (heading: string) =>
+    `Intro.\n\n## Section\n\n${Array.from({ length: 800 }, () => "word").join(" ")}\n\n${heading}\n\n**Q?**\n\nA.`;
+  for (const heading of ["## FAQ", "   ## FAQs", "### Frequently asked questions", "Frequently Asked Questions\n---"]) {
+    const ids = checkBodyForms(body(heading)).map((v) => v.rule);
+    assert.ok(ids.includes("faq-authorship"), `${JSON.stringify(heading)} should be flagged`);
+  }
+  const clean = checkBodyForms(body("## Fixing a faulty fan")).map((v) => v.rule);
+  assert.ok(!clean.includes("faq-authorship"));
+});

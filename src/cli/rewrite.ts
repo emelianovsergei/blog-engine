@@ -18,6 +18,7 @@ import { auditAndRepairFile } from "../link-audit.js";
 import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
 import { parseReviewResult } from "../review.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
+import { rubricFromFlags } from "./refresh.js";
 import {
   composeConfig,
   makeReviewClient,
@@ -32,7 +33,8 @@ function usage(): string {
                            --service-areas "Sacramento,Roseville,..." \\
                            [--notes-out change-notes.md] [--model grok-4.6] \\
                            [--link-policy content/policy/link-constraints.json] \\
-                           [--audit-out rewrite-audit.json] [--no-link-audit]`;
+                           [--audit-out rewrite-audit.json] [--no-link-audit] \\
+                           [--required-headings "A|B"] [--faq-policy appended-by-code|written-by-model]`;
 }
 
 async function main(): Promise<number> {
@@ -50,6 +52,15 @@ async function main(): Promise<number> {
   const auditOut = optionalFlag(args, "audit-out");
   const skipAudit = args.flags.has("no-link-audit");
   const config = composeConfig(args);
+  // Site rubric so the rewrite cannot drop a required heading or write a
+  // body FAQ (both happened on 2026-08-29). Absent flags → no rubric guard,
+  // i.e. the pre-0.17 behaviour.
+  const requiredHeadingsRaw = optionalFlag(args, "required-headings");
+  const faqPolicyRaw = optionalFlag(args, "faq-policy");
+  const rubric =
+    requiredHeadingsRaw !== undefined || faqPolicyRaw !== undefined
+      ? rubricFromFlags(requiredHeadingsRaw, faqPolicyRaw)
+      : undefined;
 
   // A missing or unreadable policy must not stop the fix — degrade to "no
   // policy" and let the @smoke guard remain the backstop, exactly as the
@@ -77,6 +88,7 @@ async function main(): Promise<number> {
     markdown: body,
     reviewFeedback,
     linkPolicy,
+    ...(rubric ? { rubric } : {}),
     ...(model ? { model } : {}),
   });
 

@@ -101,7 +101,28 @@ export interface RubricRule {
   check?: (body: string, c: RubricConstraints) => string | null;
 }
 
-function countWords(text: string): number {
+/** ATX form: `## FAQ`, `## FAQs`, `### Frequently asked questions`, with the
+ * up-to-three-space indent Markdown still treats as a heading. */
+const FAQ_HEADING_ATX = /^ {0,3}#{1,6}[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)\b/im;
+/** Setext form: the FAQ text on its own line, underlined with `===` or `---`. */
+const FAQ_HEADING_SETEXT = /^ {0,3}(?:frequently[ \t]+asked[ \t]+questions|faqs?)\b[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/im;
+
+/** True when the body carries an FAQ heading in any Markdown heading syntax. */
+export function hasFaqHeading(body: string): boolean {
+  return FAQ_HEADING_ATX.test(body) || FAQ_HEADING_SETEXT.test(body);
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True when `heading` is present as a complete H2 line (exact text and case,
+ * not a substring, not demoted to H3, not extended). */
+export function hasExactH2(body: string, heading: string): boolean {
+  return new RegExp(`^ {0,3}##[ \\t]+${escapeRegex(heading)}[ \\t]*$`, "m").test(body);
+}
+
+export function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
@@ -273,8 +294,8 @@ export const RUBRIC_RULES: readonly RubricRule[] = [
         ? "FAQ for AI search: grade frontmatter.faqs — the visible FAQ section is appended by the build, so its absence from the markdown body is CORRECT and must not be penalised."
         : "Rewards a genuine FAQ section answering real questions and matching frontmatter.faqs.",
     check: (body, c) =>
-      c.faqPolicy === "appended-by-code" && /^##+\s*frequently asked questions/im.test(body)
-        ? "body contains an FAQ section, but FAQs are appended from frontmatter"
+      c.faqPolicy === "appended-by-code" && hasFaqHeading(body)
+        ? "body contains an FAQ section, but FAQs are rendered from frontmatter"
         : null,
   },
   // ---- brandVoiceFit ------------------------------------------------------
@@ -333,7 +354,7 @@ export const RUBRIC_RULES: readonly RubricRule[] = [
         ? `Include these sections verbatim: ${c.requiredHeadings.map((h) => `"## ${h}"`).join(", ")}.`
         : "",
     check: (body, c) => {
-      const missing = c.requiredHeadings.filter((h) => !body.includes(`## ${h}`));
+      const missing = c.requiredHeadings.filter((h) => !hasExactH2(body, h));
       return missing.length > 0 ? `missing required heading(s): ${missing.join(", ")}` : null;
     },
   },

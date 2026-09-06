@@ -159,3 +159,8 @@ export type {
   BlogPostFrontmatter,
 } from "./review.js";
 export type { RewriteBlogPostArgs, RewriteResult } from "./rewrite.js";
+
+// ─── Refresh / backfill (v0.17) ─────────────────────────────────────────────
+export { refreshBlogPost, ALL_REFRESH_FIELDS, DEFAULT_REFRESH_MODEL } from "./refresh.js";
+export type { RefreshBlogPostArgs, RefreshResult, RefreshField, RankingQuery, RefreshHowTo } from "./refresh.js";
+export { hasFaqHeading, hasExactH2, countWords } from "./rubric.js";

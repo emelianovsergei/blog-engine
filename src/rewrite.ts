@@ -16,6 +16,7 @@
 import type { EngineConfig, GeminiLike } from "./types.js";
 import { citationGuidance, EMPTY_LINK_POLICY, type LinkPolicy } from "./links.js";
 import { writerAccuracyRules } from "./planning.js";
+import { hasExactH2, hasFaqHeading, type RubricConstraints } from "./rubric.js";
 import type {
   BlogPostFrontmatter,
   ReviewIssue,
@@ -43,6 +44,14 @@ export interface RewriteBlogPostArgs {
   linkPolicy?: LinkPolicy;
   /** Grounding sources; falls back to `frontmatter.citations`. */
   citations?: ReadonlyArray<{ name?: string; url?: string }>;
+  /**
+   * The site's structural rules. When given, the prompt names the required
+   * headings verbatim and forbids a body FAQ, and the revision is rejected
+   * (throws) if it drops or re-cases a required heading or writes an FAQ
+   * section — the 2026-08-29 promax autofix did both while the CI-side
+   * checks only looked at the build.
+   */
+  rubric?: RubricConstraints;
 }
 
 export interface RewriteResult {
@@ -159,8 +168,38 @@ Constraints:
 - Do NOT change the post's topic or category unless an issue explicitly demands it.
 - Keep the same approximate length (within +/- 25%).
 - Maintain the post's tone and Sacramento-local framing.
-${linkRules}
+${structureRules(args.rubric)}${linkRules}
 ${accuracyRules}`;
+}
+
+function structureRules(rubric: RubricConstraints | undefined): string {
+  if (!rubric) return "";
+  const lines: string[] = [];
+  if (rubric.requiredHeadings.length > 0) {
+    lines.push(
+      `- Keep these section headings verbatim, including capitalisation, as H2 lines: ${rubric.requiredHeadings
+        .map((h) => `"## ${h}"`)
+        .join(", ")}. Never remove, demote or reword them.`,
+    );
+  }
+  if (rubric.faqPolicy === "appended-by-code") {
+    lines.push(
+      "- Do NOT add a \"Frequently Asked Questions\" (or \"FAQ\") section to the body: the FAQs render from frontmatter. Never remove frontmatter fields you were not asked to change.",
+    );
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
+/** Structural violations a rubric-aware rewrite must not introduce. */
+function structuralViolation(markdown: string, rubric: RubricConstraints): string | null {
+  if (rubric.faqPolicy === "appended-by-code" && hasFaqHeading(markdown)) {
+    return "revision added a Frequently Asked Questions section to the body (FAQs render from frontmatter)";
+  }
+  const missing = rubric.requiredHeadings.filter((h) => !hasExactH2(markdown, h));
+  if (missing.length > 0) {
+    return `revision dropped or re-cased required heading(s): ${missing.map((h) => `"## ${h}"`).join(", ")}`;
+  }
+  return null;
 }
 
 interface RawRewriteFrontmatter {
@@ -239,6 +278,10 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
     parsed.frontmatter as RawRewriteFrontmatter,
   );
   const markdown = parsed.markdown.trim();
+  if (args.rubric) {
+    const problem = structuralViolation(markdown, args.rubric);
+    if (problem) throw new Error(`Rewrite rejected: ${problem}`);
+  }
   const changeNotes =
     typeof parsed.changeNotes === "string" && parsed.changeNotes.trim()
       ? parsed.changeNotes.trim()

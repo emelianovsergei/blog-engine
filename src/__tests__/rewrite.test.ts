@@ -202,3 +202,72 @@ test("without a policy the rewrite prompt gains no link section", async () => {
 
   assert.doesNotMatch(String(calls[0]!.contents), /Outbound links/);
 });
+
+// ─── rubric guard (v0.17) ────────────────────────────────────────────────────
+
+import { DEFAULT_RUBRIC_CONSTRAINTS } from "../rubric.js";
+
+const guardedRubric = { ...DEFAULT_RUBRIC_CONSTRAINTS, requiredHeadings: ["When to Call a Pro"] };
+const guardedMarkdown = `# Title\n\nIntro.\n\n## Section\n\nBody.\n\n## When to Call a Pro\n\nCall us.`;
+
+function guardedGemini(revisedMarkdown: string) {
+  return makeFakeGemini({
+    candidatesJson: {
+      frontmatter: { title: frontmatter.title },
+      markdown: revisedMarkdown,
+      changeNotes: "Revised.",
+    },
+  });
+}
+
+test("rewrite prompt names the required headings and the no-body-FAQ rule when a rubric is given", async () => {
+  const capture: GenerateContentCall[] = [];
+  const gemini = makeFakeGemini({
+    candidatesJson: { frontmatter: { title: frontmatter.title }, markdown: guardedMarkdown, changeNotes: "ok" },
+    capture,
+  });
+  await rewriteBlogPost({ gemini, config: sampleConfig, frontmatter, markdown: guardedMarkdown, reviewFeedback: failingReview, rubric: guardedRubric });
+  const prompt = String(capture[0]?.contents);
+  assert.match(prompt, /"## When to Call a Pro"/);
+  assert.match(prompt, /verbatim/i);
+  assert.match(prompt, /Frequently Asked Questions/i);
+});
+
+test("rewrite throws when the revision drops or re-cases a required heading", async () => {
+  await assert.rejects(
+    rewriteBlogPost({
+      gemini: guardedGemini(guardedMarkdown.replace("## When to Call a Pro", "## When to call a pro")),
+      config: sampleConfig,
+      frontmatter,
+      markdown: guardedMarkdown,
+      reviewFeedback: failingReview,
+      rubric: guardedRubric,
+    }),
+    /When to Call a Pro/,
+  );
+});
+
+test("rewrite throws when the revision adds an FAQ section to the body", async () => {
+  await assert.rejects(
+    rewriteBlogPost({
+      gemini: guardedGemini(`${guardedMarkdown}\n\n   ## FAQs\n\n**Q?**\n\nA.`),
+      config: sampleConfig,
+      frontmatter,
+      markdown: guardedMarkdown,
+      reviewFeedback: failingReview,
+      rubric: guardedRubric,
+    }),
+    /FAQ/,
+  );
+});
+
+test("rewrite without a rubric keeps the pre-0.17 behaviour", async () => {
+  const result = await rewriteBlogPost({
+    gemini: guardedGemini(guardedMarkdown.replace("## When to Call a Pro", "## When to call a pro")),
+    config: sampleConfig,
+    frontmatter,
+    markdown: guardedMarkdown,
+    reviewFeedback: failingReview,
+  });
+  assert.match(result.markdown, /When to call a pro/);
+});
