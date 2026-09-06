@@ -34,6 +34,12 @@
 #       attempts per branch generation (default 2).
 #   - Labels (create once): autoblog, autoblog-approved-pending,
 #       autoblog-review-failed, autoblog-hold
+#   - npm script (recommended): blog:check — a structural guard run between
+#       the AI rewrite and its commit (`npm run blog:check -- <file> --base
+#       <sha>`; exit 1 rejects the rewrite). pulse-website and promax-website
+#       ship it as scripts/check-blog-post.ts + lib/blog/check-post.ts.
+#       When the script is absent the guard step logs a warning and the
+#       rewrite proceeds unguarded, so provisioning without it still works.
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
 # the markdown path globs for your site's layout.
@@ -299,6 +305,26 @@ jobs:
       # rewrite that mangles frontmatter crashes the prerender; failing
       # here means nothing is pushed, the failed label stays, and the loop
       # ends this round.
+      # Structural guard on the rewrite BEFORE the build and the commit. The
+      # consumer's `npm run blog:check` (scripts/check-blog-post.ts) compares
+      # the rewritten file with the PR head: an FAQ section written into the
+      # body, a required heading dropped or re-cased, or a change to a
+      # protected frontmatter key (faqs, summary, citations, …) fails here,
+      # so nothing is pushed and the loop ends this round. Without it the
+      # 2026-08-29 promax autofix deleted a post's visible FAQ while the
+      # FAQPage JSON-LD stayed — a Google FAQ-policy violation that shipped.
+      - name: 'Auto-fix: structural guard'
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        run: |
+          set -euo pipefail
+          if ! node -e "process.exit(require('./package.json').scripts?.['blog:check'] ? 0 : 1)"; then
+            echo "::warning title=No blog:check script::Consumer has no blog:check script; the rewrite is committed without the structural guard. See the required-setup notes at the top of this workflow."
+            exit 0
+          fi
+          npm run blog:check -- \
+            "${{ steps.files.outputs.file }}" \
+            --base "${{ github.event.pull_request.head.sha }}"
+
       - name: 'Auto-fix: validate build'
         if: steps.autofix_gate.outputs.eligible == 'true'
         run: npm run build
