@@ -2,6 +2,7 @@
 import { categorizeText } from "./categories.js";
 import type { RecentMix } from "./categories.js";
 import type { SeasonContext } from "./season.js";
+import type { OpportunityQuery } from "./gsc.js";
 import type {
   CandidateTopic,
   EngineConfig,
@@ -32,6 +33,16 @@ const candidateSchema = {
             type: "string",
             description: "Exactly one of the allowed category ids",
           },
+          hintQuery: {
+            type: "string",
+            description:
+              "When this candidate is written to win one of the listed Search Console opportunities, that query verbatim; omit otherwise",
+          },
+          supportsSlug: {
+            type: "string",
+            description:
+              "Slug of an existing post this candidate would deepen as a supporting article, if any; omit otherwise",
+          },
         },
         required: ["topic", "notes", "categoryId"],
       },
@@ -49,10 +60,31 @@ export interface GenerateCandidatesArgs {
   recentMix: RecentMix;
   count: number;
   model?: string;
+  /** Search Console opportunities (page-two queries with real impressions)
+   * the planner should write for. Empty or absent → no hint block. */
+  hints?: readonly OpportunityQuery[];
+}
+
+function hintBlock(hints: readonly OpportunityQuery[] | undefined, count: number): string {
+  if (!hints || hints.length === 0) return "";
+  const minTargeted = Math.ceil(count / 2);
+  const lines = hints
+    .map(
+      (h) =>
+        `- "${h.query}" — ${h.impressions.toLocaleString("en-US")} impressions, average position ${h.position.toFixed(1)}`,
+    )
+    .join("\n");
+  return `
+Search Console opportunities — queries this site ALREADY earns impressions for at positions 8-25 (page two). A dedicated post is the most reliable way to move one onto page one, and no keyword tool can produce this list:
+${lines}
+
+At least ${minTargeted} of the ${count} candidates MUST directly answer one of these queries. For those candidates set "hintQuery" to the exact query text; leave it out for the others. If a listed query fits an existing post better than a new one, propose a supporting post for it and set "supportsSlug" to that post's slug.
+`;
 }
 
 function buildPrompt(args: GenerateCandidatesArgs): string {
   const { config, season, weather, existingPosts, recentMix, count } = args;
+  const hints = hintBlock(args.hints, count);
 
   const categoryLines = config.categories
     .map((category) => `- ${category.id} (${category.label}): ${category.guidance}`)
@@ -84,7 +116,7 @@ ${blocked}
 
 Existing blog posts — every candidate MUST be clearly different from all of these, not a minor rewrite:
 ${existingList}
-
+${hints}
 Local service areas to mention naturally: ${areas}
 
 Rules for each candidate:
@@ -121,7 +153,9 @@ export async function generateCandidates(args: GenerateCandidatesArgs): Promise<
   const raw = Array.isArray(parsed.candidates) ? parsed.candidates : [];
   const candidates: CandidateTopic[] = raw
     .filter(
-      (entry): entry is { topic: string; notes?: string; categoryId?: string } =>
+      (
+        entry,
+      ): entry is { topic: string; notes?: string; categoryId?: string; hintQuery?: unknown; supportsSlug?: unknown } =>
         !!entry &&
         typeof (entry as { topic?: unknown }).topic === "string" &&
         (entry as { topic: string }).topic.trim().length > 0,
@@ -134,7 +168,16 @@ export async function generateCandidates(args: GenerateCandidatesArgs): Promise<
         entry.categoryId && validIds.has(entry.categoryId)
           ? entry.categoryId
           : categorizeText(args.config.categories, topic, notes);
-      return { topic, notes, categoryId };
+      const hintQuery = typeof entry.hintQuery === "string" && entry.hintQuery.trim() ? entry.hintQuery.trim() : undefined;
+      const supportsSlug =
+        typeof entry.supportsSlug === "string" && entry.supportsSlug.trim() ? entry.supportsSlug.trim() : undefined;
+      return {
+        topic,
+        notes,
+        categoryId,
+        ...(hintQuery && { hintQuery }),
+        ...(supportsSlug && { supportsSlug }),
+      };
     });
 
   if (candidates.length === 0) {

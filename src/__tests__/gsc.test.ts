@@ -181,3 +181,71 @@ test("an unauthorized signal contributes no volume score", () => {
   assert.equal(merged.volumeScore, null);
   assert.equal(merged.score, 0.6);
 });
+
+// ─── page-dimension signal + refresh target (v0.17) ─────────────────────────
+
+import { loadGscPageSignal, pickRefreshTarget } from "../gsc.js";
+
+test("loadGscPageSignal groups query rows by page and honours a path prefix", async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const fetchImpl = (async (url: string, init?: { body?: string }) => {
+    calls.push({ url, body: String(init?.body ?? "") });
+    if (url.includes("oauth2")) return { ok: true, status: 200, json: async () => ({ access_token: "t" }), text: async () => "" };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({
+        rows: [
+          { keys: ["https://www.example.com/blog/a", "query a1"], impressions: 100, clicks: 3, ctr: 0.03, position: 9 },
+          { keys: ["https://www.example.com/blog/a", "query a2"], impressions: 50, clicks: 0, ctr: 0, position: 15 },
+          { keys: ["https://www.example.com/services/x", "service q"], impressions: 900, clicks: 9, ctr: 0.01, position: 5 },
+        ],
+      }),
+    };
+  }) as unknown as NonNullable<Parameters<typeof loadGscPageSignal>[0]["fetchImpl"]>;
+
+  const signal = await loadGscPageSignal({
+    serviceAccountJson: SA_JSON,
+    siteUrl: "https://www.example.com/",
+    now: new Date("2026-09-06T12:00:00Z"),
+    pathPrefix: "/blog/",
+    fetchImpl,
+  });
+  assert.equal(signal.status, "ok");
+  assert.match(calls[1]!.body, /"dimensions":\["page","query"\]/);
+  assert.deepEqual([...signal.byPage.keys()], ["https://www.example.com/blog/a"]);
+  assert.equal(signal.byPage.get("https://www.example.com/blog/a")!.length, 2);
+  assert.equal(signal.byPage.get("https://www.example.com/blog/a")![0]!.query, "query a1");
+});
+
+test("pickRefreshTarget chooses the highest-opportunity page-two post outside the cooldown", () => {
+  const byPage = new Map([
+    [
+      "https://www.example.com/blog/hot",
+      rows({ query: "hot q1", impressions: 1200, position: 11 }, { query: "hot q2", impressions: 300, position: 6 }),
+    ],
+    ["https://www.example.com/blog/recent", rows({ query: "recent q", impressions: 5000, position: 10 })],
+    ["https://www.example.com/blog/winner-already", rows({ query: "w", impressions: 4000, position: 2 })],
+    ["https://www.example.com/blog/thin", rows({ query: "t", impressions: 20, position: 12 })],
+    ["https://www.example.com/blog/open-pr", rows({ query: "o", impressions: 3000, position: 12 })],
+  ]);
+  const posts = [
+    { slug: "hot", url: "https://www.example.com/blog/hot", date: "2026-03-01" },
+    { slug: "recent", url: "https://www.example.com/blog/recent", date: "2026-03-01", updated: "2026-08-20" },
+    { slug: "winner-already", url: "https://www.example.com/blog/winner-already", date: "2026-01-01" },
+    { slug: "thin", url: "https://www.example.com/blog/thin", date: "2026-01-01" },
+    { slug: "open-pr", url: "https://www.example.com/blog/open-pr", date: "2026-01-01" },
+    { slug: "no-data", url: "https://www.example.com/blog/no-data", date: "2026-01-01" },
+  ];
+  const target = pickRefreshTarget({
+    byPage,
+    posts,
+    now: new Date("2026-09-06T12:00:00Z"),
+    excludeSlugs: ["open-pr"],
+  });
+  assert.equal(target?.slug, "hot", "recent is inside the cooldown, winner-already is on page one, thin has too few impressions, open-pr is excluded");
+  assert.equal(target?.queries.length, 2, "all of the page's ranking queries come along, page-one ones included");
+  assert.equal(target?.queries[0]?.query, "hot q1", "sorted by impressions");
+  assert.equal(pickRefreshTarget({ byPage: new Map(), posts, now: new Date() }), undefined);
+});

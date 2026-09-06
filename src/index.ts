@@ -91,6 +91,8 @@ export {
   parseServiceAccountJson,
   buildJwtAssertion,
   findOpportunities,
+  loadGscPageSignal,
+  pickRefreshTarget,
   mergeDemand,
 } from "./gsc.js";
 
@@ -139,6 +141,11 @@ export type {
   OpportunityQuery,
   MergedDemand,
   LoadGscSignalArgs,
+  GscPageSignal,
+  LoadGscPageSignalArgs,
+  RefreshablePost,
+  PickRefreshTargetArgs,
+  RefreshTarget,
 } from "./gsc.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";

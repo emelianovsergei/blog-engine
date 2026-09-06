@@ -132,3 +132,103 @@ test("selectWeeklyTopic works with the HVAC-only (PULSE) category config", async
   assert.equal(result.topic, "Furnace warning signs before winter");
   assert.equal(result.category, "heating");
 });
+
+// ─── Search Console hints (v0.17) ────────────────────────────────────────────
+
+import type { GscSignal } from "../gsc.js";
+import type { GenerateContentCall } from "./fakes.js";
+
+const gscSignal = (rows: Array<{ query: string; impressions: number; position: number }>): GscSignal => {
+  const full = rows.map((r) => ({ ...r, clicks: 0, ctr: 0 }));
+  return { status: "ok", rows: full, byQuery: new Map(full.map((r) => [r.query.toLowerCase(), r])) };
+};
+
+test("selectWeeklyTopic feeds Search Console opportunities into candidate generation and prefers a hinted candidate", async () => {
+  const capture: GenerateContentCall[] = [];
+  const candidatesJson = {
+    candidates: [
+      { topic: "Zone damper actuator replacement guide", notes: "Niche repair walkthrough.", categoryId: "hvac" },
+      {
+        topic: "AC installation in Citrus Heights: what it costs and what to expect",
+        notes: "Answers the query the site already ranks on page two for.",
+        categoryId: "hvac",
+        hintQuery: "ac installation citrus heights",
+      },
+    ],
+  };
+  const signal = gscSignal([
+    { query: "ac installation citrus heights", impressions: 2630, position: 9.4 },
+    { query: "furnace repair roseville", impressions: 400, position: 14 },
+    { query: "already ranking well", impressions: 900, position: 2 },
+  ]);
+
+  const result = await selectWeeklyTopic({
+    config: sampleConfig,
+    existingPosts: [],
+    now: new Date("2026-07-15T19:00:00Z"),
+    gemini: makeFakeGemini({ candidatesJson, capture }),
+    weatherClient: makeFakeWeather(),
+    gscSignal: signal,
+  });
+
+  const prompt = String(capture[0]?.contents ?? "");
+  assert.match(prompt, /Search Console/i, "prompt carries the opportunities block");
+  assert.match(prompt, /ac installation citrus heights/, "the page-two query is listed as a hint");
+  assert.match(prompt, /2,?630/, "impressions are shown");
+  assert.doesNotMatch(prompt, /already ranking well/, "queries already on page one are not opportunities");
+
+  assert.equal(result.topic, candidatesJson.candidates[1]!.topic, "the hinted candidate wins");
+  assert.equal(result.gsc?.status, "ok");
+  assert.equal(result.gsc?.hintQuery, "ac installation citrus heights");
+  assert.equal(result.gsc?.impressions, 2630);
+  assert.match(result.rationale, /search console|gsc/i);
+});
+
+test("selectWeeklyTopic degrades to today's behaviour when the signal is absent or unauthorized", async () => {
+  const candidatesJson = {
+    candidates: [{ topic: "Furnace warning signs before winter", notes: "What to watch for.", categoryId: "hvac" }],
+  };
+  for (const status of ["absent", "unauthorized"] as const) {
+    const capture: GenerateContentCall[] = [];
+    const result = await selectWeeklyTopic({
+      config: sampleConfig,
+      existingPosts: [],
+      now: new Date("2026-12-15T19:00:00Z"),
+      gemini: makeFakeGemini({ candidatesJson, capture }),
+      weatherClient: makeFakeWeather(),
+      gscSignal: { status, rows: [], byQuery: new Map(), message: "HTTP 403" },
+    });
+    assert.doesNotMatch(String(capture[0]?.contents ?? ""), /Search Console/i);
+    assert.equal(result.topic, "Furnace warning signs before winter");
+    assert.equal(result.gsc?.status, status);
+  }
+  const noSignal = await selectWeeklyTopic({
+    config: sampleConfig,
+    existingPosts: [],
+    now: new Date("2026-12-15T19:00:00Z"),
+    gemini: makeFakeGemini({ candidatesJson }),
+    weatherClient: makeFakeWeather(),
+  });
+  assert.equal(noSignal.gsc, undefined);
+});
+
+test("selectWeeklyTopic drops hints whose head term an existing post title already carries", async () => {
+  const capture: GenerateContentCall[] = [];
+  await selectWeeklyTopic({
+    config: sampleConfig,
+    existingPosts: samplePosts, // includes "Refrigerator Not Cooling"
+    now: new Date("2026-07-15T19:00:00Z"),
+    gemini: makeFakeGemini({
+      candidatesJson: { candidates: [{ topic: "Something new", notes: "n", categoryId: "hvac" }] },
+      capture,
+    }),
+    weatherClient: makeFakeWeather(),
+    gscSignal: gscSignal([
+      { query: "refrigerator not cooling", impressions: 800, position: 12 },
+      { query: "dryer not heating", impressions: 300, position: 15 },
+    ]),
+  });
+  const prompt = String(capture[0]?.contents ?? "");
+  assert.match(prompt, /dryer not heating/);
+  assert.doesNotMatch(prompt, /- "?refrigerator not cooling"? — /i, "a query an existing post already targets is not re-suggested");
+});
