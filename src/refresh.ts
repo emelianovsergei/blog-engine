@@ -355,13 +355,21 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     frontmatter[key] = value;
   };
 
-  if (fields.includes("summary") && typeof raw.summary === "string" && raw.summary.trim()) {
-    const words = countWords(raw.summary);
+  // A requested field the model omitted or returned malformed is a rejected
+  // response, not a silent no-op: the whole point of a backfill is that the
+  // post leaves with the field. (howTo and keywords stay optional.)
+  const missing = (field: string): never => {
+    throw new Error(`Refresh rejected: requested field "${field}" is missing or malformed in the model response`);
+  };
+  if (fields.includes("summary")) {
+    if (typeof raw.summary !== "string" || !raw.summary.trim()) missing("summary");
+    const words = countWords(raw.summary as string);
     if (words < 35 || words > 95) throw new Error(`Refresh rejected: summary is ${words} words (expected 50-70)`);
-    set("summary", raw.summary.trim());
+    set("summary", (raw.summary as string).trim());
   }
   if (fields.includes("faqs")) {
     const faqs = cleanFaqs(raw.faqs);
+    if (!faqs) missing("faqs");
     // Only a NEW FAQ set is held to the count; echoing the existing one back
     // (even a short legacy one) is "no change", not a rejection.
     if (faqs && stable(faqs) !== stable(frontmatter.faqs) && (faqs.length < 3 || faqs.length > 8)) {
@@ -369,14 +377,19 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     }
     set("faqs", faqs);
   }
-  if (fields.includes("targetKeyword") && typeof raw.targetKeyword === "string" && raw.targetKeyword.trim()) {
-    const keyword = raw.targetKeyword.trim();
+  if (fields.includes("targetKeyword")) {
+    if (typeof raw.targetKeyword !== "string" || !raw.targetKeyword.trim()) missing("targetKeyword");
+    const keyword = (raw.targetKeyword as string).trim();
     const issue = topicAlignmentIssue(keyword, frontmatter.title);
     if (issue) throw new Error(`Refresh rejected: targetKeyword is off-topic — ${issue}`);
     set("targetKeyword", keyword);
   }
   if (fields.includes("keywords")) set("keywords", cleanStrings(raw.keywords));
-  if (fields.includes("citations")) set("citations", cleanCitations(raw.citations, policy));
+  if (fields.includes("citations")) {
+    const citations = cleanCitations(raw.citations, policy);
+    if (!citations) missing("citations");
+    set("citations", citations);
+  }
 
   let howTo: RefreshHowTo | undefined;
   if (fields.includes("howTo")) {

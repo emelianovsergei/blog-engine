@@ -103,18 +103,22 @@ export interface RubricRule {
 
 /** ATX form: `## FAQ`, `## FAQs`, `### Frequently asked questions`, with the
  * up-to-three-space indent Markdown still treats as a heading. */
-const FAQ_HEADING_ATX = /^ {0,3}#{1,6}[ \t]*(?:[*_`~]+|\[)?[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)(?![a-z])/im;
+const FAQ_HEADING_ATX = /^(?: {0,3}> ?)* {0,3}#{1,6}[ \t]*(?:[*_`~]+|\[)?[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)(?![a-z])/im;
 /** Setext form: the FAQ text on its own line, underlined with `===` or `---`. */
-const FAQ_HEADING_SETEXT = /^ {0,3}(?:[*_`~]+|\[)?[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)(?![a-z])[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/im;
+const FAQ_HEADING_SETEXT = /^(?: {0,3}> ?)* {0,3}(?:[*_`~]+|\[)?[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)(?![a-z])[^\n]*\n(?: {0,3}> ?)* {0,3}(?:=+|-+)[ \t]*$/im;
 
 /** Raw HTML/JSX form — MDX renders `<h2>FAQ</h2>` as a heading too. */
 const FAQ_HEADING_HTML = /<h[1-6]\b[^>]*>(?:\s*<[^>]+>)*\s*(?:frequently\s+asked\s+questions|faqs?)(?![a-z])/i;
 
+/** The body without fenced code: examples are code, not headings. */
+export function stripFencedCode(body: string): string {
+  return body.replace(/```[\s\S]*?```/g, "").replace(/~~~[\s\S]*?~~~/g, "");
+}
+
 /** True when the body carries an FAQ heading in any syntax MDX renders as a
  * heading: ATX, Setext, or a raw HTML/JSX heading element. */
 export function hasFaqHeading(body: string): boolean {
-  // Fenced examples are code, not headings.
-  const prose = body.replace(/```[\s\S]*?```/g, "").replace(/~~~[\s\S]*?~~~/g, "");
+  const prose = stripFencedCode(body);
   return FAQ_HEADING_ATX.test(prose) || FAQ_HEADING_SETEXT.test(prose) || FAQ_HEADING_HTML.test(prose);
 }
 
@@ -125,7 +129,8 @@ function escapeRegex(s: string): string {
 /** True when `heading` is present as a complete H2 line (exact text and case,
  * not a substring, not demoted to H3, not extended). */
 export function hasExactH2(body: string, heading: string): boolean {
-  return new RegExp(`^ {0,3}##[ \\t]+${escapeRegex(heading)}[ \\t]*$`, "m").test(body);
+  // A copy inside a fenced example is code, not a rendered heading.
+  return new RegExp(`^ {0,3}##[ \\t]+${escapeRegex(heading)}[ \\t]*$`, "m").test(stripFencedCode(body));
 }
 
 export function countWords(text: string): number {

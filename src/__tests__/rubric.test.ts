@@ -160,7 +160,7 @@ test("writer gets the hedge list and the citation format", () => {
 
 // ─── faq-authorship recognises every Markdown heading form (v0.17) ──────────
 
-import { checkArticleBody as checkBodyForms } from "../rubric.js";
+import { checkArticleBody as checkBodyForms, hasExactH2 } from "../rubric.js";
 
 test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () => {
   const body = (heading: string) =>
@@ -174,6 +174,8 @@ test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () =>
     '<h3 className="faq">FAQ</h3>',
     "## **FAQ**",
     "## [FAQ](#faq)",
+    "> ## Frequently Asked Questions",
+    "> > ### FAQ",
   ]) {
     const ids = checkBodyForms(body(heading)).map((v) => v.rule);
     assert.ok(ids.includes("faq-authorship"), `${JSON.stringify(heading)} should be flagged`);
@@ -189,4 +191,10 @@ test("faq-authorship ignores FAQ headings inside fenced code and catches nested 
   for (const html of ["<h2><strong>FAQ</strong></h2>", "<h2><span>Frequently Asked Questions</span></h2>"]) {
     assert.ok(checkBodyForms(body(`${html}\n\n**Q?**\n\nA.`)).map((v) => v.rule).includes("faq-authorship"), html);
   }
+});
+
+test("hasExactH2 ignores a required heading that only appears inside fenced code", () => {
+  const body = "Intro.\n\n```md\n## When to Call a Pro\n```\n\n## Something else\n";
+  assert.equal(hasExactH2(body, "When to Call a Pro"), false);
+  assert.equal(hasExactH2("## When to Call a Pro\n\ntext", "When to Call a Pro"), true);
 });

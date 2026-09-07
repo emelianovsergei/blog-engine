@@ -121,7 +121,8 @@ async function main(): Promise<number> {
     }
   }
 
-  let text = serializeDocument(out, result.markdown);
+  const preAudit = serializeDocument(out, result.markdown);
+  let text = preAudit;
   let auditSummary: unknown = null;
   if (!skipAudit) {
     const repaired = await auditAndRepairFile(text, linkPolicy);
@@ -130,8 +131,9 @@ async function main(): Promise<number> {
   }
   // Write when the model changed something OR the link audit repaired the
   // file (a dead/denied link removed is a change worth persisting even when
-  // the model returned identical content).
-  const auditChanged = text !== serializeDocument(frontmatter, body);
+  // the model returned identical content). "Repaired" means the audit's
+  // output differs from ITS input, not from the original document.
+  const auditChanged = text !== preAudit;
   const wrote = result.changedFields.length > 0 || auditChanged;
   if (wrote) {
     await writeFile(postPath, text, "utf8");

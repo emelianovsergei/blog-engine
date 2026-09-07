@@ -302,3 +302,44 @@ test("refresh removes stale HowTo metadata when the model omits a requested howT
   });
   assert.deepEqual(none.changedFields, []);
 });
+
+// ─── Codex round 3 on #36 ────────────────────────────────────────────────────
+
+test("refresh rejects a response that omits a requested required field", async () => {
+  for (const [field, output] of [
+    ["summary", { frontmatter: {}, markdown, changeNotes: "n" }],
+    ["faqs", { frontmatter: { faqs: "not a list" }, markdown, changeNotes: "n" }],
+    ["targetKeyword", { frontmatter: { targetKeyword: 42 }, markdown, changeNotes: "n" }],
+    ["citations", { frontmatter: { citations: [] }, markdown, changeNotes: "n" }],
+  ] as const) {
+    await assert.rejects(
+      refreshBlogPost({
+        gemini: makeFakeGemini({ candidatesJson: output }),
+        config: sampleConfig,
+        frontmatter,
+        markdown,
+        rankingQueries: [],
+        now: new Date("2026-09-08T09:00:00-07:00"),
+        mode: "backfill",
+        fields: [field],
+        rubric: RUBRIC,
+        linkPolicy: policy,
+      }),
+      new RegExp(field),
+      `${field} missing must reject`,
+    );
+  }
+  // Optional fields (howTo, keywords) may be omitted without rejection.
+  const ok = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: { frontmatter: {}, markdown, changeNotes: "n" } }),
+    config: sampleConfig,
+    frontmatter,
+    markdown,
+    rankingQueries: [],
+    now: new Date("2026-09-08T09:00:00-07:00"),
+    mode: "backfill",
+    fields: ["howTo", "keywords"],
+    rubric: RUBRIC,
+  });
+  assert.deepEqual(ok.changedFields, []);
+});
