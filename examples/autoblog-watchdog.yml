@@ -1,11 +1,6 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/autoblog-watchdog.yml
 #
-# Adjust the two windows in the job-level `env` per repo: DELIVERY_STALE_DAYS
-# ("is the pipeline still producing?") and STRANDED_PR_DAYS ("is a finished
-# post stuck?"). Every alert title and body derives from them. Requires no
-# secrets beyond the built-in GITHUB_TOKEN.
-#
 # Autoblog delivery watchdog.
 #
 # The 2026-07-25 weekly post was never published and nobody noticed for two
@@ -27,7 +22,7 @@ name: Autoblog Watchdog
 
 on:
   schedule:
-    - cron: "0 18 * * 1"   # Monday ~10-11 AM PT — after Saturday generation + the 24h merge window
+    - cron: "0 18 * * 1,4"   # Monday + Thursday ~10-11 AM PT — after each slot's generation + 24h merge window
   workflow_dispatch:
 
 permissions:
@@ -65,6 +60,14 @@ jobs:
     env:
       DELIVERY_STALE_DAYS: 10
       STRANDED_PR_DAYS: 21
+      # Cadence check: merged NEW-post PRs (branch blog/auto-*, not refresh or
+      # backfill) in the last WINDOW_DAYS must reach EXPECTED_POSTS_PER_WEEK.
+      # The repo variable defaults to 1 so the check cannot false-alarm before
+      # the first Wednesday post has merged; set AUTOBLOG_EXPECTED_POSTS_PER_WEEK
+      # to 2 once it has. "Did anything ship in 10 days" alone cannot see one
+      # of two weekly slots stopping.
+      WINDOW_DAYS: 7
+      EXPECTED_POSTS_PER_WEEK: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '1' }}
 
     steps:
       - name: Assess autoblog delivery
@@ -122,12 +125,38 @@ jobs:
 
             if [ "$LAST_TS" -ge "$CUTOFF" ]; then
               DELIVERY_OK=1
-              echo "healthy=true" >> "$GITHUB_OUTPUT"
               echo "✅ Last blog delivery: $LAST_ISO"
             else
-              echo "healthy=false" >> "$GITHUB_OUTPUT"
               echo "::warning::No autoblog PR has merged since $LAST_ISO"
             fi
+          fi
+
+          # Cadence: new-post merges in the window. Refresh (`blog/refresh-*`)
+          # and backfill (`blog/backfill-*`) PRs carry the `autoblog` label for
+          # the review gate but are not new posts, so they are excluded here.
+          WINDOW_CUTOFF=$(date -u -d "${WINDOW_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          # gh's built-in --jq takes no --arg (see the stranded check below),
+          # so filter the raw payload with real jq. A listing failure is an
+          # error, not "zero posts": echoing 0 here would raise a false outage.
+          if ! MERGED_JSON=$(gh pr list --state merged --limit 60 --json mergedAt,headRefName,labels); then
+            echo "::error::Could not list merged PRs — cannot assess cadence."
+            exit 1
+          fi
+          RECENT_COUNT=$(jq -r --arg cutoff "$WINDOW_CUTOFF" '[ .[]
+                    | select(.mergedAt != null and .mergedAt >= $cutoff)
+                    | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
+                  ] | length' <<<"$MERGED_JSON")
+          echo "recent_count=$RECENT_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$RECENT_COUNT" -lt "$EXPECTED_POSTS_PER_WEEK" ]; then
+            DELIVERY_OK=0
+            echo "::warning::Only $RECENT_COUNT new-post PR(s) merged in the last ${WINDOW_DAYS} days; expected ${EXPECTED_POSTS_PER_WEEK}."
+          else
+            echo "✅ $RECENT_COUNT new-post PR(s) merged in the last ${WINDOW_DAYS} days (expected ${EXPECTED_POSTS_PER_WEEK})."
+          fi
+          if [ "${DELIVERY_OK:-0}" = "1" ]; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
           fi
 
           # A SEPARATE question, assessed independently and reported separately.
@@ -206,8 +235,9 @@ jobs:
                     | "- #\(.number) \(.title) — draft=\(.isDraft), labels=[\([.labels[].name] | join(", "))], head=\(.headRefName), opened \(.createdAt)"' \
               || echo "- (could not list PRs)"
             echo
-            echo "### Recent Generate Weekly Blog Post runs"
-            gh run list --workflow "Generate Weekly Blog Post" --limit 5 \
+            echo "### Recent generate-blog-post.yml runs"
+            # Filter by file name, which survives display-name changes.
+            gh run list --workflow generate-blog-post.yml --limit 8 \
               --json databaseId,conclusion,createdAt,event \
               --jq '.[] | "- [\(.conclusion // "in_progress")] \(.createdAt) (\(.event)) — run \(.databaseId)"' \
               || echo "- (could not list runs)"
@@ -226,6 +256,7 @@ jobs:
           # supplies that context without paying for a checkout.
           GH_REPO: ${{ github.repository }}
           LAST_DELIVERY: ${{ steps.assess.outputs.last_delivery }}
+          RECENT_COUNT: ${{ steps.assess.outputs.recent_count }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -247,9 +278,10 @@ jobs:
 
           BODY_FILE=$(mktemp)
           {
-            echo "The weekly autoblog pipeline has not delivered a post in over ${DELIVERY_STALE_DAYS} days."
+            echo "The autoblog pipeline is behind: either no post merged in ${DELIVERY_STALE_DAYS} days, or fewer than ${EXPECTED_POSTS_PER_WEEK} new post(s) merged in the last ${WINDOW_DAYS} days."
             echo
             echo "- Last merged \`autoblog\` PR: **${LAST_DELIVERY:-unknown}**"
+            echo "- New-post PRs merged in the last ${WINDOW_DAYS} days: **${RECENT_COUNT:-unknown}** (expected ${EXPECTED_POSTS_PER_WEEK})"
             echo "- Watchdog run: $RUN_URL"
             echo
             cat diagnosis.md
@@ -257,7 +289,7 @@ jobs:
             echo "### Where to look"
             echo "1. **PR open but unmerged** — check its CI. \`autoblog-merge-pending\` refuses to merge a PR whose checks are not green, by design."
             echo "2. **PR labelled \`autoblog-review-failed\`** — the auto-fix loop hit its cap (\`AUTOBLOG_MAX_AUTOFIX\`) and wants a human."
-            echo "3. **No PR at all** — generation itself failed. Re-run *Generate Weekly Blog Post* via workflow_dispatch; output is now committed before any gate, so a partial failure still leaves a PR."
+            echo "3. **No PR at all** — generation itself failed. Re-run \`generate-blog-post.yml\` via workflow_dispatch (\`gh workflow run generate-blog-post.yml\`); output is now committed before any gate, so a partial failure still leaves a PR."
             echo "4. **\`autoblog-hold\` label present** — publishing is paused on purpose."
           } > "$BODY_FILE"
 
@@ -334,9 +366,9 @@ jobs:
 
           # Provision the label HERE too, not just in the outage step above.
           # That step is gated on `healthy == 'false'`, so on a repo where
-          # delivery is fine but a PR is stranded it never runs — and this
-          # step's `gh issue create --label` would then fail against a label
-          # that does not exist, losing the very alert it exists to raise.
+          # delivery is fine but a PR is stranded it never runs — and the
+          # `--label` calls below would then act on a label that does not
+          # exist, losing the very alert this step exists to raise.
           gh label create autoblog-watchdog \
             --color D93F0B --description "Autoblog delivery watchdog alert" \
             >/dev/null 2>&1 || true
@@ -378,7 +410,8 @@ jobs:
             echo "- Watchdog run: $RUN_URL"
             echo
             echo "### Where to look"
-            echo "1. **Red CI** — \`autoblog-merge-pending\` refuses a PR whose checks are not green, by design."
+            echo "1. **Red CI** — \`autoblog-merge-pending\` refuses a PR whose checks are not green, by design. \`autoblog-ci-heal\` repairs dead-link failures automatically; anything still red here it could not fix."
+            echo "1b. **\`autoblog-ci-failed\`** — the CI healer classified the failure as something it must not guess at."
             echo "2. **\`autoblog-review-failed\`** — the auto-fix loop hit its cap and wants a human."
             echo "3. **\`autoblog-link-repair-needed\`** — a dead link is still in the prose; rewrite the sentence and the gate clears."
             echo "4. **No checks at all** — the head was pushed without raising events; close and reopen the PR to re-trigger."

@@ -1,0 +1,190 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-ci-heal.yml
+#
+# Autoblog red-CI healer.
+#
+# The auto-fix loop in autoblog-review.yml only ever reacted to a failing AI
+# REVIEW. Nothing reacted to failing CI — and autoblog-merge-pending refuses to
+# merge a PR whose checks are not green, so a red autoblog PR sat forever until
+# a human noticed. autoblog-watchdog documents that stuck state; this workflow
+# is what actually clears it.
+#
+# Only one failure class is healed automatically, deliberately:
+#
+#   Class A — a denylisted / dead outbound link. Repaired by blog-engine-repair,
+#             which is deterministic: no model, no cost, no new prose. Asking an
+#             LLM to "fix the link" lets it rewrite the paragraph around the URL,
+#             which is a fresh hallucination surface for a mechanical problem.
+#
+#   Class B — anything else. Labelled and commented, never guessed at.
+#
+# Loop safety: this workflow's commits carry [autoblog-cifix], distinct from
+# review auto-fix's [autoblog-autofix], and are capped at 1 per branch. The
+# review workflow counts BOTH markers against AUTOBLOG_MAX_AUTOFIX, so the two
+# healers cannot re-trigger each other indefinitely.
+
+name: Autoblog CI Heal
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: autoblog-ci-heal-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  heal:
+    name: heal
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      (startsWith(github.event.workflow_run.head_branch, 'blog/auto-') ||
+       startsWith(github.event.workflow_run.head_branch, 'blog/refresh-') ||
+       startsWith(github.event.workflow_run.head_branch, 'blog/backfill-'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the pull request for this branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          NUM=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+                  --state open --json number --jq '.[0].number // empty')
+          if [ -z "$NUM" ]; then
+            echo "No open PR for $BRANCH — nothing to heal."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the fix budget
+        id: budget
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # One CI fix per branch. A second failure after a deterministic repair
+          # means the cause was never the link, and another pass will not help.
+          ATTEMPTS=$(gh api "repos/$GITHUB_REPOSITORY/commits?sha=$BRANCH&per_page=100" \
+                      --jq '[.[] | select(.commit.message | contains("[autoblog-cifix]"))] | length')
+          echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
+          if [ "$ATTEMPTS" -ge 1 ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download link violations
+        id: violations
+        if: steps.pr.outputs.found == 'true' && steps.budget.outputs.eligible == 'true'
+        uses: actions/download-artifact@v6
+        continue-on-error: true
+        with:
+          name: link-violations
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Classify the failure
+        id: classify
+        if: steps.pr.outputs.found == 'true' && steps.budget.outputs.eligible == 'true'
+        run: |
+          set -euo pipefail
+          if [ -f link-violations.json ]; then
+            COUNT=$(jq '.offenders | length' link-violations.json)
+            echo "Link violations reported: $COUNT"
+            jq -r '.offenders[]' link-violations.json || true
+            [ "$COUNT" -gt 0 ] && echo "class=link" >> "$GITHUB_OUTPUT" || echo "class=other" >> "$GITHUB_OUTPUT"
+          else
+            echo "No link-violations artifact — this is not a link failure."
+            echo "class=other" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout the PR branch
+        if: steps.classify.outputs.class == 'link'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          token: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: steps.classify.outputs.class == 'link'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        if: steps.classify.outputs.class == 'link'
+        run: npm ci
+
+      - name: Repair links deterministically
+        id: repair
+        if: steps.classify.outputs.class == 'link'
+        run: |
+          set +e
+          UNRESOLVED=0
+          for FILE in $(git diff --name-only "origin/${{ github.event.workflow_run.head_repository.default_branch || 'main' }}"...HEAD -- 'content/blog/*.mdx' 'content/blog/*.md'); do
+            echo "repairing $FILE"
+            npx blog-engine-repair \
+              --post "$FILE" \
+              --link-policy content/policy/link-constraints.json \
+              --audit-out ci-heal-audit.json
+            [ $? -eq 2 ] && UNRESOLVED=1
+          done
+          echo "unresolved=$UNRESOLVED" >> "$GITHUB_OUTPUT"
+          git diff --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push the repair
+        if: steps.classify.outputs.class == 'link' && steps.repair.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A content/
+          git commit -m "autoblog: strip dead links flagged by CI [autoblog-cifix]"
+          git push origin "HEAD:$BRANCH"
+
+      - name: Report the outcome on the PR
+        if: always() && steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+          CLASS: ${{ steps.classify.outputs.class }}
+          CHANGED: ${{ steps.repair.outputs.changed }}
+          UNRESOLVED: ${{ steps.repair.outputs.unresolved }}
+          ELIGIBLE: ${{ steps.budget.outputs.eligible }}
+        run: |
+          set -euo pipefail
+          if [ "$ELIGIBLE" != "true" ]; then
+            gh pr comment "$PR" --body "CI is still red after an automatic link repair. The cause is not a dead link — a human needs to look."
+            gh pr edit "$PR" --add-label autoblog-ci-failed || true
+            exit 0
+          fi
+          if [ "$CLASS" = "link" ] && [ "$CHANGED" = "true" ]; then
+            if [ "$UNRESOLVED" = "1" ]; then
+              gh pr edit "$PR" --add-label autoblog-link-repair-needed || true
+              gh pr comment "$PR" --body "Stripped the dead links CI flagged, but at least one URL survives in prose and needs a human edit."
+            else
+              gh pr comment "$PR" --body "CI flagged dead outbound links; repaired them deterministically (no model involved) and pushed. Re-running checks."
+            fi
+          elif [ "$CLASS" = "link" ]; then
+            gh pr comment "$PR" --body "CI flagged dead links but the deterministic repair changed nothing — the offender is not in a form the repairer can rewrite. Needs a human."
+            gh pr edit "$PR" --add-label autoblog-link-repair-needed || true
+          else
+            gh pr comment "$PR" --body "CI is red for something other than a dead link. Not attempting an automatic fix."
+            gh pr edit "$PR" --add-label autoblog-ci-failed || true
+          fi
