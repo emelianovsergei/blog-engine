@@ -176,6 +176,8 @@ test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () =>
     "## [FAQ](#faq)",
     "> ## Frequently Asked Questions",
     "> > ### FAQ",
+    "## <span>FAQ</span>",
+    '## <strong className="x">Frequently Asked Questions</strong>',
   ]) {
     const ids = checkBodyForms(body(heading)).map((v) => v.rule);
     assert.ok(ids.includes("faq-authorship"), `${JSON.stringify(heading)} should be flagged`);
