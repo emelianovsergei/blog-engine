@@ -133,9 +133,45 @@ Rules for each candidate:
  * unparseable — the orchestrator treats that as a hard failure of the run.
  */
 export async function generateCandidates(args: GenerateCandidatesArgs): Promise<CandidateTopic[]> {
+  const first = await requestCandidates(args, buildPrompt(args));
+  const required = hintQuota(args);
+  if (required === 0 || first.filter((c) => c.hintQuery).length >= required) return first;
+
+  // The prompt promised at least half the candidates would answer an offered
+  // Search Console query; this response did not deliver. Ask once more with
+  // the shortfall stated, so a run does not quietly revert to blind topic
+  // generation while still reporting the opportunities as offered.
+  console.error(
+    `[blog-engine] candidate response targeted ${first.filter((c) => c.hintQuery).length} of the required ${required} Search Console queries — retrying once.`,
+  );
+  const retry = await requestCandidates(
+    args,
+    `${buildPrompt(args)}\n\nYOUR PREVIOUS RESPONSE IS REJECTED: it set "hintQuery" on fewer than ${required} candidates. Return ${args.count} candidates again, and for at least ${required} of them set "hintQuery" to one of the exact Search Console queries listed above, copied character for character.`,
+  );
+  if (retry.filter((c) => c.hintQuery).length >= required) return retry;
+
+  // Still short. Continue with the better of the two rather than lose the
+  // week's post over a ranking preference, but say so loudly: the run report
+  // and the workflow log must not imply the hints were used.
+  const best = retry.filter((c) => c.hintQuery).length > first.filter((c) => c.hintQuery).length ? retry : first;
+  console.error(
+    `[blog-engine] candidate generation ignored the Search Console hints after a retry: ${best.filter((c) => c.hintQuery).length} of ${best.length} candidates target an offered query, expected at least ${required}. Continuing without the hint quota.`,
+  );
+  return best;
+}
+
+/** How many candidates must carry a recognized `hintQuery`, given what was
+ * offered and how many were asked for. Zero when no hints were offered. */
+function hintQuota(args: GenerateCandidatesArgs): number {
+  const offered = args.hints?.length ?? 0;
+  if (offered === 0) return 0;
+  return Math.min(Math.ceil(args.count / 2), offered);
+}
+
+async function requestCandidates(args: GenerateCandidatesArgs, prompt: string): Promise<CandidateTopic[]> {
   const response = await args.gemini.models.generateContent({
     model: args.model ?? DEFAULT_GENERATION_MODEL,
-    contents: buildPrompt(args),
+    contents: prompt,
     config: { responseMimeType: "application/json", responseSchema: candidateSchema },
   });
 

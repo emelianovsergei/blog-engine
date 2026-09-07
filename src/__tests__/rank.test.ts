@@ -118,3 +118,28 @@ test("pickBest relaxes the filter when every candidate is a duplicate", () => {
   // 0.88 is the more distinct of the two, so it wins.
   assert.equal(winner.candidate.topic, "b");
 });
+
+test("a measured GSC candidate is not outranked by an unmeasured one on scale alone", () => {
+  // Same dedup, same rotation, neither weather-fit: the only difference is
+  // that one candidate has a real (positive) demand score and the other has
+  // none. Mixing demand-free and demand weights used to score the unmeasured
+  // row higher, inverting the point of the GSC stage.
+  const candidates = [
+    { topic: "Measured topic", notes: "n", categoryId: "hvac" },
+    { topic: "Unmeasured topic", notes: "n", categoryId: "hvac" },
+  ];
+  const duplication = candidates.map(() => ({ maxSimilarity: 0, nearest: undefined }));
+  const ranked = rankCandidates({
+    candidates,
+    duplication,
+    recentMix: { overrepresented: [], counts: {} },
+    weather: { anomaly: "none", summary: "", maxTempF: 80, minTempF: 50, maxAqi: 20, available: true },
+    demand: [0.5, null],
+  });
+  const measured = ranked.find((r) => r.candidate.topic === "Measured topic")!;
+  const unmeasured = ranked.find((r) => r.candidate.topic === "Unmeasured topic")!;
+  assert.ok(
+    measured.score >= unmeasured.score,
+    `measured ${measured.score.toFixed(3)} must not lose to unmeasured ${unmeasured.score.toFixed(3)}`,
+  );
+});

@@ -425,3 +425,42 @@ test("refresh removes incomplete legacy HowTo keys when the model omits howTo", 
     assert.ok(result.changedFields.includes("howTo"), "removing stale metadata is a change");
   }
 });
+
+test("refresh can remove a pre-existing body FAQ under appended-by-code", async () => {
+  // Keeping it fails the FAQ guard; dropping it must not fail the
+  // section-preservation guard, or the post can never be refreshed at all.
+  const withFaq = `${markdown}\n\n## Frequently Asked Questions\n\n**Q?**\n\nA.`;
+  const result = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: modelOutput({ markdown }) }),
+    config: sampleConfig,
+    frontmatter,
+    markdown: withFaq,
+    rankingQueries: queries,
+    now: new Date("2026-09-14T09:00:00-07:00"),
+    mode: "refresh",
+    rubric: RUBRIC,
+    linkPolicy: policy,
+  });
+  assert.ok(!/frequently asked questions/i.test(result.markdown), "the legacy body FAQ is gone");
+});
+
+test("Setext and HTML H2s count as existing sections during refresh", async () => {
+  const withOtherForms = `${markdown}\n\nVent inspection basics\n---\n\nProse about the vent.\n\n<h2>Thermostat checks</h2>\n\nProse about the thermostat.`;
+  // The model drops both non-ATX sections; that must be rejected like any
+  // other dropped section.
+  await assert.rejects(
+    () =>
+      refreshBlogPost({
+        gemini: makeFakeGemini({ candidatesJson: modelOutput({ markdown }) }),
+        config: sampleConfig,
+        frontmatter,
+        markdown: withOtherForms,
+        rankingQueries: queries,
+        now: new Date("2026-09-14T09:00:00-07:00"),
+        mode: "refresh",
+        rubric: RUBRIC,
+        linkPolicy: policy,
+      }),
+    /dropped existing section/i,
+  );
+});

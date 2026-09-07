@@ -121,14 +121,41 @@ const refreshSchema = {
   required: ["frontmatter", "markdown", "changeNotes"],
 };
 
+const SETEXT_H2_RULE = /^ {0,3}-+[ \t]*$/;
+const HTML_H2 = /<h2\b[^>]*>([\s\S]*?)<\/h2>/gi;
+
+/**
+ * Every H2 the body renders, in the three forms MDX produces: ATX ("## X"),
+ * Setext (text underlined with dashes) and a raw HTML/JSX `<h2>`. Collecting
+ * only ATX let a Setext or HTML section disappear without tripping the
+ * dropped-section guard.
+ *
+ * Fenced examples are excluded: sample text is not a section, and a heading
+ * inside code must not consume the one-new-H2 allowance.
+ *
+ * An FAQ heading is never counted. Under `appended-by-code` a legacy body FAQ
+ * has to be REMOVABLE — keeping it fails the FAQ guard, so counting it as a
+ * section to preserve would leave the post impossible to refresh at all.
+ */
 function h2Headings(markdown: string): string[] {
-  // Fenced examples often contain a literal "## ...". Those are sample text,
-  // not sections: counting them rejects a legitimate edit to the example and
-  // lets a heading inside code consume the one-new-H2 allowance.
-  return stripFencedCode(markdown)
-    .split("\n")
-    .map((line) => /^ {0,3}##[ \t]+(.+?)[ \t]*$/.exec(line)?.[1])
-    .filter((h): h is string => typeof h === "string");
+  const prose = stripFencedCode(markdown);
+  const lines = prose.split("\n");
+  const out: string[] = [];
+  for (const [i, line] of lines.entries()) {
+    const atx = /^ {0,3}##[ \t]+(.+?)[ \t]*$/.exec(line)?.[1];
+    if (atx) {
+      out.push(atx);
+      continue;
+    }
+    const next = lines[i + 1];
+    const text = /^ {0,3}(\S.*?)[ \t]*$/.exec(line)?.[1];
+    if (text && next && SETEXT_H2_RULE.test(next) && !/^#/.test(text)) out.push(text);
+  }
+  for (const match of prose.matchAll(HTML_H2)) {
+    const text = (match[1] ?? "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    if (text) out.push(text);
+  }
+  return out.filter((h) => !hasFaqHeading(`## ${h}`));
 }
 
 function stable(value: unknown): string {

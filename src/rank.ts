@@ -25,6 +25,11 @@ const WEIGHT_WEATHER = 0.2;
 // longer outranks demand.
 const DEMAND_WEIGHTS = { dedup: 0.25, demand: 0.45, rotation: 0.15, weather: 0.15 };
 
+// What a candidate with no demand signal scores when other rows in the same
+// run DO have one. Neutral rather than zero: absence of evidence is not
+// evidence of no demand, but it must not beat measured demand either.
+const UNMEASURED_DEMAND = 0.5;
+
 // Below this, a candidate is "comfortably distinct" and takes no penalty at
 // all — writing another post adjacent to one that already ranks is how topic
 // clusters are built, not a defect.
@@ -90,14 +95,17 @@ export function rankCandidates(args: RankArgs): RankedCandidate[] {
     const text = `${candidate.topic} ${candidate.notes}`.toLowerCase();
     const weatherFit =
       anomalyWords.length > 0 && anomalyWords.some((word) => text.includes(word)) ? 1 : 0;
-    // A null entry means this candidate got no signal; fall back to the
-    // demand-free weights FOR THIS ROW rather than scoring it zero demand,
-    // which would penalise it against rows that happened to resolve.
+    // Every row in a run shares one scale. Mixing demand-free weights for
+    // unmeasured rows with demand weights for measured ones made the two
+    // score ranges incomparable: an unmeasured candidate could outrank a real
+    // Search Console opportunity purely because its weights summed higher.
+    // An unmeasured row instead scores at UNMEASURED_DEMAND — the neutral
+    // middle, so it is neither rewarded nor punished for the missing signal.
     const rowDemand = useDemand ? demand[index] : undefined;
     const rowHasDemand = typeof rowDemand === "number";
-    const demandScore = rowHasDemand ? rowDemand : 0;
+    const demandScore = rowHasDemand ? rowDemand : UNMEASURED_DEMAND;
 
-    const score = rowHasDemand
+    const score = useDemand
       ? dedupScore * DEMAND_WEIGHTS.dedup +
         demandScore * DEMAND_WEIGHTS.demand +
         rotationScore * DEMAND_WEIGHTS.rotation +
