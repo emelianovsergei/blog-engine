@@ -115,6 +115,18 @@ export async function makeReviewClient(): Promise<GeminiLike> {
   });
 }
 
+const FAQ_POLICIES = ["appended-by-code", "written-by-model"] as const;
+
+/** A misspelled --faq-policy used to fall through to appended-by-code, which
+ * is the OPPOSITE policy on a written-by-model site: a valid body FAQ would be
+ * rejected. Unknown values are rejected like the other enum flags. */
+function parseFaqPolicy(value: string | undefined): (typeof FAQ_POLICIES)[number] {
+  if (value === undefined) return "appended-by-code";
+  const match = FAQ_POLICIES.find((p) => p === value);
+  if (!match) throw new Error(`--faq-policy must be one of ${FAQ_POLICIES.join(", ")}, got "${value}"`);
+  return match;
+}
+
 /** Site rubric from CLI flags: `--required-headings "A|B"` and `--faq-policy`.
  * Lives here (side-effect free) so both the rewrite and refresh CLIs can import
  * it without evaluating the other command's entry point. */
@@ -128,6 +140,6 @@ export function rubricFromFlags(
       .split("|")
       .map((h) => h.trim())
       .filter(Boolean),
-    faqPolicy: faqPolicy === "written-by-model" ? "written-by-model" : "appended-by-code",
+    faqPolicy: parseFaqPolicy(faqPolicy),
   };
 }

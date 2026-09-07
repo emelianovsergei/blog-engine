@@ -435,7 +435,15 @@ export function pickRefreshTarget(args: PickRefreshTargetArgs): RefreshTarget | 
     if (!queries || queries.length === 0) continue;
     const opportunity = queries
       .filter((q) => q.impressions >= minImpressions && q.position >= minPosition && q.position <= maxPosition)
-      .reduce((sum, q) => sum + q.impressions * (1 - (q.position - minPosition) / (maxPosition - minPosition)), 0);
+      // Weight decays from 1 at minPosition to a small positive value AT
+      // maxPosition. A zero at the inclusive boundary would make a page whose
+      // only qualifying query sits exactly at maxPosition score 0 and be
+      // discarded by the guard below, contradicting the documented window.
+      .reduce(
+        (sum, q) =>
+          sum + q.impressions * ((maxPosition - q.position + 1) / (maxPosition - minPosition + 1)),
+        0,
+      );
     if (opportunity <= 0) continue;
     if (!best || opportunity > best.opportunity) {
       best = { slug: post.slug, url: post.url, queries: [...queries].sort((a, b) => b.impressions - a.impressions), opportunity };

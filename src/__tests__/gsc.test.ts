@@ -263,3 +263,11 @@ test("a configured but malformed credential is reported, not treated as absent",
     assert.match(page.message ?? "", /service.account/i);
   }
 });
+
+test("a query at the inclusive maximum position still earns opportunity", () => {
+  const byPage = new Map([["https://www.example.com/blog/edge", rows({ query: "edge q", impressions: 4000, position: 20 })]]);
+  const posts = [{ slug: "edge", url: "https://www.example.com/blog/edge", date: "2026-01-01" }];
+  const target = pickRefreshTarget({ byPage, posts, now: new Date("2026-09-06T12:00:00Z") });
+  assert.equal(target?.slug, "edge", "position 20 is inside the documented 4-20 window, so it must be selectable");
+  assert.ok((target?.opportunity ?? 0) > 0);
+});

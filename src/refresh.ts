@@ -19,7 +19,7 @@ import { categorizeText } from "./categories.js";
 import { EMPTY_LINK_POLICY, citationGuidance, policyViolation, type LinkPolicy } from "./links.js";
 import { topicAlignmentIssue, writerAccuracyRules } from "./planning.js";
 import type { BlogPostFrontmatter } from "./review.js";
-import { DEFAULT_RUBRIC_CONSTRAINTS, countWords, hasExactH2, hasFaqHeading, type RubricConstraints } from "./rubric.js";
+import { DEFAULT_RUBRIC_CONSTRAINTS, countWords, hasExactH2, hasFaqHeading, stripFencedCode, type RubricConstraints } from "./rubric.js";
 import type { EngineConfig, GeminiLike } from "./types.js";
 
 export const DEFAULT_REFRESH_MODEL = "grok-4.6";
@@ -122,7 +122,10 @@ const refreshSchema = {
 };
 
 function h2Headings(markdown: string): string[] {
-  return markdown
+  // Fenced examples often contain a literal "## ...". Those are sample text,
+  // not sections: counting them rejects a legitimate edit to the example and
+  // lets a heading inside code consume the one-new-H2 allowance.
+  return stripFencedCode(markdown)
     .split("\n")
     .map((line) => /^ {0,3}##[ \t]+(.+?)[ \t]*$/.exec(line)?.[1])
     .filter((h): h is string => typeof h === "string");
@@ -301,6 +304,14 @@ function existingHowTo(frontmatter: BlogPostFrontmatter): RefreshHowTo | undefin
   return undefined;
 }
 
+/** True when the post carries ANY HowTo-shaped frontmatter key, normalizable
+ * or not. Removal must key off this, not off successfully parsed metadata. */
+function hasHowToKeys(frontmatter: BlogPostFrontmatter): boolean {
+  return (
+    frontmatter.howTo !== undefined || frontmatter.howToName !== undefined || frontmatter.howToSteps !== undefined
+  );
+}
+
 function cleanHowTo(raw: unknown): RefreshHowTo | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as { name?: unknown; steps?: unknown };
@@ -403,7 +414,7 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     if (!faqs) missing("faqs");
     // Only a NEW FAQ set is held to the count; echoing the existing one back
     // (even a short legacy one) is "no change", not a rejection.
-    if (faqs && stable(faqs) !== stable(frontmatter.faqs) && (faqs.length < 3 || faqs.length > 8)) {
+    if (faqs && stable(faqs) !== stable(frontmatter.faqs) && (faqs.length < 3 || faqs.length > 5)) {
       throw new Error(`Refresh rejected: ${faqs.length} FAQs (expected 3-5)`);
     }
     set("faqs", faqs);
@@ -427,9 +438,11 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     howTo = cleanHowTo(raw.howTo);
     const existing = existingHowTo(args.frontmatter);
     if (howTo && stable(howTo) !== stable(existing)) changed.push("howTo");
-    if (!howTo && existing) {
+    if (!howTo && hasHowToKeys(args.frontmatter)) {
       // The model was asked for a HowTo and omitted it: the post is not
-      // procedural, so stale HowTo metadata (either site shape) comes off.
+      // procedural, so stale HowTo metadata comes off — including incomplete
+      // legacy metadata that never normalizes (a name with no steps, a nested
+      // HowTo with too few valid steps), which existingHowTo cannot see.
       delete frontmatter.howTo;
       delete frontmatter.howToName;
       delete frontmatter.howToSteps;

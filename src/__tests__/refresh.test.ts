@@ -362,3 +362,66 @@ test("applyHowToShape converts the opposite site shape and counts the conversion
   assert.equal(none.changed, false);
   assert.deepEqual(none.frontmatter, flat, "no HowTo from the model leaves the frontmatter alone");
 });
+
+test("refresh rejects a newly generated FAQ set above the documented five", async () => {
+  const six = Array.from({ length: 6 }, (_, i) => ({
+    question: `Question number ${i} about the dryer?`,
+    answer: `Answer number ${i} about the exhaust path.`,
+  }));
+  await assert.rejects(
+    () =>
+      refreshBlogPost({
+        gemini: makeFakeGemini({ candidatesJson: modelOutput({ frontmatter: { ...modelOutput().frontmatter, faqs: six } }) }),
+        config: sampleConfig,
+        frontmatter,
+        markdown,
+        rankingQueries: queries,
+        now: new Date("2026-09-14T09:00:00-07:00"),
+        mode: "refresh",
+        rubric: RUBRIC,
+        linkPolicy: policy,
+      }),
+    /6 FAQs \(expected 3-5\)/,
+  );
+});
+
+test("an H2 inside a fenced code block is not a real section", async () => {
+  const withFence = `${markdown}\n\n## Reading the label\n\nSome posts show a heading in an example:\n\n\`\`\`markdown\n## Example heading\n\`\`\`\n\nThat is sample text, not a section.`;
+  // The model legitimately rewrites the fenced example; no H2 is added or dropped.
+  const rewritten = withFence.replace("## Example heading", "## A different example heading");
+  const result = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: modelOutput({ markdown: rewritten }) }),
+    config: sampleConfig,
+    frontmatter,
+    markdown: withFence,
+    rankingQueries: queries,
+    now: new Date("2026-09-14T09:00:00-07:00"),
+    mode: "refresh",
+    rubric: RUBRIC,
+    linkPolicy: policy,
+  });
+  assert.match(result.markdown, /A different example heading/, "editing a fenced example is not a dropped section");
+});
+
+test("refresh removes incomplete legacy HowTo keys when the model omits howTo", async () => {
+  for (const stale of [
+    { howToName: "Clean the vent" },
+    { howTo: { name: "Clean the vent", step: [{ name: "Only one", text: "Too few steps to normalize." }] } },
+    { howToSteps: [] },
+  ]) {
+    const result = await refreshBlogPost({
+      gemini: makeFakeGemini({ candidatesJson: modelOutput() }),
+      config: sampleConfig,
+      frontmatter: { ...frontmatter, ...stale },
+      markdown,
+      rankingQueries: queries,
+      now: new Date("2026-09-14T09:00:00-07:00"),
+      mode: "refresh",
+      rubric: RUBRIC,
+      linkPolicy: policy,
+    });
+    const keys = Object.keys(result.frontmatter);
+    assert.ok(!keys.includes("howTo") && !keys.includes("howToName") && !keys.includes("howToSteps"), `stale keys survived: ${keys.join(",")}`);
+    assert.ok(result.changedFields.includes("howTo"), "removing stale metadata is a change");
+  }
+});

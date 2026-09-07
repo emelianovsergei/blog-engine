@@ -11,3 +11,9 @@ test("rubricFromFlags parses pipe-separated headings and the FAQ policy", () => 
   assert.equal(rubricFromFlags(undefined, "written-by-model").faqPolicy, "written-by-model");
   assert.deepEqual(rubricFromFlags(undefined, undefined).requiredHeadings, []);
 });
+
+test("rubricFromFlags rejects an unsupported --faq-policy instead of silently defaulting", () => {
+  assert.throws(() => rubricFromFlags(undefined, "written-by-modle"), /faq-policy/i);
+  assert.throws(() => rubricFromFlags(undefined, "appended"), /faq-policy/i);
+  assert.equal(rubricFromFlags(undefined, "appended-by-code").faqPolicy, "appended-by-code");
+});
