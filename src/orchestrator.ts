@@ -51,6 +51,10 @@ export async function selectWeeklyTopic(args: SelectWeeklyTopicArgs): Promise<Se
       console.error(
         `[blog-engine] search console signal unauthorized (${signal.message ?? "no detail"}) — check the service account's property access; continuing without it.`,
       );
+    } else if (signal.status === "malformed") {
+      console.error(
+        `[blog-engine] search console credential malformed (${signal.message ?? "no detail"}) — fix the secret; continuing without it.`,
+      );
     } else if (signal.status === "error") {
       console.warn(`[blog-engine] search console signal errored (${signal.message ?? "no detail"}) — continuing without it.`);
     }

@@ -249,3 +249,26 @@ test("selectWeeklyTopic carries the winner's supportsSlug through", async () => 
   });
   assert.equal(result.supportsSlug, "refrigerator-not-cooling");
 });
+
+test("selectWeeklyTopic logs a malformed credential as an error and continues", async () => {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => errors.push(parts.map(String).join(" "));
+  try {
+    const result = await selectWeeklyTopic({
+      config: sampleConfig,
+      existingPosts: [],
+      now: new Date("2026-12-15T19:00:00Z"),
+      gemini: makeFakeGemini({
+        candidatesJson: { candidates: [{ topic: "Furnace warning signs before winter", notes: "n", categoryId: "hvac" }] },
+      }),
+      weatherClient: makeFakeWeather(),
+      gscSignal: { status: "malformed", rows: [], byQuery: new Map(), message: "GSC_SERVICE_ACCOUNT_JSON is set but is not valid" },
+    });
+    assert.equal(result.topic, "Furnace warning signs before winter");
+    assert.equal(result.gsc?.status, "malformed");
+    assert.ok(errors.some((line) => /malformed/.test(line) && /GSC_SERVICE_ACCOUNT_JSON/.test(line)), `expected a loud error, got: ${errors.join(" | ")}`);
+  } finally {
+    console.error = original;
+  }
+});
