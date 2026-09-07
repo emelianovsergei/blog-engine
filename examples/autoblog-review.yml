@@ -115,7 +115,7 @@ jobs:
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model grok-4.6 \
-            --posts-dir content/blog \
+            --posts-dir "$(dirname "${{ steps.files.outputs.file }}")" \
             --out review-summary.md \
             --json-out review-result.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
@@ -300,6 +300,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
+          # --required-headings is your site's exact required H2
+          # (lib/blog/rubric.ts BLOG_REQUIRED_HEADINGS); --faq-policy is
+          # appended-by-code when the FAQ renders from frontmatter.
           npx blog-engine-rewrite \
             --post "${{ steps.files.outputs.file }}" \
             --review review-result.json \
@@ -308,7 +311,6 @@ jobs:
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model grok-4.6 \
             --link-policy content/policy/link-constraints.json \
-            # Your site's exact required H2 (lib/blog/rubric.ts BLOG_REQUIRED_HEADINGS).
             --required-headings "When to Call a Pro" \
             --faq-policy appended-by-code \
             --audit-out rewrite-audit.json \
