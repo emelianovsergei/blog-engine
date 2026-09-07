@@ -224,3 +224,81 @@ test("refresh stamps updated in the site's timezone, not UTC", async () => {
   });
   assert.equal(result.frontmatter.updated, "2026-09-08");
 });
+
+// ─── Codex round 2 on #36 ────────────────────────────────────────────────────
+
+test("refresh prompt forbids a body FAQ only under appended-by-code", async () => {
+  for (const faqPolicy of ["appended-by-code", "written-by-model"] as const) {
+    const capture: GenerateContentCall[] = [];
+    await refreshBlogPost({
+      gemini: makeFakeGemini({ candidatesJson: modelOutput(), capture }),
+      config: sampleConfig,
+      frontmatter,
+      markdown,
+      rankingQueries: queries,
+      now: new Date("2026-09-08T09:00:00-07:00"),
+      mode: "refresh",
+      rubric: { ...RUBRIC, faqPolicy },
+      linkPolicy: policy,
+    });
+    const prompt = String(capture[0]?.contents);
+    if (faqPolicy === "appended-by-code") assert.match(prompt, /Do NOT write a "Frequently Asked Questions"/);
+    else assert.doesNotMatch(prompt, /Do NOT write a "Frequently Asked Questions"/);
+  }
+});
+
+test("refresh ignores trailing-whitespace differences when deciding whether the body changed", async () => {
+  const withNewline = `${markdown}\n`;
+  const result = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: { frontmatter: { faqs: frontmatter.faqs }, markdown, changeNotes: "same" } }),
+    config: sampleConfig,
+    frontmatter,
+    markdown: withNewline,
+    rankingQueries: queries,
+    now: new Date("2026-09-08T09:00:00-07:00"),
+    mode: "refresh",
+    fields: ["faqs"],
+    rubric: RUBRIC,
+  });
+  assert.deepEqual(result.changedFields, []);
+  assert.equal(result.markdown, withNewline, "original whitespace kept when nothing substantive changed");
+  assert.equal(result.frontmatter.updated, undefined);
+});
+
+test("refresh removes stale HowTo metadata when the model omits a requested howTo", async () => {
+  const steps = [{ name: "a", text: "A" }, { name: "b", text: "B" }, { name: "c", text: "C" }];
+  for (const fm of [
+    { ...frontmatter, howTo: { name: "Old", step: steps } },
+    { ...frontmatter, howToName: "Old", howToSteps: steps },
+  ]) {
+    const result = await refreshBlogPost({
+      gemini: makeFakeGemini({ candidatesJson: { frontmatter: {}, markdown, changeNotes: "not procedural" } }),
+      config: sampleConfig,
+      frontmatter: fm,
+      markdown,
+      rankingQueries: [],
+      now: new Date("2026-09-08T09:00:00-07:00"),
+      mode: "backfill",
+      fields: ["howTo"],
+      rubric: RUBRIC,
+    });
+    assert.ok(result.changedFields.includes("howTo"), "removal is a change");
+    assert.equal(result.frontmatter.howTo, undefined);
+    assert.equal(result.frontmatter.howToName, undefined);
+    assert.equal(result.frontmatter.howToSteps, undefined);
+    assert.equal(result.frontmatter.updated, "2026-09-08");
+  }
+  // A post that never had a HowTo and gets none back: no change.
+  const none = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: { frontmatter: {}, markdown, changeNotes: "n/a" } }),
+    config: sampleConfig,
+    frontmatter,
+    markdown,
+    rankingQueries: [],
+    now: new Date("2026-09-08T09:00:00-07:00"),
+    mode: "backfill",
+    fields: ["howTo"],
+    rubric: RUBRIC,
+  });
+  assert.deepEqual(none.changedFields, []);
+});

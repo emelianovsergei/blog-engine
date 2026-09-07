@@ -132,6 +132,10 @@ function stable(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+function normalizeBody(markdown: string): string {
+  return markdown.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
+}
+
 /** YYYY-MM-DD in the site's timezone: 6:30 PM PDT on the 8th is the 8th, not
  * the UTC 9th. */
 function localDate(now: Date, timeZone: string): string {
@@ -194,8 +198,7 @@ function buildPrompt(args: RefreshBlogPostArgs, fields: readonly RefreshField[],
 - You may add AT MOST ONE new H2 section that directly answers the highest-impression ranking query the body does not already cover. Place it before the final call-to-action section.
 - Update facts, dates and figures that have aged; tighten prose; do not change the topic, tone or Sacramento-local framing.
 - Stay within ±20% of the current length (${countWords(markdown)} words).
-${rubric.requiredHeadings.length > 0 ? `- These headings are required verbatim as H2 lines: ${rubric.requiredHeadings.map((h) => `"## ${h}"`).join(", ")}.\n` : ""}- Do NOT write a "Frequently Asked Questions" (or "FAQ") section in the body — FAQs render from frontmatter.
-- Return the full revised body in "markdown".`
+${rubric.requiredHeadings.length > 0 ? `- These headings are required verbatim as H2 lines: ${rubric.requiredHeadings.map((h) => `"## ${h}"`).join(", ")}.\n` : ""}${rubric.faqPolicy === "appended-by-code" ? `- Do NOT write a "Frequently Asked Questions" (or "FAQ") section in the body — FAQs render from frontmatter.\n` : ""}- Return the full revised body in "markdown".`
       : `Body rules (backfill mode):
 - Do NOT revise the body. Return it unchanged in "markdown"; only the requested frontmatter fields are regenerated.`;
 
@@ -338,7 +341,9 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     if (ratio < 0.8 || ratio > 1.2) {
       throw new Error(`Refresh rejected: revision length changed by ${Math.round((ratio - 1) * 100)}% (limit ±20%)`);
     }
-    markdown = revised;
+    // Insignificant whitespace (a trailing newline, CRLF) is not a revision:
+    // keep the original bytes so nothing is rewritten or stamped `updated`.
+    markdown = normalizeBody(revised) === normalizeBody(args.markdown) ? args.markdown : revised;
   }
 
   // ── fields ──────────────────────────────────────────────────────────────
@@ -376,7 +381,16 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
   let howTo: RefreshHowTo | undefined;
   if (fields.includes("howTo")) {
     howTo = cleanHowTo(raw.howTo);
-    if (howTo && stable(howTo) !== stable(existingHowTo(args.frontmatter))) changed.push("howTo");
+    const existing = existingHowTo(args.frontmatter);
+    if (howTo && stable(howTo) !== stable(existing)) changed.push("howTo");
+    if (!howTo && existing) {
+      // The model was asked for a HowTo and omitted it: the post is not
+      // procedural, so stale HowTo metadata (either site shape) comes off.
+      delete frontmatter.howTo;
+      delete frontmatter.howToName;
+      delete frontmatter.howToSteps;
+      changed.push("howTo");
+    }
   }
 
   // Category is never the model's call.

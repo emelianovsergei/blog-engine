@@ -181,3 +181,12 @@ test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () =>
   const clean = checkBodyForms(body("## Fixing a faulty fan")).map((v) => v.rule);
   assert.ok(!clean.includes("faq-authorship"));
 });
+
+test("faq-authorship ignores FAQ headings inside fenced code and catches nested HTML", () => {
+  const body = (extra: string) => `Intro.\n\n## Section\n\n${Array.from({ length: 800 }, () => "word").join(" ")}\n\n${extra}`;
+  const fenced = checkBodyForms(body("```md\n## FAQ\n```\n\nprose")).map((v) => v.rule);
+  assert.ok(!fenced.includes("faq-authorship"), "a fenced example is code, not a heading");
+  for (const html of ["<h2><strong>FAQ</strong></h2>", "<h2><span>Frequently Asked Questions</span></h2>"]) {
+    assert.ok(checkBodyForms(body(`${html}\n\n**Q?**\n\nA.`)).map((v) => v.rule).includes("faq-authorship"), html);
+  }
+});

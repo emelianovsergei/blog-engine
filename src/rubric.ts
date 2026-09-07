@@ -108,12 +108,14 @@ const FAQ_HEADING_ATX = /^ {0,3}#{1,6}[ \t]*(?:[*_`~]+|\[)?[ \t]*(?:frequently[ 
 const FAQ_HEADING_SETEXT = /^ {0,3}(?:[*_`~]+|\[)?[ \t]*(?:frequently[ \t]+asked[ \t]+questions|faqs?)(?![a-z])[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/im;
 
 /** Raw HTML/JSX form — MDX renders `<h2>FAQ</h2>` as a heading too. */
-const FAQ_HEADING_HTML = /<h[1-6]\b[^>]*>\s*(?:frequently\s+asked\s+questions|faqs?)(?![a-z])/i;
+const FAQ_HEADING_HTML = /<h[1-6]\b[^>]*>(?:\s*<[^>]+>)*\s*(?:frequently\s+asked\s+questions|faqs?)(?![a-z])/i;
 
 /** True when the body carries an FAQ heading in any syntax MDX renders as a
  * heading: ATX, Setext, or a raw HTML/JSX heading element. */
 export function hasFaqHeading(body: string): boolean {
-  return FAQ_HEADING_ATX.test(body) || FAQ_HEADING_SETEXT.test(body) || FAQ_HEADING_HTML.test(body);
+  // Fenced examples are code, not headings.
+  const prose = body.replace(/```[\s\S]*?```/g, "").replace(/~~~[\s\S]*?~~~/g, "");
+  return FAQ_HEADING_ATX.test(prose) || FAQ_HEADING_SETEXT.test(prose) || FAQ_HEADING_HTML.test(prose);
 }
 
 function escapeRegex(s: string): string {

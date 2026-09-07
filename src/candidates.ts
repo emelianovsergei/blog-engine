@@ -150,6 +150,7 @@ export async function generateCandidates(args: GenerateCandidatesArgs): Promise<
   }
 
   const validIds = new Set(args.config.categories.map((category) => category.id));
+  const knownSlugs = new Set(args.existingPosts.map((post) => post.slug));
   const raw = Array.isArray(parsed.candidates) ? parsed.candidates : [];
   const candidates: CandidateTopic[] = raw
     .filter(
@@ -168,9 +169,17 @@ export async function generateCandidates(args: GenerateCandidatesArgs): Promise<
         entry.categoryId && validIds.has(entry.categoryId)
           ? entry.categoryId
           : categorizeText(args.config.categories, topic, notes);
-      const hintQuery = typeof entry.hintQuery === "string" && entry.hintQuery.trim() ? entry.hintQuery.trim() : undefined;
+      // Only references the planner was actually offered survive: a
+      // hallucinated query would otherwise pull volume from the whole GSC
+      // signal and win ranking, and an invented slug would be exposed
+      // downstream as a real post.
+      const offered = new Map((args.hints ?? []).map((h) => [h.query.toLowerCase(), h.query]));
+      const hintQuery =
+        typeof entry.hintQuery === "string" ? offered.get(entry.hintQuery.trim().toLowerCase()) : undefined;
       const supportsSlug =
-        typeof entry.supportsSlug === "string" && entry.supportsSlug.trim() ? entry.supportsSlug.trim() : undefined;
+        typeof entry.supportsSlug === "string" && knownSlugs.has(entry.supportsSlug.trim())
+          ? entry.supportsSlug.trim()
+          : undefined;
       return {
         topic,
         notes,
