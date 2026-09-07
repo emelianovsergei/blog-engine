@@ -100,7 +100,11 @@ jobs:
           set -euo pipefail
           # Fail closed: an incomplete exclusion list could open a second PR
           # against a post another autoblog PR is already changing.
-          if ! OPEN=$(gh pr list --state open --label autoblog --json number --jq '.[].number'); then
+          # Selection has to match how the review workflow ADMITS a PR: the
+          # `autoblog` label OR an `autoblog/*` head ref. A label-only query
+          # would miss a head-ref PR and let this job pick a post that PR is
+          # already changing.
+          if ! OPEN=$(gh pr list --state open --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
             echo "::error::Could not list open autoblog PRs — refusing to refresh without a complete exclusion list."
             exit 1
           fi

@@ -80,7 +80,11 @@ jobs:
           # never touch the same file.
           # Fail closed: an incomplete exclusion list could open a second PR
           # against a post another autoblog PR is already changing.
-          if ! OPEN=$(gh pr list --state open --label autoblog --json number --jq '.[].number'); then
+          # Selection has to match how the review workflow ADMITS a PR: the
+          # `autoblog` label OR an `autoblog/*` head ref. A label-only query
+          # would miss a head-ref PR and let this job pick a post that PR is
+          # already changing.
+          if ! OPEN=$(gh pr list --state open --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
             echo "::error::Could not list open autoblog PRs — refusing to backfill without a complete exclusion list."
             exit 1
           fi
@@ -90,8 +94,8 @@ jobs:
               echo "::error::Could not list files for PR #${NUM} — refusing to backfill without a complete exclusion list."
               exit 1
             fi
-            for FILE in $(grep -E '^content/blog/.*\.mdx$' <<<"$FILES" || true); do
-              EXCLUDE="${EXCLUDE:+$EXCLUDE,}$(basename "$FILE" .mdx)"
+            for FILE in $(grep -E '^content/blog/.*\.mdx?$' <<<"$FILES" || true); do
+              EXCLUDE="${EXCLUDE:+$EXCLUDE,}$(basename "$(basename "$FILE" .mdx)" .md)"
             done
           done
 
@@ -124,7 +128,18 @@ jobs:
             } > "$BODY_FILE"
 
             git checkout -q -B "$BRANCH"
-            git add "content/blog/${SLUG}.mdx" "data/blog-backfill-runs/${SLUG}.json"
+            # Consumers whose posts are .md must stage the file that changed,
+            # not a hardcoded .mdx path: git add on a missing pathspec fails
+            # under set -e and no PR would ever be opened.
+            POST=$(jq -r '.path // ""' "$REPORT")
+            if [ -z "$POST" ] || [ ! -f "$POST" ]; then
+              POST=$(git diff --name-only | grep -E "^content/blog/${SLUG}\.mdx?$" | head -n 1)
+            fi
+            if [ -z "$POST" ]; then
+              echo "::error::Backfill reported ${SLUG} but no matching post file changed."
+              exit 1
+            fi
+            git add "$POST" "data/blog-backfill-runs/${SLUG}.json"
             git commit -q -m "Backfill ${SLUG} to the current blog template"
             git push --force -u origin "$BRANCH"
             if EXISTING=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number') && [ -n "$EXISTING" ]; then
