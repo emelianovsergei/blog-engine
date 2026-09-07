@@ -23,9 +23,8 @@ import { resolve } from "node:path";
 import { auditAndRepairFile } from "../link-audit.js";
 import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
 import { ALL_REFRESH_FIELDS, refreshBlogPost, type RefreshField, type RankingQuery } from "../refresh.js";
-import { DEFAULT_RUBRIC_CONSTRAINTS, type RubricConstraints } from "../rubric.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
-import { composeConfig, makeReviewClient, optionalFlag, parseArgs, requireFlag } from "./shared.js";
+import { composeConfig, makeReviewClient, optionalFlag, parseArgs, requireFlag, rubricFromFlags } from "./shared.js";
 
 function usage(): string {
   return `Usage: blog-engine-refresh --post <path.md> --site pulse|promax --business "<Name>" \\
@@ -35,20 +34,6 @@ function usage(): string {
                             [--audit-out audit.json] [--notes-out notes.md] [--result-out result.json] \\
                             [--required-headings "A|B"] [--faq-policy appended-by-code|written-by-model] \\
                             [--model grok-4.6] [--no-link-audit]`;
-}
-
-export function rubricFromFlags(
-  requiredHeadings: string | undefined,
-  faqPolicy: string | undefined,
-): RubricConstraints {
-  return {
-    ...DEFAULT_RUBRIC_CONSTRAINTS,
-    requiredHeadings: (requiredHeadings ?? "")
-      .split("|")
-      .map((h) => h.trim())
-      .filter(Boolean),
-    faqPolicy: faqPolicy === "written-by-model" ? "written-by-model" : "appended-by-code",
-  };
 }
 
 async function main(): Promise<number> {
@@ -143,7 +128,12 @@ async function main(): Promise<number> {
     text = repaired.text;
     auditSummary = repaired.audit;
   }
-  if (result.changedFields.length > 0) {
+  // Write when the model changed something OR the link audit repaired the
+  // file (a dead/denied link removed is a change worth persisting even when
+  // the model returned identical content).
+  const auditChanged = text !== serializeDocument(frontmatter, body);
+  const wrote = result.changedFields.length > 0 || auditChanged;
+  if (wrote) {
     await writeFile(postPath, text, "utf8");
   }
   if (notesOut) await writeFile(resolve(notesOut), `${result.changeNotes}\n`, "utf8");
@@ -152,7 +142,7 @@ async function main(): Promise<number> {
     await writeFile(
       resolve(resultOut),
       JSON.stringify(
-        { mode, changedFields: result.changedFields, modelUsed: result.modelUsed, updated: out.updated ?? null, changeNotes: result.changeNotes },
+        { mode, changedFields: result.changedFields, auditChanged, wrote, modelUsed: result.modelUsed, updated: out.updated ?? null, changeNotes: result.changeNotes },
         null,
         2,
       ),
@@ -160,8 +150,8 @@ async function main(): Promise<number> {
     );
   }
   process.stdout.write(
-    result.changedFields.length > 0
-      ? `blog-engine-refresh: wrote ${postPath} (${result.changedFields.join(", ")})\n`
+    wrote
+      ? `blog-engine-refresh: wrote ${postPath} (${[...result.changedFields, ...(auditChanged ? ["link-audit"] : [])].join(", ")})\n`
       : `blog-engine-refresh: nothing to change for ${postPath}\n`,
   );
   return 0;

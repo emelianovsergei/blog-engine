@@ -104,6 +104,9 @@ export interface SelectedTopic {
   /** Why this topic won — recorded in the generation run report. */
   rationale: string;
   weather: WeatherContext;
+  /** Slug of the existing post the winner supports (from the planner's
+   * `supportsSlug`), so the consumer can link the two. */
+  supportsSlug?: string;
   /** Present when a Search Console signal was supplied, whatever its status. */
   gsc?: {
     status: GscStatus;

@@ -145,6 +145,7 @@ export async function selectWeeklyTopic(args: SelectWeeklyTopicArgs): Promise<Se
     category: winner.candidate.categoryId,
     rationale: `${winner.rationale}.${dupNote}${gscNote}`,
     weather,
+    ...(winner.candidate.supportsSlug && { supportsSlug: winner.candidate.supportsSlug }),
     ...(signal && {
       gsc: {
         status: signal.status,

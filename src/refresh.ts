@@ -132,6 +132,12 @@ function stable(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+/** YYYY-MM-DD in the site's timezone: 6:30 PM PDT on the 8th is the 8th, not
+ * the UTC 9th. */
+function localDate(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
 function fieldInstructions(fields: readonly RefreshField[], queries: readonly RankingQuery[]): string {
   const lines: string[] = [];
   const queryHint = queries.length > 0 ? " that answer the ranking queries above" : "";
@@ -248,6 +254,19 @@ function cleanStrings(raw: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+/** The post's current HowTo in the site-agnostic shape, whichever frontmatter
+ * shape it uses (`howTo {name, step[]}` or `howToName` + `howToSteps`). */
+function existingHowTo(frontmatter: BlogPostFrontmatter): RefreshHowTo | undefined {
+  const nested = frontmatter.howTo as { name?: unknown; step?: unknown } | undefined;
+  if (nested && typeof nested === "object") {
+    return cleanHowTo({ name: nested.name, steps: nested.step });
+  }
+  if (frontmatter.howToSteps !== undefined) {
+    return cleanHowTo({ name: frontmatter.howToName, steps: frontmatter.howToSteps });
+  }
+  return undefined;
+}
+
 function cleanHowTo(raw: unknown): RefreshHowTo | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as { name?: unknown; steps?: unknown };
@@ -290,7 +309,7 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
       throw new Error("Refresh response missing the revised markdown body");
     }
     const revised = parsed.markdown.trim();
-    if (hasFaqHeading(revised)) {
+    if (rubric.faqPolicy === "appended-by-code" && hasFaqHeading(revised)) {
       throw new Error("Refresh rejected: revision added an FAQ (Frequently Asked Questions) section to the body");
     }
     const missingRequired = rubric.requiredHeadings.filter((h) => !hasExactH2(revised, h));
@@ -308,6 +327,12 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
     const added = h2Headings(revised).filter((h) => !before.includes(h));
     if (added.length > 1) {
       throw new Error(`Refresh rejected: revision added ${added.length} sections; at most one is allowed`);
+    }
+    // Existing sections must keep their order: the revised heading list with
+    // the (at most one) new heading removed must equal the original list.
+    const revisedOld = h2Headings(revised).filter((h) => before.includes(h));
+    if (revisedOld.join("\u0000") !== before.join("\u0000")) {
+      throw new Error("Refresh rejected: revision changed the order of existing sections");
     }
     const ratio = countWords(revised) / Math.max(1, countWords(args.markdown));
     if (ratio < 0.8 || ratio > 1.2) {
@@ -351,7 +376,7 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
   let howTo: RefreshHowTo | undefined;
   if (fields.includes("howTo")) {
     howTo = cleanHowTo(raw.howTo);
-    if (howTo) changed.push("howTo");
+    if (howTo && stable(howTo) !== stable(existingHowTo(args.frontmatter))) changed.push("howTo");
   }
 
   // Category is never the model's call.
@@ -368,7 +393,7 @@ export async function refreshBlogPost(args: RefreshBlogPostArgs): Promise<Refres
   if (markdown !== args.markdown) changed.push("markdown");
   const changedFields = [...new Set(changed)];
   if (changedFields.length > 0) {
-    frontmatter.updated = args.now.toISOString().slice(0, 10);
+    frontmatter.updated = localDate(args.now, args.config.location.timezone);
   }
 
   const changeNotes =

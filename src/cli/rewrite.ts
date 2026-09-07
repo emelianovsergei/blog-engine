@@ -18,13 +18,13 @@ import { auditAndRepairFile } from "../link-audit.js";
 import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
 import { parseReviewResult } from "../review.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
-import { rubricFromFlags } from "./refresh.js";
 import {
   composeConfig,
   makeReviewClient,
   optionalFlag,
   parseArgs,
   requireFlag,
+  rubricFromFlags,
 } from "./shared.js";
 
 function usage(): string {

@@ -6,6 +6,7 @@ import {
 } from "../config.js";
 import { createModelClient } from "../client.js";
 import type { EngineConfig, GeminiLike } from "../types.js";
+import { DEFAULT_RUBRIC_CONSTRAINTS, type RubricConstraints } from "../rubric.js";
 
 export type SiteKey = "pulse" | "promax";
 
@@ -112,4 +113,21 @@ export async function makeReviewClient(): Promise<GeminiLike> {
     ...(anthropicApiKey ? { anthropicApiKey } : {}),
     ...(geminiClient ? { geminiClient } : {}),
   });
+}
+
+/** Site rubric from CLI flags: `--required-headings "A|B"` and `--faq-policy`.
+ * Lives here (side-effect free) so both the rewrite and refresh CLIs can import
+ * it without evaluating the other command's entry point. */
+export function rubricFromFlags(
+  requiredHeadings: string | undefined,
+  faqPolicy: string | undefined,
+): RubricConstraints {
+  return {
+    ...DEFAULT_RUBRIC_CONSTRAINTS,
+    requiredHeadings: (requiredHeadings ?? "")
+      .split("|")
+      .map((h) => h.trim())
+      .filter(Boolean),
+    faqPolicy: faqPolicy === "written-by-model" ? "written-by-model" : "appended-by-code",
+  };
 }

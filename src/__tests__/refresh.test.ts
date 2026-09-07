@@ -152,3 +152,75 @@ test("refresh leaves updated unset and reports no changes when the model returns
   assert.deepEqual(result.changedFields, []);
   assert.equal(result.frontmatter.updated, undefined);
 });
+
+// ─── Codex round 1 on #36 ────────────────────────────────────────────────────
+
+test("refresh rejects reordered existing headings but allows one new one", async () => {
+  const reordered = markdown.replace("## Why the vent matters", "## TMP").replace("## Clean the lint path", "## Why the vent matters").replace("## TMP", "## Clean the lint path");
+  await assert.rejects(
+    refreshBlogPost({
+      gemini: makeFakeGemini({ candidatesJson: modelOutput({ markdown: reordered }) }),
+      config: sampleConfig,
+      frontmatter,
+      markdown,
+      rankingQueries: queries,
+      now: new Date("2026-09-08T09:00:00-07:00"),
+      mode: "refresh",
+      rubric: RUBRIC,
+      linkPolicy: policy,
+    }),
+    /order/i,
+  );
+});
+
+test("refresh honours a written-by-model FAQ policy", async () => {
+  const withFaq = `${markdown}\n\n## Frequently Asked Questions\n\n**Q?**\n\nA.`;
+  const result = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: modelOutput({ markdown: withFaq }) }),
+    config: sampleConfig,
+    frontmatter,
+    markdown: withFaq,
+    rankingQueries: queries,
+    now: new Date("2026-09-08T09:00:00-07:00"),
+    mode: "refresh",
+    rubric: { ...RUBRIC, faqPolicy: "written-by-model" },
+    linkPolicy: policy,
+  });
+  assert.match(result.markdown, /Frequently Asked Questions/);
+});
+
+test("refresh does not mark an identical HowTo as changed, in either site shape", async () => {
+  const howTo = { name: "Clean the lint path", steps: [{ name: "a", text: "A" }, { name: "b", text: "B" }, { name: "c", text: "C" }] };
+  const nested = { ...frontmatter, howTo: { name: howTo.name, step: howTo.steps } };
+  const flat = { ...frontmatter, howToName: howTo.name, howToSteps: howTo.steps };
+  for (const fm of [nested, flat]) {
+    const result = await refreshBlogPost({
+      gemini: makeFakeGemini({ candidatesJson: { frontmatter: { howTo }, markdown, changeNotes: "same" } }),
+      config: sampleConfig,
+      frontmatter: fm,
+      markdown,
+      rankingQueries: [],
+      now: new Date("2026-09-08T09:00:00-07:00"),
+      mode: "backfill",
+      fields: ["howTo"],
+      rubric: RUBRIC,
+    });
+    assert.deepEqual(result.changedFields, [], "identical HowTo is not a change");
+    assert.equal(result.frontmatter.updated, undefined);
+  }
+});
+
+test("refresh stamps updated in the site's timezone, not UTC", async () => {
+  const result = await refreshBlogPost({
+    gemini: makeFakeGemini({ candidatesJson: modelOutput() }),
+    config: sampleConfig, // America/Los_Angeles
+    frontmatter,
+    markdown,
+    rankingQueries: queries,
+    now: new Date("2026-09-09T01:30:00Z"), // 6:30 PM PDT on Sept 8
+    mode: "refresh",
+    rubric: RUBRIC,
+    linkPolicy: policy,
+  });
+  assert.equal(result.frontmatter.updated, "2026-09-08");
+});

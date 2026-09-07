@@ -232,3 +232,20 @@ test("selectWeeklyTopic drops hints whose head term an existing post title alrea
   assert.match(prompt, /dryer not heating/);
   assert.doesNotMatch(prompt, /- "?refrigerator not cooling"? — /i, "a query an existing post already targets is not re-suggested");
 });
+
+test("selectWeeklyTopic carries the winner's supportsSlug through", async () => {
+  const result = await selectWeeklyTopic({
+    config: sampleConfig,
+    existingPosts: samplePosts,
+    now: new Date("2026-07-15T19:00:00Z"),
+    gemini: makeFakeGemini({
+      candidatesJson: {
+        candidates: [
+          { topic: "Deeper dive on fridge compressors", notes: "n", categoryId: "appliance", supportsSlug: "refrigerator-not-cooling" },
+        ],
+      },
+    }),
+    weatherClient: makeFakeWeather(),
+  });
+  assert.equal(result.supportsSlug, "refrigerator-not-cooling");
+});
