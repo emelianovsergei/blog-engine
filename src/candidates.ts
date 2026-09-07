@@ -78,7 +78,7 @@ function hintBlock(hints: readonly OpportunityQuery[] | undefined, count: number
 Search Console opportunities — queries this site ALREADY earns impressions for at positions 8-25 (page two). A dedicated post is the most reliable way to move one onto page one, and no keyword tool can produce this list:
 ${lines}
 
-At least ${minTargeted} of the ${count} candidates MUST directly answer one of these queries. For those candidates set "hintQuery" to the exact query text; leave it out for the others. If a listed query fits an existing post better than a new one, propose a supporting post for it and set "supportsSlug" to that post's slug.
+At least ${minTargeted} of the ${count} candidates MUST directly answer one of these queries. For those candidates set "hintQuery" to the exact query text; leave it out for the others. If a listed query fits an existing post better than a new one, propose a supporting post for it and set "supportsSlug" to that post's exact slug as listed under existing posts.
 `;
 }
 
@@ -93,7 +93,7 @@ function buildPrompt(args: GenerateCandidatesArgs): string {
   const existingList =
     existingPosts
       .slice(0, 30)
-      .map((post) => `- "${post.title}" [${post.tags.join(", ")}]`)
+      .map((post) => `- "${post.title}" (slug: ${post.slug}) [${post.tags.join(", ")}]`)
       .join("\n") || "(no posts published yet)";
   const blocked =
     recentMix.overrepresented.length > 0

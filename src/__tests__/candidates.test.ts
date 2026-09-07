@@ -72,3 +72,14 @@ test("generateCandidates drops a hintQuery that was not offered and a supportsSl
   assert.equal(out[1]?.hintQuery, undefined, "a query that was not offered is dropped");
   assert.equal(out[1]?.supportsSlug, undefined, "an unknown slug is dropped");
 });
+
+test("generateCandidates lists each existing post's slug so supportsSlug can be exact", async () => {
+  const capture: GenerateContentCall[] = [];
+  await generateCandidates({
+    ...base(),
+    existingPosts: [{ title: "AC Not Blowing Cold Air", slug: "ac-not-blowing-cold-citrus-heights", tags: ["AC"], date: "2026-05-01" }],
+    gemini: makeFakeGemini({ candidatesJson: { candidates: [{ topic: "A", notes: "a", categoryId: "hvac" }] }, capture }),
+  });
+  const prompt = String(capture[0]?.contents);
+  assert.match(prompt, /ac-not-blowing-cold-citrus-heights/, "the slug the model must echo back is in the prompt");
+});

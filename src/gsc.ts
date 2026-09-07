@@ -42,6 +42,13 @@ export function parseServiceAccountJson(raw: string | undefined): GscCredentials
   }
 }
 
+const MALFORMED_MESSAGE =
+  "GSC_SERVICE_ACCOUNT_JSON is set but is not valid service-account JSON (needs client_email and private_key)";
+
+function isConfigured(raw: string | undefined): boolean {
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 function base64url(input: string | Buffer): string {
   return Buffer.from(input)
     .toString("base64")
@@ -151,7 +158,10 @@ export async function fetchSearchAnalytics(args: FetchSearchAnalyticsArgs): Prom
   }));
 }
 
-export type GscStatus = "ok" | "absent" | "unauthorized" | "error";
+/** `malformed`: a credential IS configured but is not usable service-account
+ * JSON (truncated paste, wrong secret). Distinct from `absent` so a broken
+ * production secret surfaces instead of silently disabling the signal. */
+export type GscStatus = "ok" | "absent" | "unauthorized" | "error" | "malformed";
 
 export interface GscSignal {
   status: GscStatus;
@@ -190,6 +200,7 @@ export interface LoadGscSignalArgs {
  */
 export async function loadGscSignal(args: LoadGscSignalArgs): Promise<GscSignal> {
   const credentials = parseServiceAccountJson(args.serviceAccountJson);
+  if (!credentials && isConfigured(args.serviceAccountJson)) return EMPTY_SIGNAL("malformed", MALFORMED_MESSAGE);
   if (!credentials || !args.siteUrl) return EMPTY_SIGNAL("absent");
 
   try {
@@ -334,6 +345,9 @@ function pathOf(url: string): string {
  */
 export async function loadGscPageSignal(args: LoadGscPageSignalArgs): Promise<GscPageSignal> {
   const credentials = parseServiceAccountJson(args.serviceAccountJson);
+  if (!credentials && isConfigured(args.serviceAccountJson)) {
+    return { status: "malformed", rows: [], byPage: new Map(), message: MALFORMED_MESSAGE };
+  }
   if (!credentials || !args.siteUrl) return { status: "absent", rows: [], byPage: new Map() };
 
   try {

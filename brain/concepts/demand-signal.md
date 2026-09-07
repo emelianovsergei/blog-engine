@@ -89,8 +89,9 @@ flat percentage.
 3. `SelectedTopic.gsc` records the status, the winning hint and its
    impressions for the run report.
 
-`unauthorized` is logged loudly (the service account lacks the property) and
-`absent`/`error` quietly; in every non-`ok` case the run is byte-identical to
+`unauthorized` (the service account lacks the property) and `malformed` (the
+secret is set but is not usable service-account JSON — a truncated paste)
+are logged loudly, `absent`/`error` quietly; in every non-`ok` case the run is byte-identical to
 the pre-0.17 behaviour. The 2,630-impression "ac installation citrus heights"
 miss from `log.md` is exactly the case this closes.
 

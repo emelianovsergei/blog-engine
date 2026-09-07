@@ -138,7 +138,7 @@ function normalizeBody(markdown: string): string {
 
 /** YYYY-MM-DD in the site's timezone: 6:30 PM PDT on the 8th is the 8th, not
  * the UTC 9th. */
-function localDate(now: Date, timeZone: string): string {
+export function localDate(now: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
@@ -255,6 +255,37 @@ function cleanStrings(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out = raw.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim());
   return out.length > 0 ? out : undefined;
+}
+
+/** Frontmatter shape a site uses for HowTo: Promax nests `howTo {name, step[]}`,
+ * Pulse flattens to `howToName` + `howToSteps`. */
+export type HowToShape = "steps" | "nested";
+
+/**
+ * Write a site-agnostic HowTo into the site's frontmatter shape, removing the
+ * other shape's keys so a post never carries both. `changed` is true when the
+ * serialized HowTo keys differ from what the post had — including a pure
+ * shape conversion of identical data, which must still be persisted.
+ */
+export function applyHowToShape(
+  frontmatter: BlogPostFrontmatter,
+  howTo: RefreshHowTo | undefined,
+  shape: HowToShape,
+): { frontmatter: BlogPostFrontmatter; changed: boolean } {
+  if (!howTo) return { frontmatter: { ...frontmatter }, changed: false };
+  const before = stable({ howTo: frontmatter.howTo, howToName: frontmatter.howToName, howToSteps: frontmatter.howToSteps });
+  const out: BlogPostFrontmatter = { ...frontmatter };
+  delete out.howTo;
+  delete out.howToName;
+  delete out.howToSteps;
+  if (shape === "nested") {
+    out.howTo = { name: howTo.name, step: howTo.steps };
+  } else {
+    out.howToName = howTo.name;
+    out.howToSteps = howTo.steps;
+  }
+  const after = stable({ howTo: out.howTo, howToName: out.howToName, howToSteps: out.howToSteps });
+  return { frontmatter: out, changed: before !== after };
 }
 
 /** The post's current HowTo in the site-agnostic shape, whichever frontmatter

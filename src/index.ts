@@ -161,6 +161,6 @@ export type {
 export type { RewriteBlogPostArgs, RewriteResult } from "./rewrite.js";
 
 // ─── Refresh / backfill (v0.17) ─────────────────────────────────────────────
-export { refreshBlogPost, ALL_REFRESH_FIELDS, DEFAULT_REFRESH_MODEL } from "./refresh.js";
-export type { RefreshBlogPostArgs, RefreshResult, RefreshField, RankingQuery, RefreshHowTo } from "./refresh.js";
+export { refreshBlogPost, applyHowToShape, ALL_REFRESH_FIELDS, DEFAULT_REFRESH_MODEL } from "./refresh.js";
+export type { RefreshBlogPostArgs, RefreshResult, RefreshField, RankingQuery, RefreshHowTo, HowToShape } from "./refresh.js";
 export { hasFaqHeading, hasExactH2, countWords } from "./rubric.js";

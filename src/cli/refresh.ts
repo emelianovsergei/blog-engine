@@ -22,7 +22,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { auditAndRepairFile } from "../link-audit.js";
 import { EMPTY_LINK_POLICY, parseLinkPolicy } from "../links.js";
-import { ALL_REFRESH_FIELDS, refreshBlogPost, type RefreshField, type RankingQuery } from "../refresh.js";
+import { ALL_REFRESH_FIELDS, applyHowToShape, localDate, refreshBlogPost, type HowToShape, type RefreshField, type RankingQuery } from "../refresh.js";
 import { parseDocument, serializeDocument } from "./frontmatter.js";
 import { composeConfig, makeReviewClient, optionalFlag, parseArgs, requireFlag, rubricFromFlags } from "./shared.js";
 
@@ -53,7 +53,11 @@ async function main(): Promise<number> {
   const model = optionalFlag(args, "model");
   const queriesPath = optionalFlag(args, "queries");
   const fieldsRaw = optionalFlag(args, "fields");
-  const howToShape = optionalFlag(args, "howto-shape") ?? (site === "promax" ? "nested" : "steps");
+  const howToShapeRaw = optionalFlag(args, "howto-shape") ?? (site === "promax" ? "nested" : "steps");
+  if (howToShapeRaw !== "steps" && howToShapeRaw !== "nested") {
+    throw new Error(`--howto-shape must be "steps" or "nested", got "${howToShapeRaw}"`);
+  }
+  const howToShape: HowToShape = howToShapeRaw;
   const nowRaw = optionalFlag(args, "now");
   const now = nowRaw ? new Date(`${nowRaw}T12:00:00Z`) : new Date();
   const linkPolicyPath = optionalFlag(args, "link-policy");
@@ -110,16 +114,15 @@ async function main(): Promise<number> {
     ...(model ? { model } : {}),
   });
 
-  // Map the site-agnostic HowTo onto the site's frontmatter shape.
-  const out = { ...result.frontmatter };
-  if (result.howTo) {
-    if (howToShape === "nested") {
-      out.howTo = { name: result.howTo.name, step: result.howTo.steps };
-    } else {
-      out.howToName = result.howTo.name;
-      out.howToSteps = result.howTo.steps;
-    }
-  }
+  // Map the site-agnostic HowTo onto the site's frontmatter shape. A post
+  // that carried the other shape is converted, and that conversion counts
+  // as a change even when the HowTo data itself is identical.
+  const shaped = applyHowToShape(result.frontmatter, result.howTo, howToShape);
+  const out = shaped.frontmatter;
+  const changedFields = shaped.changed && !result.changedFields.includes("howTo")
+    ? [...result.changedFields, "howTo"]
+    : result.changedFields;
+  if (changedFields.length > 0 && !out.updated) out.updated = localDate(now, config.location.timezone);
 
   const preAudit = serializeDocument(out, result.markdown);
   let text = preAudit;
@@ -134,7 +137,7 @@ async function main(): Promise<number> {
   // the model returned identical content). "Repaired" means the audit's
   // output differs from ITS input, not from the original document.
   const auditChanged = text !== preAudit;
-  const wrote = result.changedFields.length > 0 || auditChanged;
+  const wrote = changedFields.length > 0 || auditChanged;
   if (wrote) {
     await writeFile(postPath, text, "utf8");
   }
@@ -144,7 +147,7 @@ async function main(): Promise<number> {
     await writeFile(
       resolve(resultOut),
       JSON.stringify(
-        { mode, changedFields: result.changedFields, auditChanged, wrote, modelUsed: result.modelUsed, updated: out.updated ?? null, changeNotes: result.changeNotes },
+        { mode, changedFields, auditChanged, wrote, modelUsed: result.modelUsed, updated: out.updated ?? null, changeNotes: result.changeNotes },
         null,
         2,
       ),

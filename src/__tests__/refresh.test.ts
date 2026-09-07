@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { refreshBlogPost } from "../refresh.js";
+import { applyHowToShape, refreshBlogPost } from "../refresh.js";
 import type { BlogPostFrontmatter } from "../review.js";
 import { parseLinkPolicy } from "../links.js";
 import { DEFAULT_RUBRIC_CONSTRAINTS } from "../rubric.js";
@@ -342,4 +342,23 @@ test("refresh rejects a response that omits a requested required field", async (
     rubric: RUBRIC,
   });
   assert.deepEqual(ok.changedFields, []);
+});
+
+test("applyHowToShape converts the opposite site shape and counts the conversion as a change", () => {
+  const howTo = { name: "Clean the lint path", steps: [{ name: "Unplug", text: "Unplug the dryer." }] };
+  const flat: BlogPostFrontmatter = { ...frontmatter, howToName: howTo.name, howToSteps: howTo.steps };
+
+  const nested = applyHowToShape(flat, howTo, "nested");
+  assert.deepEqual(nested.frontmatter.howTo, { name: howTo.name, step: howTo.steps });
+  assert.equal("howToName" in nested.frontmatter, false, "the flat keys come off");
+  assert.equal("howToSteps" in nested.frontmatter, false);
+  assert.equal(nested.changed, true, "a shape conversion must be persisted");
+
+  const same = applyHowToShape(flat, howTo, "steps");
+  assert.equal(same.changed, false, "identical data in the site's own shape is not a change");
+  assert.deepEqual(same.frontmatter, flat);
+
+  const none = applyHowToShape(flat, undefined, "nested");
+  assert.equal(none.changed, false);
+  assert.deepEqual(none.frontmatter, flat, "no HowTo from the model leaves the frontmatter alone");
 });

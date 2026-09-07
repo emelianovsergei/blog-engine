@@ -249,3 +249,17 @@ test("pickRefreshTarget chooses the highest-opportunity page-two post outside th
   assert.equal(target?.queries[0]?.query, "hot q1", "sorted by impressions");
   assert.equal(pickRefreshTarget({ byPage: new Map(), posts, now: new Date() }), undefined);
 });
+
+test("a configured but malformed credential is reported, not treated as absent", async () => {
+  const now = new Date("2026-08-19");
+  const truncated = SA_JSON.slice(0, 40);
+  const missingKey = JSON.stringify({ client_email: "svc@example.iam.gserviceaccount.com" });
+  for (const bad of [truncated, missingKey]) {
+    const signal = await loadGscSignal({ now, siteUrl: "sc-domain:x.com", serviceAccountJson: bad });
+    assert.equal(signal.status, "malformed");
+    assert.match(signal.message ?? "", /service.account/i);
+    const page = await loadGscPageSignal({ now, siteUrl: "sc-domain:x.com", serviceAccountJson: bad });
+    assert.equal(page.status, "malformed");
+    assert.match(page.message ?? "", /service.account/i);
+  }
+});
