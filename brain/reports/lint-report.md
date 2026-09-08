@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-09-06T23:03:25.788Z*
+*Generated on: 2026-09-07T07:54:12.906Z*
 
 ## Summary
 
 *   **Total Wiki Files**: 46
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 11
+*   **Orphan Pages**: 10
 *   **Stale Pages**: 5
 
 > [!NOTE]
@@ -19,7 +19,6 @@
 
 *   [[concepts/ci-heal]]
 *   [[concepts/demand-signal]]
-*   [[concepts/refresh-mode]]
 *   [[concepts/release-procedure]]
 *   [[concepts/shared-rubric]]
 *   [[concepts/weather-season-targeting]]

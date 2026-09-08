@@ -1,0 +1,156 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-backfill.yml
+#
+name: Backfill Blog Posts to the Template
+
+# One-time (repeatable) backfill of older posts to the current GEO template:
+# summary, citations, reviewedBy, FAQs, targetKeyword, category — body kept
+# verbatim. Opens ONE PR PER POST (autoblog-review.yml reviews only the first
+# changed blog file in a PR), up to `count` per dispatch, each through the
+# normal review gate and the daily 24-hour merge window. The autofix loop is
+# skipped on these PRs (label autoblog-backfill): a failed review here wants
+# a human edit, not an AI rewrite of an old body.
+#
+# Run with count=1 first, read the review, then 5 per day.
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many posts to backfill (one PR each)"
+        required: false
+        default: "5"
+
+# One group for every workflow that selects and mutates EXISTING posts
+# (refresh, backfill): their exclusion lists are read before a PR exists, so
+# two overlapping runs could both pick the same post. Serializing them
+# closes that window; the generate workflow only ever adds files.
+concurrency:
+  group: autoblog-mutate-existing
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Backfill up to N posts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify fixture-mode backfill
+        run: npm run blog:test-backfill-fixtures
+
+      - name: Backfill and open one PR per post
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COUNT: ${{ github.event.inputs.count || '5' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured; PRs opened with GITHUB_TOKEN never receive CI or review."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog --color 0E8A16 --description "Auto-generated blog post" >/dev/null 2>&1 || true
+          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog-backfill --color 5319E7 --description "Older post brought up to the current template" >/dev/null 2>&1 || true
+
+          # Posts with an open autoblog PR of any kind are excluded so two PRs
+          # never touch the same file.
+          # Fail closed: an incomplete exclusion list could open a second PR
+          # against a post another autoblog PR is already changing.
+          # Selection has to match how the review workflow ADMITS a PR: the
+          # `autoblog` label OR an `autoblog/*` head ref. A label-only query
+          # would miss a head-ref PR and let this job pick a post that PR is
+          # already changing.
+          # --limit above gh's 30-per-page default: an unpaginated list on a busy day
+          # could omit an older open PR and let two jobs pick the same post.
+          if ! OPEN=$(gh pr list --state open --limit 500 --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
+            echo "::error::Could not list open autoblog PRs — refusing to backfill without a complete exclusion list."
+            exit 1
+          fi
+          EXCLUDE=""
+          for NUM in $OPEN; do
+            if ! FILES=$(gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate --jq '.[].filename'); then
+              echo "::error::Could not list files for PR #${NUM} — refusing to backfill without a complete exclusion list."
+              exit 1
+            fi
+            for FILE in $(grep -E '^content/blog/.*\.mdx?$' <<<"$FILES" || true); do
+              EXCLUDE="${EXCLUDE:+$EXCLUDE,}$(basename "$(basename "$FILE" .mdx)" .md)"
+            done
+          done
+
+          RUN_DATE=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          DONE=0
+          for i in $(seq 1 "$COUNT"); do
+            git checkout -q main
+            git pull -q --ff-only origin main
+            BLOG_BACKFILL_EXCLUDE_SLUGS="$EXCLUDE" BLOG_GENERATOR_DATE="$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')" npm run blog:backfill -- --next
+            REPORT="data/blog-backfill-runs/latest.json"
+            STATUS=$(jq -r '.status' "$REPORT")
+            if [ "$STATUS" != "backfilled" ]; then
+              echo "::notice::Nothing left to backfill after $DONE post(s)."
+              break
+            fi
+            SLUG=$(jq -r '.slug' "$REPORT")
+            MISSING=$(jq -r '.missing | join(", ")' "$REPORT")
+            REMAINING=$(jq -r '.remaining | length' "$REPORT")
+            BRANCH="blog/backfill-${SLUG}"
+
+            BODY_FILE=$(mktemp)
+            {
+              echo "## Backfill: \`/blog/${SLUG}\` brought up to the current template"
+              echo
+              echo "- Added: ${MISSING}"
+              echo "- Body: unchanged (frontmatter only); \`updated:\` set to ${RUN_DATE}"
+              echo "- Remaining posts needing backfill after this one: ${REMAINING}"
+              echo
+              echo "Reviewed by the normal AI gate; the autofix loop is skipped on backfill PRs — a failed review here needs a human edit of the frontmatter. Merges through the daily 24-hour window."
+            } > "$BODY_FILE"
+
+            git checkout -q -B "$BRANCH"
+            # Consumers whose posts are .md must stage the file that changed,
+            # not a hardcoded .mdx path: git add on a missing pathspec fails
+            # under set -e and no PR would ever be opened.
+            POST=$(jq -r '.path // ""' "$REPORT")
+            if [ -z "$POST" ] || [ ! -f "$POST" ]; then
+              POST=$(git diff --name-only | grep -E "^content/blog/${SLUG}\.mdx?$" | head -n 1)
+            fi
+            if [ -z "$POST" ]; then
+              echo "::error::Backfill reported ${SLUG} but no matching post file changed."
+              exit 1
+            fi
+            git add "$POST" "data/blog-backfill-runs/${SLUG}.json"
+            git commit -q -m "Backfill ${SLUG} to the current blog template"
+            git push --force -u origin "$BRANCH"
+            if EXISTING=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number') && [ -n "$EXISTING" ]; then
+              gh pr edit "$EXISTING" --body-file "$BODY_FILE" --add-label autoblog --add-label autoblog-backfill
+              gh pr close "$EXISTING" && gh pr reopen "$EXISTING"
+            else
+              gh pr create --draft --label autoblog --label autoblog-backfill --title "Blog backfill: ${SLUG}" --body-file "$BODY_FILE"
+            fi
+            EXCLUDE="${EXCLUDE:+$EXCLUDE,}${SLUG}"
+            DONE=$((DONE + 1))
+          done
+          echo "Opened ${DONE} backfill PR(s)."

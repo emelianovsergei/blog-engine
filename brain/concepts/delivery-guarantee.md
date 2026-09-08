@@ -1,9 +1,9 @@
 ---
 type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
-description: "The five workflows a consumer repo runs, why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
+description: "The workflow set a consumer repo runs (eight since v0.17), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-08-02"
+timestamp: "2026-09-07"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -13,15 +13,18 @@ blog-engine ships the CLI; the *pipeline* lives in the consumer repo
 provisioning source for that pipeline, so a hole in `examples/` is a hole in
 every repo provisioned from it.
 
-## The five workflows
+## The workflow set
 
 | Workflow | Role |
 |---|---|
-| `generate-blog-post.yml` | Saturday 1 AM PT (dual cron + Pacific schedule-guard). Generates the post and opens a draft PR. |
+| `generate-blog-post.yml` | Wednesday + Saturday 1 AM PT (two DST cron pairs + a day-agnostic Pacific schedule-guard; `RUN_KEY=<date>-<slot>` keys branch, report, recovery ref and PR title). Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
 | `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). |
 | `autoblog-merge-pending.yml` | Daily merge cron over `autoblog-approved-pending`, behind label + age + head-SHA-pinned CI gates. |
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |
-| `autoblog-watchdog.yml` | Out-of-band proof that a post actually shipped. |
+| `autoblog-watchdog.yml` | Out-of-band proof that a post actually shipped (Mon + Thu): staleness, stranded PRs, and a per-week merged-post count against `AUTOBLOG_EXPECTED_POSTS_PER_WEEK`. |
+| `autoblog-ci-heal.yml` | Reacts to red CI on `blog/auto-*`, `blog/refresh-*` and `blog/backfill-*` PRs so a failing check does not strand a finished post. |
+| `blog-refresh.yml` | Monday: `blog-engine-refresh --mode refresh` on the post with the most page-two Search Console impressions outside a 120-day cooldown ([[concepts/refresh-mode]]). Serialized with backfill via the `autoblog-mutate-existing` concurrency group. |
+| `autoblog-backfill.yml` | `workflow_dispatch`: brings up to N older posts onto the current template, one PR each, body kept, autofix skipped (label `autoblog-backfill`). |
 
 Until 2026-08-02 `examples/` carried only three of the five, and the two missing
 ones were *the delivery guarantee and the thing being guaranteed* — provisioning
@@ -53,7 +56,12 @@ Two thresholds, two questions, both job-level `env` so the alert text, the
 assessment and the close-comment title cannot drift apart:
 
 - `DELIVERY_STALE_DAYS: 10` — "is the pipeline still producing?" Tracks the
-  weekly cadence plus the merge window plus one skipped week.
+  weekly cadence plus the merge window plus one skipped week. At two posts a
+  week this alone cannot see one slot dying, so since v0.17 the watchdog also
+  counts merged `blog/auto-*` PRs in the last `WINDOW_DAYS: 7` against
+  `EXPECTED_POSTS_PER_WEEK` (repo variable `AUTOBLOG_EXPECTED_POSTS_PER_WEEK`,
+  default 1 until the first Wednesday post has merged). Refresh and backfill
+  PRs are excluded from that count.
 - `STRANDED_PR_DAYS: 21` — "is a finished post stuck?" Deliberately longer,
   because a post can legitimately sit through a slow review or an auto-fix
   cycle, and alarming at the delivery cadence would make an ordinary unhurried

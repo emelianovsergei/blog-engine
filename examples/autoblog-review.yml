@@ -34,12 +34,6 @@
 #       attempts per branch generation (default 2).
 #   - Labels (create once): autoblog, autoblog-approved-pending,
 #       autoblog-review-failed, autoblog-hold
-#   - npm script (recommended): blog:check — a structural guard run between
-#       the AI rewrite and its commit (`npm run blog:check -- <file> --base
-#       <sha>`; exit 1 rejects the rewrite). pulse-website and promax-website
-#       ship it as scripts/check-blog-post.ts + lib/blog/check-post.ts.
-#       When the script is absent the guard step logs a warning and the
-#       rewrite proceeds unguarded, so provisioning without it still works.
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
 # the markdown path globs for your site's layout.
@@ -121,6 +115,7 @@ jobs:
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model grok-4.6 \
+            --posts-dir "$(dirname "${{ steps.files.outputs.file }}")" \
             --out review-summary.md \
             --json-out review-result.json
           echo "exit=$?" >> "$GITHUB_OUTPUT"
@@ -242,6 +237,7 @@ jobs:
           BASE: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           set -euo pipefail
           echo "max=$MAX_ATTEMPTS" >> "$GITHUB_OUTPUT"
@@ -250,6 +246,14 @@ jobs:
           if [ ! -f review-result.json ] || ! jq -e '.pass == false' review-result.json >/dev/null; then
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             echo "reason=no-json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Backfill PRs regenerate frontmatter only; the body is deliberately
+          # untouched and a failed review there wants a human edit, not an
+          # AI rewrite of an old post.
+          if echo "$LABELS" | grep -q 'autoblog-backfill'; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=backfill" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Without the PAT a push cannot retrigger review — skip rather
@@ -264,8 +268,12 @@ jobs:
           # force-push wipes the markers, which intentionally resets the
           # budget (new content = new attempts). --fixed-strings because
           # the brackets in the marker are regex metacharacters.
+          # Counts BOTH marker types. autoblog-ci-heal pushes [autoblog-cifix]
+          # commits; without a shared budget the two healers would each spend
+          # their own cap and re-trigger one another indefinitely.
           ATTEMPTS=$(git log "origin/${BASE}..${HEAD_SHA}" \
-            --fixed-strings --grep='[autoblog-autofix]' --oneline | wc -l)
+            --fixed-strings --grep='[autoblog-autofix]' --grep='[autoblog-cifix]' \
+            --oneline | wc -l)
           echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
           if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
             echo "eligible=false" >> "$GITHUB_OUTPUT"
@@ -292,6 +300,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
+          # --required-headings is your site's exact required H2
+          # (lib/blog/rubric.ts BLOG_REQUIRED_HEADINGS); --faq-policy is
+          # appended-by-code when the FAQ renders from frontmatter.
           npx blog-engine-rewrite \
             --post "${{ steps.files.outputs.file }}" \
             --review review-result.json \
@@ -299,32 +310,29 @@ jobs:
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model grok-4.6 \
+            --link-policy content/policy/link-constraints.json \
+            --required-headings "When to Call a Pro" \
+            --faq-policy appended-by-code \
+            --audit-out rewrite-audit.json \
             --notes-out change-notes.md
+
+      # Structural guard on the rewrite BEFORE the build and the commit. An
+      # FAQ section written into the body, a re-cased required heading, or a
+      # change to a protected frontmatter key (faqs, summary, citations, …)
+      # fails here, so nothing is pushed and the loop ends this round. The
+      # 2026-08-29 Promax autofix deleted a post's visible FAQ while its
+      # FAQPage JSON-LD stayed — a Google FAQ-policy violation that shipped.
+      - name: 'Auto-fix: structural guard'
+        if: steps.autofix_gate.outputs.eligible == 'true'
+        run: >
+          npm run blog:check --
+          "${{ steps.files.outputs.file }}"
+          --base "${{ github.event.pull_request.head.sha }}"
 
       # Build the site against the rewritten post BEFORE committing. A
       # rewrite that mangles frontmatter crashes the prerender; failing
       # here means nothing is pushed, the failed label stays, and the loop
       # ends this round.
-      # Structural guard on the rewrite BEFORE the build and the commit. The
-      # consumer's `npm run blog:check` (scripts/check-blog-post.ts) compares
-      # the rewritten file with the PR head: an FAQ section written into the
-      # body, a required heading dropped or re-cased, or a change to a
-      # protected frontmatter key (faqs, summary, citations, …) fails here,
-      # so nothing is pushed and the loop ends this round. Without it the
-      # 2026-08-29 promax autofix deleted a post's visible FAQ while the
-      # FAQPage JSON-LD stayed — a Google FAQ-policy violation that shipped.
-      - name: 'Auto-fix: structural guard'
-        if: steps.autofix_gate.outputs.eligible == 'true'
-        run: |
-          set -euo pipefail
-          if ! node -e "process.exit(require('./package.json').scripts?.['blog:check'] ? 0 : 1)"; then
-            echo "::warning title=No blog:check script::Consumer has no blog:check script; the rewrite is committed without the structural guard. See the required-setup notes at the top of this workflow."
-            exit 0
-          fi
-          npm run blog:check -- \
-            "${{ steps.files.outputs.file }}" \
-            --base "${{ github.event.pull_request.head.sha }}"
-
       - name: 'Auto-fix: validate build'
         if: steps.autofix_gate.outputs.eligible == 'true'
         run: npm run build

@@ -1,35 +1,27 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/generate-blog-post.yml
 #
-# The most site-coupled of these templates — expect to adjust per repo:
-#   - the `npm run blog:generate` script and the paths it writes
-#     (data/blog-generation-runs/, content/blog/, public/images/blog/)
-#   - the Node setup step (.node-version file vs a pinned node-version)
-#   - the cron pair, which exists to cover PST/PDT; the schedule-guard job
-#     drops the duplicate so only one run per Pacific date proceeds
-#
-# Secrets: ANTHROPIC_API_KEY (consumer generate scripts still read this),
-# XAI_API_KEY (once the consumer script passes xaiApiKey), GEMINI_API_KEY
-# (embeddings + fallback), PEXELS_API_KEY,
-# AUTOBLOG_PAT (so the pushed branch raises workflow events).
-#
-name: Generate Weekly Blog Post
+name: Generate Blog Post (Wed + Sat)
 
 on:
   schedule:
+    # Two posts a week, both at 1 AM Pacific. Each slot needs a DST pair;
+    # the schedule-guard below accepts the cron whose hour matches the
+    # current Pacific offset, whatever the weekday.
     - cron: "0 8 * * 6"   # Saturday 1 AM PDT (summer)
     - cron: "0 9 * * 6"   # Saturday 1 AM PST (winter)
+    - cron: "0 8 * * 3"   # Wednesday 1 AM PDT (summer)
+    - cron: "0 9 * * 3"   # Wednesday 1 AM PST (winter)
   workflow_dispatch:
 
-# Two runs on the same Pacific date share one branch — `blog/auto-${RUN_DATE}` —
-# and both force-push it. Overlapping, they can each see no existing PR, generate
-# different posts, and race: the PR ends up created against one run's head while
-# its body and its `autoblog-link-repair-needed` label come from the other. An
-# unresolved dead link could then land with its only merge-blocking label
-# describing a different post.
+# Every artifact is keyed on RUN_KEY = RUN_DATE-SLOT (`sat`, `wed`, or
+# `manual-<run id>`): the report file, the recovery ref, the branch
+# `blog/auto-${RUN_KEY}` and the PR title. A Wednesday run and a Saturday run
+# therefore never touch each other's branch, and a same-day re-run of the
+# same slot reuses its own PR through the existing-PR path below.
 #
 # `cancel-in-progress: false` because a cancelled generate run is the failure
-# this PR was opened about. The second run waits and then acts on a settled
+# this PR was opened about. A second run waits and then acts on a settled
 # branch instead.
 concurrency:
   group: generate-blog-post
@@ -43,6 +35,8 @@ jobs:
       should_run: ${{ steps.window.outputs.should_run }}
       run_at: ${{ steps.window.outputs.run_at }}
       run_date: ${{ steps.window.outputs.run_date }}
+      slot: ${{ steps.window.outputs.slot }}
+      run_key: ${{ steps.window.outputs.run_key }}
 
     steps:
       - name: Resolve Pacific run window
@@ -55,20 +49,32 @@ jobs:
           echo "run_date=$RUN_DATE" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event_name }}" != "schedule" ]; then
+            SLOT="manual-${{ github.run_id }}"
+            echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-${SLOT}" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Two crons cover DST/PST so 1 AM PT always fires.
-          # Accept only the cron that matches the current Pacific offset
-          # so the workflow doesn't run twice every Saturday.
+          # Each slot has a DST pair (08:00 UTC = 1 AM PDT, 09:00 UTC = 1 AM
+          # PST). Accept the cron whose hour matches the current Pacific
+          # offset — matched by HOUR, not by the full cron string, so adding
+          # a weekday never requires editing this guard. The old string
+          # compare would have silently skipped any new cron (a skipped job
+          # reports success), which is the invisible failure the watchdog
+          # exists to describe.
           SCHED="${{ github.event.schedule }}"
+          HOUR=$(echo "$SCHED" | awk '{print $2}')
           UTC_OFFSET=$(TZ=America/Los_Angeles date +%z)   # -0700 (PDT) or -0800 (PST)
-          if [ "$UTC_OFFSET" = "-0700" ] && [ "$SCHED" = "0 8 * * 6" ]; then
+          SLOT=$(TZ=America/Los_Angeles date +%a | tr '[:upper:]' '[:lower:]')   # sat / wed
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "run_key=${RUN_DATE}-${SLOT}" >> "$GITHUB_OUTPUT"
+          if [ "$UTC_OFFSET" = "-0700" ] && [ "$HOUR" = "8" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$SCHED" = "0 9 * * 6" ]; then
+          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$HOUR" = "9" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
+            echo "::warning::Schedule '$SCHED' does not match the current Pacific offset ($UTC_OFFSET); this is the off-DST twin of the slot and is skipped on purpose."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -143,14 +149,50 @@ jobs:
       # post becomes a PR with red CI, which the auto-fix loop and a human can
       # both act on. A discarded post is invisible and unrecoverable.
 
-      - name: Generate weekly blog post
+      # At two posts a week the other slot's post is usually still an open
+      # PR, invisible on disk. Download the blog files each open autoblog PR
+      # added so the generator treats them as published (topic dedup,
+      # category rotation, slug check). Advisory: a failure here must not
+      # cost the post — disk-based dedup still applies.
+      - name: Collect posts pending in open autoblog PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          mkdir -p data/blog-pending
+          # Same admission rule as autoblog-review.yml: the `autoblog` label OR an
+          # `autoblog/*` head ref. --limit 500 covers a busy backlog past gh's
+          # 30-per-page default.
+          gh pr list --state open --limit 500 --json number,labels,headRefName --jq '.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | "\(.number) \(.headRefName)"' > pending-prs.txt || true
+          while read -r NUM REF; do
+            [ -n "$NUM" ] || continue
+            gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate \
+              --jq '.[] | select(.status == "added") | .filename' 2>/dev/null \
+              | grep -E '^content/blog/.*\.mdx$' \
+              | while read -r FILE; do
+                  gh api "/repos/${{ github.repository }}/contents/${FILE}?ref=${REF}" \
+                    --jq '.content' 2>/dev/null | base64 -d > "data/blog-pending/$(basename "$FILE")" \
+                    && echo "pending: #$NUM $FILE" || rm -f "data/blog-pending/$(basename "$FILE")"
+                done
+          done < pending-prs.txt
+          rm -f pending-prs.txt
+          ls data/blog-pending 2>/dev/null || true
+
+      - name: Generate blog post
         run: npm run blog:generate
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          # Search Console: page-two queries seed the topic and GSC volume
+          # joins ranking (blog-engine >= 0.17). Absent secrets → the run
+          # behaves exactly as before; unauthorized → a loud log line.
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
           BLOG_GENERATOR_DATE: ${{ needs.schedule-guard.outputs.run_at }}
+          BLOG_RUN_KEY: ${{ needs.schedule-guard.outputs.run_key }}
+          BLOG_PENDING_DIR: data/blog-pending
 
       - name: Check for generated changes
         id: changes
@@ -181,13 +223,14 @@ jobs:
           # GITHUB_TOKEN has `issues: write` from the job permissions.
           LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
+          RUN_KEY: ${{ needs.schedule-guard.outputs.run_key }}
         run: |
           # NOTE: the missing-PAT check deliberately lives AFTER the push, not
           # here. Failing before the branch exists would discard the generated
           # post — the exact content loss this whole workflow was restructured
           # to eliminate, reintroduced by its own guard.
 
-          REPORT="data/blog-generation-runs/${RUN_DATE}.json"
+          REPORT="data/blog-generation-runs/${RUN_KEY}.json"
           if [ ! -f "$REPORT" ]; then
             echo "Expected report file not found: $REPORT" >&2
             exit 1
@@ -211,8 +254,8 @@ jobs:
           LINKS_UNRESOLVED=$(jq -r '.linkAudit.unresolved // [] | if length == 0 then "- none" else .[] | "- 🚫 `\(.url)` — \(.reason)" end' "$REPORT")
           UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
 
-          BRANCH="blog/auto-${RUN_DATE}"
-          PR_TITLE="Blog: ${RUN_DATE} auto-generated post"
+          BRANCH="blog/auto-${RUN_KEY}"
+          PR_TITLE="Blog: ${RUN_KEY} auto-generated post"
 
           BODY_FILE=$(mktemp)
           {
@@ -266,7 +309,7 @@ jobs:
 
           git checkout -B "$BRANCH"
           git add data/blog-generation-runs/ content/blog/ public/images/blog/
-          git commit -m "Add auto-generated blog artifacts for ${RUN_DATE}"
+          git commit -m "Add auto-generated blog artifacts for ${RUN_KEY}"
 
           # PERSIST FIRST, to a ref that is not a branch and not a PR head.
           #
@@ -281,11 +324,11 @@ jobs:
           # workflow events, creates no branch, and cannot become a PR head — so
           # it satisfies "never lose the work" without touching "never expose an
           # ungated head". Overwritten each run; harmless to leave behind.
-          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_DATE}"; then
+          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_KEY}"; then
             echo "::error::Could not persist the generated commit to a recovery ref — aborting before anything else can fail and lose it."
             exit 1
           fi
-          echo "Post preserved at refs/autoblog-recovery/${RUN_DATE} (git fetch origin 'refs/autoblog-recovery/*:refs/autoblog-recovery/*' to retrieve)."
+          echo "Post preserved at refs/autoblog-recovery/${RUN_KEY} (git fetch origin 'refs/autoblog-recovery/*:refs/autoblog-recovery/*' to retrieve)."
 
           # Same rule as everywhere else in this pipeline: a failed lookup is not
           # "no PR exists". Collapsing the two sends a re-run down the create
@@ -355,14 +398,15 @@ jobs:
 
             # Restore the `autoblog` marker before the reopen below.
             # autoblog-review.yml admits a PR by the `autoblog` label OR an
-            # `autoblog/*` head — and this branch is `blog/auto-*`, so the label
-            # is the ONLY thing that admits it. The create path attaches it; this
-            # reuse path never did. If it had been removed, the reopen still
-            # raises the event but the review job evaluates its `if:` to false
-            # and skips — so the post gets no review, never earns
-            # `autoblog-approved-pending`, and can never merge, while every run
-            # in the chain reports success. Adding a label already present is a
-            # no-op, so this is safe on the normal path.
+            # `autoblog/*` head — and this branch is `blog/auto-*`, so the head
+            # clause never fires and the label is the ONLY thing that admits it.
+            # The create path attaches it; this reuse path never did. If it had
+            # been removed, the reopen still raises a real `pull_request` event,
+            # so the review workflow is triggered and then skips on its own
+            # `if:` — and a skipped job reports success. The post would get no
+            # review, never earn `autoblog-approved-pending`, and never merge,
+            # behind an all-green run list. Adding a label already present is a
+            # no-op, so the normal path is unaffected.
             GH_TOKEN="$LABEL_TOKEN" gh label create autoblog \
               --color 0E8A16 --description "Auto-generated blog post" \
               >/dev/null 2>&1 || true

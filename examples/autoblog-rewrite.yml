@@ -94,11 +94,6 @@ jobs:
         id: files
         run: |
           set -euo pipefail
-          # Match BOTH .md and .mdx. As a template this cannot assume the
-          # consumer's extension — autoblog-review.yml's path filters accept
-          # either, and under `set -euo pipefail` a grep that matches nothing
-          # kills the step before `file` is ever set, so a .md-based repo would
-          # find `/autoblog rewrite` simply unusable.
           CHANGED=$(git diff --name-only \
             "origin/${{ github.event.repository.default_branch }}...HEAD" \
             | grep -E '^(content|src/content)/blog/.*\.mdx?$' | head -n 1)
@@ -110,6 +105,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          # --required-headings is your site's exact required H2
+          # (lib/blog/rubric.ts BLOG_REQUIRED_HEADINGS); --faq-policy is
+          # appended-by-code when the FAQ renders from frontmatter.
           npx blog-engine-rewrite \
             --post "${{ steps.files.outputs.file }}" \
             --review review-result.json \
@@ -117,6 +115,10 @@ jobs:
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
             --model grok-4.6 \
+            --link-policy content/policy/link-constraints.json \
+            --required-headings "When to Call a Pro" \
+            --faq-policy appended-by-code \
+            --audit-out rewrite-audit.json \
             --notes-out change-notes.md
 
       # Build the site against the rewritten post BEFORE committing. A rewrite
@@ -124,6 +126,13 @@ jobs:
       # crashes the Next.js prerender; without this gate the broken post would
       # be pushed and only fail later in the PR's own build. Failing here means
       # nothing is pushed and the post is left in its prior state.
+      # Same structural guard as the automatic autofix path: the rewritten
+      # file is still uncommitted here, so HEAD is the pre-rewrite version.
+      # A dropped FAQ, a re-cased required heading or a changed protected
+      # frontmatter key (slug, date, faqs, citations, …) stops the commit.
+      - name: Validate rewritten post structure
+        run: npm run blog:check -- "${{ steps.files.outputs.file }}" --base HEAD
+
       - name: Validate rewritten post builds
         id: validate
         run: npm run build

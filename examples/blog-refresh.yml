@@ -1,0 +1,206 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/blog-refresh.yml
+#
+name: Refresh Ranking Blog Post
+
+# Weekly refresh of ONE published post: the URL with the most page-two Search
+# Console impressions that has not been touched in a while gets its answer
+# box, FAQs, keyword, sources and (lightly) its body regenerated against the
+# queries it already ranks for, and an honest `updated:` date. The existing
+# review gate and the 24-hour merge window apply unchanged.
+#
+# Runs Monday 1 AM Pacific (DST pair + the same hour-based guard as
+# generate-blog-post.yml). Nothing to refresh — no Search Console access, no
+# post outside the 120-day cooldown, a post with an open autoblog PR — is a
+# clean no-op: no branch, no PR.
+#
+# Required setup: the generate workflow's secrets plus GSC_SERVICE_ACCOUNT_JSON
+# and GSC_SITE_URL. Labels: autoblog, autoblog-refresh.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"   # Monday 1 AM PDT (summer)
+    - cron: "0 9 * * 1"   # Monday 1 AM PST (winter)
+  workflow_dispatch:
+
+# One group for every workflow that selects and mutates EXISTING posts
+# (refresh, backfill): their exclusion lists are read before a PR exists, so
+# two overlapping runs could both pick the same post. Serializing them
+# closes that window; the generate workflow only ever adds files.
+concurrency:
+  group: autoblog-mutate-existing
+  cancel-in-progress: false
+
+jobs:
+  schedule-guard:
+    name: Resolve Pacific run window
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.window.outputs.should_run }}
+      run_at: ${{ steps.window.outputs.run_at }}
+      run_date: ${{ steps.window.outputs.run_date }}
+    steps:
+      - name: Resolve Pacific run window
+        id: window
+        run: |
+          RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
+          RUN_DATE=${RUN_AT%%T*}
+          echo "run_at=$RUN_AT" >> "$GITHUB_OUTPUT"
+          echo "run_date=$RUN_DATE" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HOUR=$(echo "${{ github.event.schedule }}" | awk '{print $2}')
+          UTC_OFFSET=$(TZ=America/Los_Angeles date +%z)
+          if [ "$UTC_OFFSET" = "-0700" ] && [ "$HOUR" = "8" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$HOUR" = "9" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Off-DST twin of the slot; skipped on purpose."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  refresh:
+    name: Refresh one ranking post
+    needs: schedule-guard
+    if: needs.schedule-guard.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify fixture-mode refresh
+        run: npm run blog:test-refresh-fixtures
+
+      # A post with an open autoblog PR (new, refresh or backfill) must not be
+      # refreshed underneath that PR.
+      - name: Collect slugs with open autoblog PRs
+        id: pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fail closed: an incomplete exclusion list could open a second PR
+          # against a post another autoblog PR is already changing.
+          # Selection has to match how the review workflow ADMITS a PR: the
+          # `autoblog` label OR an `autoblog/*` head ref. A label-only query
+          # would miss a head-ref PR and let this job pick a post that PR is
+          # already changing.
+          # --limit above gh's 30-per-page default: an unpaginated list on a busy day
+          # could omit an older open PR and let two jobs pick the same post.
+          if ! OPEN=$(gh pr list --state open --limit 500 --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
+            echo "::error::Could not list open autoblog PRs — refusing to refresh without a complete exclusion list."
+            exit 1
+          fi
+          SLUGS=""
+          for NUM in $OPEN; do
+            if ! FILES=$(gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate --jq '.[].filename'); then
+              echo "::error::Could not list files for PR #${NUM} — refusing to refresh without a complete exclusion list."
+              exit 1
+            fi
+            for FILE in $(grep -E '^content/blog/.*\.mdx$' <<<"$FILES" || true); do
+              SLUGS="${SLUGS:+$SLUGS,}$(basename "$FILE" .mdx)"
+            done
+          done
+          echo "slugs=$SLUGS" >> "$GITHUB_OUTPUT"
+          echo "Excluded (open PRs): ${SLUGS:-none}"
+
+      - name: Refresh the best-ranking stale post
+        run: npm run blog:refresh
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
+          BLOG_GENERATOR_DATE: ${{ needs.schedule-guard.outputs.run_at }}
+          BLOG_REFRESH_EXCLUDE_SLUGS: ${{ steps.pending.outputs.slugs }}
+
+      - name: Read the run report
+        id: report
+        env:
+          RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
+        run: |
+          set -euo pipefail
+          REPORT="data/blog-refresh-runs/${RUN_DATE}.json"
+          test -f "$REPORT"
+          echo "status=$(jq -r '.status' "$REPORT")" >> "$GITHUB_OUTPUT"
+          echo "slug=$(jq -r '.slug // ""' "$REPORT")" >> "$GITHUB_OUTPUT"
+          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+          jq -r '.status, (.reason // "")' "$REPORT"
+
+      - name: Open the refresh PR
+        if: steps.report.outputs.status == 'refreshed'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
+          SLUG: ${{ steps.report.outputs.slug }}
+          REPORT: ${{ steps.report.outputs.report }}
+        run: |
+          set -euo pipefail
+          BRANCH="blog/refresh-${RUN_DATE}-${SLUG}"
+          PR_TITLE="Blog refresh: ${RUN_DATE} ${SLUG}"
+          NOTES="data/blog-refresh-runs/${RUN_DATE}-notes.md"
+
+          BODY_FILE=$(mktemp)
+          {
+            echo "## Weekly Refresh of a Ranking Post"
+            echo
+            echo "- Post: \`/blog/${SLUG}\`"
+            echo "- Changed: $(jq -r '.changedFields | join(", ")' "$REPORT")"
+            echo "- Opportunity score: $(jq -r '.opportunity // 0 | floor' "$REPORT")"
+            echo
+            echo "### Search Console queries this URL ranks for (90 days)"
+            jq -r '.queries[] | "- `\(.query)` — \(.impressions) impressions, position \(.position | . * 10 | round / 10)"' "$REPORT"
+            echo
+            echo "### What changed"
+            if [ -f "$NOTES" ]; then cat "$NOTES"; else jq -r '.changeNotes // "(no notes)"' "$REPORT"; fi
+            echo
+            echo "The existing AI review gate runs on this PR; it merges through the daily 24-hour window like a new post. The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
+          } > "$BODY_FILE"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add content/blog/ data/blog-refresh-runs/
+          git commit -m "Refresh ${SLUG} against its Search Console queries (${RUN_DATE})"
+          git push --force -u origin "$BRANCH"
+
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured; the refresh is safe on $BRANCH but a PR opened with GITHUB_TOKEN would never receive CI or review."
+            exit 1
+          fi
+
+          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog --color 0E8A16 --description "Auto-generated blog post" >/dev/null 2>&1 || true
+          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog-refresh --color 1D76DB --description "Weekly refresh of a ranking post" >/dev/null 2>&1 || true
+
+          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number'); then
+            echo "::error::Could not list PRs for $BRANCH."
+            exit 1
+          fi
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE" --add-label autoblog --add-label autoblog-refresh
+            gh pr close "$EXISTING_PR" && gh pr reopen "$EXISTING_PR"
+          else
+            gh pr create --draft --label autoblog --label autoblog-refresh --title "$PR_TITLE" --body-file "$BODY_FILE"
+          fi

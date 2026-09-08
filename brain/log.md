@@ -3,10 +3,19 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-09-06"
+timestamp: "2026-09-07"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-07] examples/ resync for the twice-weekly cadence + refresh/backfill
+
+- `examples/` now mirrors the pulse-website Phase D+E workflow set: Wed+Sat
+  generation with `RUN_KEY` collision-proof keys and pending-PR download,
+  review/rewrite passing `--required-headings`/`--faq-policy` to the rubric-aware
+  guards, watchdog Mon+Thu with the weekly post count, plus three new templates:
+  `autoblog-ci-heal.yml`, `blog-refresh.yml`, `autoblog-backfill.yml`.
+- [[concepts/delivery-guarantee]] table and watchdog section updated.
 
 ## [2026-09-06] ingest | 10 module page(s) updated
 
