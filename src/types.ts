@@ -1,3 +1,4 @@
+import type { GscSignal, GscStatus } from "./gsc.js";
 /**
  * Public types for the blog topic-selection engine.
  *
@@ -86,6 +87,12 @@ export interface CandidateTopic {
   /** 1-2 sentences of extra guidance for the downstream planner. */
   notes: string;
   categoryId: string;
+  /** The Search Console query this candidate was written to win, verbatim
+   * from the opportunities block, when the planner targeted one. */
+  hintQuery?: string;
+  /** Slug of an existing post this candidate would deepen (a supporting
+   * post for an emerging cluster), when the planner named one. */
+  supportsSlug?: string;
 }
 
 export interface SelectedTopic {
@@ -97,6 +104,19 @@ export interface SelectedTopic {
   /** Why this topic won — recorded in the generation run report. */
   rationale: string;
   weather: WeatherContext;
+  /** Slug of the existing post the winner supports (from the planner's
+   * `supportsSlug`), so the consumer can link the two. */
+  supportsSlug?: string;
+  /** Present when a Search Console signal was supplied, whatever its status. */
+  gsc?: {
+    status: GscStatus;
+    /** The opportunity query the winner targets, if any. */
+    hintQuery?: string;
+    /** 90-day impressions for that query. */
+    impressions?: number;
+    /** How many opportunities were offered to the planner. */
+    opportunitiesOffered: number;
+  };
 }
 
 export interface SelectWeeklyTopicArgs {
@@ -110,6 +130,13 @@ export interface SelectWeeklyTopicArgs {
   candidateCount?: number;
   /** Model overrides — defaults are sane; exposed for tests and cost tuning. */
   models?: { generation?: string; embedding?: string };
+  /**
+   * Search Console signal preloaded by the consumer (`loadGscSignal`). When
+   * its status is "ok", page-two queries with real impressions are offered to
+   * the planner as opportunities and GSC volume joins the ranking; any other
+   * status is recorded and the run behaves exactly as without it.
+   */
+  gscSignal?: GscSignal;
   /** When provided, enables the Google-Autocomplete search-demand signal in
    * ranking (pass the global `fetch`). Omit to skip it. Injected in tests. */
   fetchImpl?: FetchLike;

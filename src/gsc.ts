@@ -42,6 +42,13 @@ export function parseServiceAccountJson(raw: string | undefined): GscCredentials
   }
 }
 
+const MALFORMED_MESSAGE =
+  "GSC_SERVICE_ACCOUNT_JSON is set but is not valid service-account JSON (needs client_email and private_key)";
+
+function isConfigured(raw: string | undefined): boolean {
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 function base64url(input: string | Buffer): string {
   return Buffer.from(input)
     .toString("base64")
@@ -100,6 +107,8 @@ export interface GscQueryRow {
   clicks: number;
   ctr: number;
   position: number;
+  /** Landing page URL — present when the query included the `page` dimension. */
+  page?: string;
 }
 
 export interface FetchSearchAnalyticsArgs {
@@ -136,8 +145,12 @@ export async function fetchSearchAnalytics(args: FetchSearchAnalyticsArgs): Prom
   const payload = (await response.json()) as {
     rows?: Array<{ keys?: string[]; impressions?: number; clicks?: number; ctr?: number; position?: number }>;
   };
+  const dimensions = args.dimensions ?? ["query"];
+  const queryIndex = Math.max(0, dimensions.indexOf("query"));
+  const pageIndex = dimensions.indexOf("page");
   return (payload.rows ?? []).map((row) => ({
-    query: row.keys?.[0] ?? "",
+    query: row.keys?.[queryIndex] ?? "",
+    ...(pageIndex >= 0 && row.keys?.[pageIndex] ? { page: row.keys[pageIndex] } : {}),
     impressions: row.impressions ?? 0,
     clicks: row.clicks ?? 0,
     ctr: row.ctr ?? 0,
@@ -145,7 +158,10 @@ export async function fetchSearchAnalytics(args: FetchSearchAnalyticsArgs): Prom
   }));
 }
 
-export type GscStatus = "ok" | "absent" | "unauthorized" | "error";
+/** `malformed`: a credential IS configured but is not usable service-account
+ * JSON (truncated paste, wrong secret). Distinct from `absent` so a broken
+ * production secret surfaces instead of silently disabling the signal. */
+export type GscStatus = "ok" | "absent" | "unauthorized" | "error" | "malformed";
 
 export interface GscSignal {
   status: GscStatus;
@@ -184,6 +200,7 @@ export interface LoadGscSignalArgs {
  */
 export async function loadGscSignal(args: LoadGscSignalArgs): Promise<GscSignal> {
   const credentials = parseServiceAccountJson(args.serviceAccountJson);
+  if (!credentials && isConfigured(args.serviceAccountJson)) return EMPTY_SIGNAL("malformed", MALFORMED_MESSAGE);
   if (!credentials || !args.siteUrl) return EMPTY_SIGNAL("absent");
 
   try {
@@ -295,4 +312,142 @@ export function mergeDemand(args: {
       : (volumeScore ?? breadthScore);
 
   return { volumeScore, breadthScore, score, sources };
+}
+
+// ─── Page-dimension signal + refresh target ─────────────────────────────────
+
+export interface GscPageSignal {
+  status: GscStatus;
+  rows: GscQueryRow[];
+  /** Ranking queries grouped by landing page URL, sorted by impressions. */
+  byPage: Map<string, GscQueryRow[]>;
+  message?: string;
+}
+
+export interface LoadGscPageSignalArgs extends LoadGscSignalArgs {
+  /** Keep only pages whose pathname starts with this prefix (e.g. "/blog/"). */
+  pathPrefix?: string;
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Like `loadGscSignal`, but with the `page` dimension so each row knows the
+ * URL it ranked. This is the input for choosing which existing post to
+ * refresh: the queries a page already earns impressions for are the ones a
+ * refreshed summary, FAQ and section can win outright.
+ */
+export async function loadGscPageSignal(args: LoadGscPageSignalArgs): Promise<GscPageSignal> {
+  const credentials = parseServiceAccountJson(args.serviceAccountJson);
+  if (!credentials && isConfigured(args.serviceAccountJson)) {
+    return { status: "malformed", rows: [], byPage: new Map(), message: MALFORMED_MESSAGE };
+  }
+  if (!credentials || !args.siteUrl) return { status: "absent", rows: [], byPage: new Map() };
+
+  try {
+    const rows = (
+      await fetchSearchAnalytics({
+        credentials,
+        siteUrl: args.siteUrl,
+        startDate: isoDaysAgo(args.now, args.lookbackDays ?? 90),
+        endDate: isoDaysAgo(args.now, 1),
+        dimensions: ["page", "query"],
+        rowLimit: args.rowLimit ?? 5000,
+        ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}),
+        nowSeconds: Math.floor(args.now.getTime() / 1000),
+      })
+    ).filter((r) => r.page && (!args.pathPrefix || pathOf(r.page).startsWith(args.pathPrefix)));
+
+    const byPage = new Map<string, GscQueryRow[]>();
+    for (const row of rows) {
+      const list = byPage.get(row.page!) ?? [];
+      list.push(row);
+      byPage.set(row.page!, list);
+    }
+    for (const list of byPage.values()) list.sort((a, b) => b.impressions - a.impressions);
+    return { status: "ok", rows, byPage };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const unauthorized = /HTTP 40(1|3)/.test(message);
+    return { status: unauthorized ? "unauthorized" : "error", rows: [], byPage: new Map(), message };
+  }
+}
+
+export interface RefreshablePost {
+  slug: string;
+  /** Canonical URL as Search Console reports it. */
+  url: string;
+  /** Publish date (YYYY-MM-DD or ISO). */
+  date: string;
+  /** Last substantive revision, when any. */
+  updated?: string;
+}
+
+export interface PickRefreshTargetArgs {
+  byPage: Map<string, GscQueryRow[]>;
+  posts: readonly RefreshablePost[];
+  now: Date;
+  /** A page needs at least one query with this many impressions to qualify. */
+  minImpressions?: number;
+  /** Queries in this position window are the refresh opportunity. */
+  minPosition?: number;
+  maxPosition?: number;
+  /** Days since publish or last update before a post may be refreshed again. */
+  cooldownDays?: number;
+  /** Slugs to skip (e.g. posts with an open autoblog PR). */
+  excludeSlugs?: readonly string[];
+}
+
+export interface RefreshTarget {
+  slug: string;
+  url: string;
+  /** Every query the page ranks for, sorted by impressions (page-one ones included). */
+  queries: GscQueryRow[];
+  /** Sum of opportunity over the qualifying page-two queries. */
+  opportunity: number;
+}
+
+/**
+ * The single best post to refresh this week: the page with the most
+ * impressions sitting in the position window, that has not been touched
+ * inside the cooldown. Returns undefined when nothing qualifies, so the
+ * caller can no-op cleanly.
+ */
+export function pickRefreshTarget(args: PickRefreshTargetArgs): RefreshTarget | undefined {
+  const minImpressions = args.minImpressions ?? 100;
+  const minPosition = args.minPosition ?? 4;
+  const maxPosition = args.maxPosition ?? 20;
+  const cooldownMs = (args.cooldownDays ?? 120) * 24 * 60 * 60 * 1000;
+  const exclude = new Set(args.excludeSlugs ?? []);
+
+  let best: RefreshTarget | undefined;
+  for (const post of args.posts) {
+    if (exclude.has(post.slug)) continue;
+    const touched = new Date(post.updated ?? post.date).getTime();
+    if (!Number.isNaN(touched) && args.now.getTime() - touched < cooldownMs) continue;
+    const queries = args.byPage.get(post.url);
+    if (!queries || queries.length === 0) continue;
+    const opportunity = queries
+      .filter((q) => q.impressions >= minImpressions && q.position >= minPosition && q.position <= maxPosition)
+      // Weight decays from 1 at minPosition to a small positive value AT
+      // maxPosition. A zero at the inclusive boundary would make a page whose
+      // only qualifying query sits exactly at maxPosition score 0 and be
+      // discarded by the guard below, contradicting the documented window.
+      .reduce(
+        (sum, q) =>
+          sum + q.impressions * ((maxPosition - q.position + 1) / (maxPosition - minPosition + 1)),
+        0,
+      );
+    if (opportunity <= 0) continue;
+    if (!best || opportunity > best.opportunity) {
+      best = { slug: post.slug, url: post.url, queries: [...queries].sort((a, b) => b.impressions - a.impressions), opportunity };
+    }
+  }
+  return best;
 }

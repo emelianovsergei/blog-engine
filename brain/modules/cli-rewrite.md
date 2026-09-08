@@ -3,9 +3,9 @@ type: "module"
 title: "Cli Rewrite"
 description: "blog-engine-rewrite — apply a previous review's feedback to revise a post. Reads a markdown post and a prior ReviewResult JSON; writes the revised markdown back to the same post path. Invoked from CI two ways: the review workflow's automatic fix-on-failure steps (bounded by a CI-side attempt cap), and the user-initiated `/autoblog rewrite` slash-command workflow. Exit codes: 0  Revised post written. 1  ERROR — unexpected failure."
 tags: ["module"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-06"
 sources: ["src/cli/rewrite.ts"]
-source_hash: "6f39b80d14416cdb"
+source_hash: "271c379f8101fb61"
 ---
 # Cli Rewrite
 
@@ -20,6 +20,7 @@ blog-engine-rewrite — apply a previous review's feedback to revise a post. Rea
 - [[modules/links]]
 - [[modules/review]]
 - [[modules/cli-frontmatter]]
+- [[modules/cli-refresh]]
 - [[modules/cli-shared]]
 
 ## Custom Notes

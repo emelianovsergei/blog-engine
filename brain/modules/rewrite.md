@@ -3,9 +3,9 @@ type: "module"
 title: "Blog Post Rewriter"
 description: "Rewrites blog posts using LLMs to fix issues highlighted in the review rubric."
 tags: ["rewrite", "llm-generation", "seo"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-06"
 sources: ["src/rewrite.ts"]
-source_hash: "77c80704045825bb"
+source_hash: "a36e3e1e77a8641b"
 ---
 # Blog Post Rewriter
 
@@ -18,6 +18,7 @@ Revision of a failed-review blog post against the review's findings. Invoked two
 - [[modules/types]]
 - [[modules/links]]
 - [[modules/planning]]
+- [[modules/rubric]]
 - [[modules/review]]
 
 ## API Interface

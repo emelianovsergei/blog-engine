@@ -157,3 +157,46 @@ test("writer gets the hedge list and the citation format", () => {
   assert.match(rendered, /Forbidden hedges: might, maybe/);
   assert.match(rendered, /\[anchor text\]\(https:\/\/example\.gov\/page\)/);
 });
+
+// ─── faq-authorship recognises every Markdown heading form (v0.17) ──────────
+
+import { checkArticleBody as checkBodyForms, hasExactH2 } from "../rubric.js";
+
+test("faq-authorship flags abbreviated, indented and Setext FAQ headings", () => {
+  const body = (heading: string) =>
+    `Intro.\n\n## Section\n\n${Array.from({ length: 800 }, () => "word").join(" ")}\n\n${heading}\n\n**Q?**\n\nA.`;
+  for (const heading of [
+    "## FAQ",
+    "   ## FAQs",
+    "### Frequently asked questions",
+    "Frequently Asked Questions\n---",
+    "<h2>Frequently Asked Questions</h2>",
+    '<h3 className="faq">FAQ</h3>',
+    "## **FAQ**",
+    "## [FAQ](#faq)",
+    "> ## Frequently Asked Questions",
+    "> > ### FAQ",
+    "## <span>FAQ</span>",
+    '## <strong className="x">Frequently Asked Questions</strong>',
+  ]) {
+    const ids = checkBodyForms(body(heading)).map((v) => v.rule);
+    assert.ok(ids.includes("faq-authorship"), `${JSON.stringify(heading)} should be flagged`);
+  }
+  const clean = checkBodyForms(body("## Fixing a faulty fan")).map((v) => v.rule);
+  assert.ok(!clean.includes("faq-authorship"));
+});
+
+test("faq-authorship ignores FAQ headings inside fenced code and catches nested HTML", () => {
+  const body = (extra: string) => `Intro.\n\n## Section\n\n${Array.from({ length: 800 }, () => "word").join(" ")}\n\n${extra}`;
+  const fenced = checkBodyForms(body("```md\n## FAQ\n```\n\nprose")).map((v) => v.rule);
+  assert.ok(!fenced.includes("faq-authorship"), "a fenced example is code, not a heading");
+  for (const html of ["<h2><strong>FAQ</strong></h2>", "<h2><span>Frequently Asked Questions</span></h2>"]) {
+    assert.ok(checkBodyForms(body(`${html}\n\n**Q?**\n\nA.`)).map((v) => v.rule).includes("faq-authorship"), html);
+  }
+});
+
+test("hasExactH2 ignores a required heading that only appears inside fenced code", () => {
+  const body = "Intro.\n\n```md\n## When to Call a Pro\n```\n\n## Something else\n";
+  assert.equal(hasExactH2(body, "When to Call a Pro"), false);
+  assert.equal(hasExactH2("## When to Call a Pro\n\ntext", "When to Call a Pro"), true);
+});

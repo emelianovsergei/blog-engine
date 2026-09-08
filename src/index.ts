@@ -91,6 +91,8 @@ export {
   parseServiceAccountJson,
   buildJwtAssertion,
   findOpportunities,
+  loadGscPageSignal,
+  pickRefreshTarget,
   mergeDemand,
 } from "./gsc.js";
 
@@ -139,6 +141,11 @@ export type {
   OpportunityQuery,
   MergedDemand,
   LoadGscSignalArgs,
+  GscPageSignal,
+  LoadGscPageSignalArgs,
+  RefreshablePost,
+  PickRefreshTargetArgs,
+  RefreshTarget,
 } from "./gsc.js";
 export type { SeasonContext, Season } from "./season.js";
 export type { RecentMix } from "./categories.js";
@@ -152,3 +159,8 @@ export type {
   BlogPostFrontmatter,
 } from "./review.js";
 export type { RewriteBlogPostArgs, RewriteResult } from "./rewrite.js";
+
+// ─── Refresh / backfill (v0.17) ─────────────────────────────────────────────
+export { refreshBlogPost, applyHowToShape, ALL_REFRESH_FIELDS, DEFAULT_REFRESH_MODEL } from "./refresh.js";
+export type { RefreshBlogPostArgs, RefreshResult, RefreshField, RankingQuery, RefreshHowTo, HowToShape } from "./refresh.js";
+export { hasFaqHeading, hasExactH2, countWords } from "./rubric.js";

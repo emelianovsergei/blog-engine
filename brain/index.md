@@ -3,7 +3,7 @@ type: "index"
 title: "Wiki Vault Index"
 description: "Directory of all documented modules, concepts, and logs in the vault."
 tags: ["index"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-06"
 sources: []
 ---
 # Developer Knowledge Index
@@ -17,6 +17,7 @@ sources: []
 *   [[modules/candidates|Topic Candidate Generator]]
 *   [[modules/categories|Category Classifier]]
 *   [[modules/cli-frontmatter|Cli Frontmatter]]
+*   [[modules/cli-refresh|Cli Refresh]]
 *   [[modules/cli-repair|Cli Repair]]
 *   [[modules/cli-review|Cli Review]]
 *   [[modules/cli-rewrite|Cli Rewrite]]
@@ -34,6 +35,7 @@ sources: []
 *   [[modules/orchestrator|Topic Selection Orchestrator]]
 *   [[modules/planning|Topic Alignment Guard]]
 *   [[modules/rank|Topic Ranker]]
+*   [[modules/refresh|Refresh]]
 *   [[modules/review|Blog Post Reviewer]]
 *   [[modules/rewrite|Blog Post Rewriter]]
 *   [[modules/rubric|Rubric]]
@@ -50,6 +52,8 @@ sources: []
 *   [[concepts/delivery-guarantee|Delivery Guarantee (Consumer Workflow Set + Watchdog)]]
 *   [[concepts/demand-signal|Search-Demand Signal]]
 *   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]
+*   [[concepts/refresh-mode|Refresh and Backfill Mode]]
+*   [[concepts/release-procedure|Release Procedure]]
 *   [[concepts/shared-rubric|One Rubric, Many Prompts]]
 *   [[concepts/topic-deduplication|Topic Deduplication]]
 *   [[concepts/unreachable-success-path|Unreachable Success Paths (Silent Green)]]
