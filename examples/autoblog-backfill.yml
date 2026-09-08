@@ -84,7 +84,9 @@ jobs:
           # `autoblog` label OR an `autoblog/*` head ref. A label-only query
           # would miss a head-ref PR and let this job pick a post that PR is
           # already changing.
-          if ! OPEN=$(gh pr list --state open --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
+          # --limit above gh's 30-per-page default: an unpaginated list on a busy day
+          # could omit an older open PR and let two jobs pick the same post.
+          if ! OPEN=$(gh pr list --state open --limit 500 --json number,labels,headRefName --jq '[.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | .number] | .[]'); then
             echo "::error::Could not list open autoblog PRs — refusing to backfill without a complete exclusion list."
             exit 1
           fi

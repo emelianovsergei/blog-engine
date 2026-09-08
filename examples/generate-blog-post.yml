@@ -160,7 +160,10 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p data/blog-pending
-          gh pr list --state open --label autoblog --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > pending-prs.txt || true
+          # Same admission rule as autoblog-review.yml: the `autoblog` label OR an
+          # `autoblog/*` head ref. --limit 500 covers a busy backlog past gh's
+          # 30-per-page default.
+          gh pr list --state open --limit 500 --json number,labels,headRefName --jq '.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | "\(.number) \(.headRefName)"' > pending-prs.txt || true
           while read -r NUM REF; do
             [ -n "$NUM" ] || continue
             gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate \

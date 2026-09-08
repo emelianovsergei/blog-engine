@@ -194,8 +194,16 @@ jobs:
           CHANGED: ${{ steps.repair.outputs.changed }}
           UNRESOLVED: ${{ steps.repair.outputs.unresolved }}
           ELIGIBLE: ${{ steps.budget.outputs.eligible }}
+          STALE: ${{ steps.fresh.outputs.stale }}
         run: |
           set -euo pipefail
+          # A stale run means a newer run already owns this branch and will
+          # report its own outcome; commenting or labeling here would apply
+          # an old run's verdict to a head it never actually inspected.
+          if [ "$STALE" = "true" ]; then
+            echo "::notice::Stale run (branch moved) — skipping outcome reporting."
+            exit 0
+          fi
           if [ "$ELIGIBLE" != "true" ]; then
             gh pr comment "$PR" --body "CI is still red after an automatic link repair. The cause is not a dead link — a human needs to look."
             gh pr edit "$PR" --add-label autoblog-ci-failed || true
