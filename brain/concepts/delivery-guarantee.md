@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (eight since v0.17), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-07"
+timestamp: "2026-09-16"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -17,11 +17,11 @@ every repo provisioned from it.
 
 | Workflow | Role |
 |---|---|
-| `generate-blog-post.yml` | Wednesday + Saturday 1 AM PT (two DST cron pairs + a day-agnostic Pacific schedule-guard; `RUN_KEY=<date>-<slot>` keys branch, report, recovery ref and PR title). Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
+| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
 | `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). |
-| `autoblog-merge-pending.yml` | Daily merge cron over `autoblog-approved-pending`, behind label + age + head-SHA-pinned CI gates. |
+| `autoblog-merge-pending.yml` | Hourly tick at :20 over `autoblog-approved-pending`. Age gate is `AUTOBLOG_MERGE_DELAY` (default `1h`). Unresolved Codex P1 comments skip merge when `AUTOBLOG_HOLD_ON_CODEX_P1` is true. Label + head-SHA-pinned CI gates unchanged. |
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |
-| `autoblog-watchdog.yml` | Out-of-band proof that a post actually shipped (Mon + Thu): staleness, stranded PRs, and a per-week merged-post count against `AUTOBLOG_EXPECTED_POSTS_PER_WEEK`. |
+| `autoblog-watchdog.yml` | Daily proof that a post actually shipped. Window / expected count / stale days are derived from `AUTOBLOG_INTERVAL` (override with `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` if set). |
 | `autoblog-ci-heal.yml` | Reacts to red CI on `blog/auto-*`, `blog/refresh-*` and `blog/backfill-*` PRs so a failing check does not strand a finished post. |
 | `blog-refresh.yml` | Monday: `blog-engine-refresh --mode refresh` on the post with the most page-two Search Console impressions outside a 120-day cooldown ([[concepts/refresh-mode]]). Serialized with backfill via the `autoblog-mutate-existing` concurrency group. |
 | `autoblog-backfill.yml` | `workflow_dispatch`: brings up to N older posts onto the current template, one PR each, body kept, autofix skipped (label `autoblog-backfill`). |
@@ -46,26 +46,29 @@ one is a silent missing week.
 
 ## The watchdog
 
-`autoblog-watchdog.yml` runs Monday ~10-11 AM PT — after Saturday generation and
-the 24h merge window — and asks the only question that matters: did a post
-actually reach `main`? It is pure API (no checkout), so it sets `GH_REPO`
-explicitly; without a working tree `gh` cannot infer the repository and every
-call dies with "not a git repository."
+`autoblog-watchdog.yml` runs daily ~10-11 AM PT and asks the only question that
+matters: did a post actually reach `main`? It is pure API (no checkout), so it
+sets `GH_REPO` explicitly; without a working tree `gh` cannot infer the
+repository and every call dies with "not a git repository."
 
-Two thresholds, two questions, both job-level `env` so the alert text, the
-assessment and the close-comment title cannot drift apart:
+Window, expected count and stale days are **derived from `AUTOBLOG_INTERVAL`**
+in the assess step and exported via `GITHUB_ENV`, so the alert text cannot
+drift from the assessment. `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` remains an
+optional override.
 
-- `DELIVERY_STALE_DAYS: 10` — "is the pipeline still producing?" Tracks the
-  weekly cadence plus the merge window plus one skipped week. At two posts a
-  week this alone cannot see one slot dying, so since v0.17 the watchdog also
-  counts merged `blog/auto-*` PRs in the last `WINDOW_DAYS: 7` against
-  `EXPECTED_POSTS_PER_WEEK` (repo variable `AUTOBLOG_EXPECTED_POSTS_PER_WEEK`,
-  default 1 until the first Wednesday post has merged). Refresh and backfill
-  PRs are excluded from that count.
-- `STRANDED_PR_DAYS: 21` — "is a finished post stuck?" Deliberately longer,
-  because a post can legitimately sit through a slow review or an auto-fix
-  cycle, and alarming at the delivery cadence would make an ordinary unhurried
-  review look like a fault.
+| Interval | Window | Expected `blog/auto-*` merges | Stale days |
+|---|---|---|---|
+| `1h` | 1 day | 10 | 2 |
+| `1d` (default) | 3 days | 2 | 3 |
+| `7d` | 7 days | 1 | 10 |
+| `30d`+ | interval days | 1 | interval + 10 |
+
+Daily uses a 3-day window so a twice-weekly → daily cutover does not
+false-alarm. Refresh and backfill PRs are excluded from the count.
+
+`STRANDED_PR_DAYS: 21` is still a constant: a post can sit through a slow
+review, and alarming at the delivery cadence would make an ordinary unhurried
+review look like a fault.
 
 **Delivery is measured by merged PRs, not by commits to `content/blog`.** They
 look equivalent and are not: any maintenance edit resets a commit-based signal.

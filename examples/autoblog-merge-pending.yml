@@ -1,22 +1,24 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/autoblog-merge-pending.yml
 #
-# Implements the 24h human-override window without relying on branch
-# protection or GitHub-native auto-merge — works on every plan including
-# Free.
+# Human-override window without branch protection or GitHub-native
+# auto-merge — works on every plan including Free.
 #
-# Daily schedule (~1 AM PT publish window): list open PRs with label
-# `autoblog-approved-pending`, squash-merge each one that has been open >= 24h.
-# PRs carrying the
-# `autoblog-hold` label are skipped (manual pause). PRs with the
-# `autoblog-review-failed` label are skipped (defensive — should not
-# happen given the review workflow removes one when adding the other).
+# Hourly tick at :20 so a :00 generate can finish review+CI. Delay is
+# AUTOBLOG_MERGE_DELAY (default 1h), not 24h. Change with:
+#   gh variable set AUTOBLOG_MERGE_DELAY --body 1h
+#   gh variable set AUTOBLOG_HOLD_ON_CODEX_P1 --body true
+#
+# List open PRs with label `autoblog-approved-pending`, squash-merge each
+# one older than the delay. `autoblog-hold` skips (manual pause).
+# `autoblog-review-failed` skips. Unresolved Codex P1 review comments skip
+# when AUTOBLOG_HOLD_ON_CODEX_P1 is true (default).
 
 name: Autoblog Merge Pending
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # daily ~1 AM PST / 2 AM PDT (was '15 * * * *' hourly)
+    - cron: '20 * * * *'   # hourly, :20 so a :00 generate can finish
   workflow_dispatch:
 
 permissions:
@@ -36,6 +38,7 @@ permissions:
   # gate below reads that as "CI failing" for every PR, forever. The job
   # still exits 0, so this looks exactly like a healthy no-op run.
   actions: read
+  issues: read
 
 jobs:
   merge:
@@ -49,8 +52,34 @@ jobs:
           # GITHUB_TOKEN is FORBIDDEN from marking a draft PR ready, so the
           # belt-and-suspenders mark-ready below runs under the PAT instead.
           PAT: ${{ secrets.AUTOBLOG_PAT }}
+          AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
+          AUTOBLOG_HOLD_ON_CODEX_P1: ${{ vars.AUTOBLOG_HOLD_ON_CODEX_P1 || 'true' }}
+          AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
         run: |
           set -euo pipefail
+
+          parse_duration() {
+            local raw="$1" num unit
+            raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+            if [ "$raw" = "0" ]; then echo 0; return 0; fi
+            case "$raw" in
+              *[0-9]m) num="${raw%m}"; unit=60 ;;
+              *[0-9]h) num="${raw%h}"; unit=3600 ;;
+              *[0-9]d) num="${raw%d}"; unit=86400 ;;
+              *) echo "::error::AUTOBLOG duration '$1' must be 0 or N plus m|h|d (e.g. 0, 15m, 1h, 1d)." >&2; return 1 ;;
+            esac
+            case "$num" in
+              ''|*[!0-9]*) echo "::error::AUTOBLOG duration '$1' has a non-numeric count." >&2; return 1 ;;
+            esac
+            echo $((10#$num * unit))
+          }
+
+          THRESHOLD=$(parse_duration "$AUTOBLOG_MERGE_DELAY")
+          INTERVAL_SECS=$(parse_duration "$AUTOBLOG_INTERVAL")
+          if [ "$THRESHOLD" -ge "$INTERVAL_SECS" ] && [ "$INTERVAL_SECS" -gt 0 ]; then
+            echo "::warning::AUTOBLOG_MERGE_DELAY ($AUTOBLOG_MERGE_DELAY) >= AUTOBLOG_INTERVAL ($AUTOBLOG_INTERVAL). Generate will stay 1-in-flight until merge; cadence collapses."
+          fi
+
           PRS=$(gh pr list \
             --label autoblog-approved-pending \
             --state open \
@@ -62,7 +91,6 @@ jobs:
           fi
 
           NOW=$(date -u +%s)
-          THRESHOLD=$((24 * 60 * 60))
 
           # Track merge failures across the batch. `... | while` runs the loop
           # in a subshell, so FAILED would not survive it — feed via here-string.
@@ -90,14 +118,79 @@ jobs:
               continue
             fi
 
-            CREATED_TS=$(date -u -d "$CREATED" +%s)
-            AGE=$((NOW - CREATED_TS))
-
-            if [ "$AGE" -lt "$THRESHOLD" ]; then
-              REMAIN=$(( (THRESHOLD - AGE) / 60 ))
-              echo "PR #$NUM: too young (${REMAIN}m left in 24h window)"
+            # Override window starts at the latest APPROVED review, not PR
+            # createdAt and not the first time the pending label was applied.
+            # Re-review of a new head does not re-fire a labeled event (the
+            # label stays on), so a label timestamp would let updated content
+            # merge with no new human window. --slurp flattens paginated
+            # arrays; without it `date -d` sees embedded newlines and aborts.
+            if ! REVIEWS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${NUM}/reviews"); then
+              echo "PR #$NUM: skipped — could not read reviews for approval time"
               continue
             fi
+            if ! HEAD_NOW=$(gh pr view "$NUM" --json headRefOid --jq .headRefOid); then
+              echo "PR #$NUM: skipped — could not read head SHA for approval window"
+              continue
+            fi
+            APPROVED_AT=$(jq -r --arg h "$HEAD_NOW" '[.[][] | select(.state=="APPROVED" and .commit_id==$h) | .submitted_at] | last // empty' <<<"$REVIEWS")
+            if [ -z "$APPROVED_AT" ]; then
+              echo "PR #$NUM: skipped — no APPROVED review on current head (fail closed; review --approve is best-effort)"
+              continue
+            fi
+            START="$APPROVED_AT"
+            START_TS=$(date -u -d "$START" +%s)
+            AGE=$((NOW - START_TS))
+
+            if [ "$AGE" -lt "$THRESHOLD" ]; then
+              REMAIN=$(( (THRESHOLD - AGE + 59) / 60 ))
+              echo "PR #$NUM: too young (${REMAIN}m left in $AUTOBLOG_MERGE_DELAY window since ${APPROVED_AT:-createdAt})"
+              continue
+            fi
+
+            # Codex P1 hold. P2 nits ship. Unresolved threads only — a
+            # resolved P1 is a human saying the finding is done. GraphQL
+            # failure fail-closes (skip) so a token blip cannot publish a
+            # safety finding. Disable with AUTOBLOG_HOLD_ON_CODEX_P1=false.
+            HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
+            case "$HOLD_P1" in true|1|yes)
+              OWNER="${GITHUB_REPOSITORY%/*}"
+              REPO="${GITHUB_REPOSITORY#*/}"
+              if ! THREADS=$(gh api graphql -f query='
+                query($owner:String!,$name:String!,$num:Int!) {
+                  repository(owner:$owner, name:$name) {
+                    pullRequest(number:$num) {
+                      reviewThreads(first:100) {
+                        pageInfo { hasNextPage }
+                        nodes {
+                          isResolved
+                          comments(first:20) {
+                            nodes { author { login } body }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
+                echo "PR #$NUM: skipped — could not read Codex review threads (fail-closed P1 hold)"
+                continue
+              fi
+              if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$THREADS")" = "true" ]; then
+                echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P1 hold)"
+                continue
+              fi
+              P1=$(jq -r '
+                [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                  | select(.isResolved == false)
+                  | .comments.nodes[]?
+                  | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                  | select(.body | test("badge/P1-|P1 Badge"; "i"))
+                ] | length' <<<"$THREADS")
+              if [ "${P1:-0}" -gt 0 ]; then
+                echo "PR #$NUM: skipped — $P1 unresolved Codex P1 comment(s). Rewrite, resolve the thread, or set AUTOBLOG_HOLD_ON_CODEX_P1=false."
+                continue
+              fi
+              ;;
+            esac
 
             # CI GATE. Age + labels used to be the ONLY merge conditions, so a
             # post that failed the build or the @smoke guards could still be
@@ -108,7 +201,7 @@ jobs:
             #
             # rc 0 = all green; 8 = still pending; 1 = failing; a PR with no
             # checks at all also errors. Anything but 0 means "not yet" — leave
-            # it for the next daily run, and the watchdog escalates if it sticks.
+            # it for the next hourly tick, and the watchdog escalates if it sticks.
             # Pin the SHA the checks are about to be read for, so the merge can
             # refuse to publish anything else. Between `gh pr checks` and
             # `gh pr merge` a generator re-run, an auto-fix commit or a reviewer
@@ -118,6 +211,10 @@ jobs:
             if ! HEAD_SHA=$(gh pr view "$NUM" --json headRefOid --jq .headRefOid); then
               echo "::warning::Could not read head SHA for #$NUM; leaving for next run."
               FAILED=1
+              continue
+            fi
+            if [ "$HEAD_SHA" != "$HEAD_NOW" ]; then
+              echo "PR #$NUM: skipped — head moved from ${HEAD_NOW:0:10} to ${HEAD_SHA:0:10} after the approval window was measured"
               continue
             fi
 
@@ -153,7 +250,7 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= 24h, CI green, labels re-verified — marking ready + squash-merging."
+            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels re-verified — marking ready + squash-merging."
             # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
             # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
             # mutation and the `gh pr ready` fallback use the PAT. The node-id

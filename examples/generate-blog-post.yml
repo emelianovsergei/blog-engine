@@ -1,24 +1,22 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/generate-blog-post.yml
 #
-name: Generate Blog Post (Wed + Sat)
+# Pace is a repo variable, not this cron. The cron is an hourly tick; the
+# due-check below decides whether to generate. Change speed with:
+#   gh variable set AUTOBLOG_INTERVAL --body 1d|7d|30d|1h
+#   gh variable set AUTOBLOG_HOUR_PT --body 1          # Pacific hour, ignored for 1h
+#
+name: Generate Blog Post
 
 on:
   schedule:
-    # Two posts a week, both at 1 AM Pacific. Each slot needs a DST pair;
-    # the schedule-guard below accepts the cron whose hour matches the
-    # current Pacific offset, whatever the weekday.
-    - cron: "0 8 * * 6"   # Saturday 1 AM PDT (summer)
-    - cron: "0 9 * * 6"   # Saturday 1 AM PST (winter)
-    - cron: "0 8 * * 3"   # Wednesday 1 AM PDT (summer)
-    - cron: "0 9 * * 3"   # Wednesday 1 AM PST (winter)
+    - cron: "0 * * * *"   # hourly tick; due-check decides
   workflow_dispatch:
 
-# Every artifact is keyed on RUN_KEY = RUN_DATE-SLOT (`sat`, `wed`, or
-# `manual-<run id>`): the report file, the recovery ref, the branch
-# `blog/auto-${RUN_KEY}` and the PR title. A Wednesday run and a Saturday run
-# therefore never touch each other's branch, and a same-day re-run of the
-# same slot reuses its own PR through the existing-PR path below.
+# Every artifact is keyed on RUN_KEY (Pacific date, plus hour for 1h
+# interval, plus manual-<run id> for workflow_dispatch): the report file,
+# the recovery ref, the branch `blog/auto-${RUN_KEY}` and the PR title.
+# A same-slot re-run reuses its own PR through the existing-PR path below.
 #
 # `cancel-in-progress: false` because a cancelled generate run is the failure
 # this PR was opened about. A second run waits and then acts on a settled
@@ -29,8 +27,11 @@ concurrency:
 
 jobs:
   schedule-guard:
-    name: Resolve Weekly Run Window
+    name: Resolve Run Window
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       should_run: ${{ steps.window.outputs.should_run }}
       run_at: ${{ steps.window.outputs.run_at }}
@@ -39,44 +40,174 @@ jobs:
       run_key: ${{ steps.window.outputs.run_key }}
 
     steps:
-      - name: Resolve Pacific run window
+      - name: Resolve due-check
         id: window
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
+          AUTOBLOG_HOUR_PT: ${{ vars.AUTOBLOG_HOUR_PT || '1' }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
+          set -euo pipefail
+
+          parse_duration() {
+            local raw="$1" num unit
+            raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+            if [ "$raw" = "0" ]; then echo 0; return 0; fi
+            case "$raw" in
+              *[0-9]m) num="${raw%m}"; unit=60 ;;
+              *[0-9]h) num="${raw%h}"; unit=3600 ;;
+              *[0-9]d) num="${raw%d}"; unit=86400 ;;
+              *) echo "::error::AUTOBLOG duration '$1' must be 0 or Ns with s in m|h|d (e.g. 15m, 1h, 1d, 7d, 30d)." >&2; return 1 ;;
+            esac
+            case "$num" in
+              ''|*[!0-9]*) echo "::error::AUTOBLOG duration '$1' has a non-numeric count." >&2; return 1 ;;
+            esac
+            echo $((10#$num * unit))
+          }
+
           RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
           RUN_DATE=${RUN_AT%%T*}
+          PACIFIC_HOUR=$((10#$(TZ=America/Los_Angeles date +%H)))
 
           echo "run_at=$RUN_AT" >> "$GITHUB_OUTPUT"
           echo "run_date=$RUN_DATE" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            SLOT="manual-${{ github.run_id }}"
-            echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
-            echo "run_key=${RUN_DATE}-${SLOT}" >> "$GITHUB_OUTPUT"
+          if ! INTERVAL_SECS=$(parse_duration "$AUTOBLOG_INTERVAL"); then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -eq 0 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=0 is not a generate cadence. Use 1h or Nd. 0 is valid for AUTOBLOG_MERGE_DELAY only."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -gt 0 ] && [ "$INTERVAL_SECS" -lt 3600 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is shorter than the hourly tick. Use 1h or Nd (15m is valid for AUTOBLOG_MERGE_DELAY only)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -gt 3600 ] && [ "$INTERVAL_SECS" -lt 86400 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is between 1h and 1d. Use 1h or a whole-day interval (1d, 7d, 30d)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -ge 86400 ] && [ $((INTERVAL_SECS % 86400)) -ne 0 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is not a whole number of days. Use 1d, 7d, 30d."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          case "$AUTOBLOG_HOUR_PT" in
+            ''|*[!0-9]*) echo "::error::AUTOBLOG_HOUR_PT='$AUTOBLOG_HOUR_PT' must be 0-23."; echo "should_run=false" >> "$GITHUB_OUTPUT"; echo "slot=invalid" >> "$GITHUB_OUTPUT"; echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"; exit 1 ;;
+          esac
+          HOUR_PT=$((10#$AUTOBLOG_HOUR_PT))
+          if [ "$HOUR_PT" -lt 0 ] || [ "$HOUR_PT" -gt 23 ]; then
+            echo "::error::AUTOBLOG_HOUR_PT=$HOUR_PT is out of 0-23."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if [ "$INTERVAL_SECS" -lt 86400 ]; then
+            SLOT=$(printf '%02d' "$PACIFIC_HOUR")
+            RUN_KEY="${RUN_DATE}-${SLOT}"
+          else
+            SLOT="daily"
+            RUN_KEY="$RUN_DATE"
+          fi
+
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            SLOT="manual-${RUN_ID}"
+            RUN_KEY="${RUN_DATE}-${SLOT}"
+          fi
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "run_key=$RUN_KEY" >> "$GITHUB_OUTPUT"
+
+          # In-flight lock: do not stack a second draft. Applies to schedule
+          # AND workflow_dispatch — close or merge the open PR, then re-run.
+          if ! OPEN_JSON=$(gh pr list --state open --limit 100 --json labels,headRefName,number); then
+            echo "::error::Could not list open PRs — refusing to generate on a guess."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # New-post heads only. Refresh (`blog/refresh-*`) and backfill
+          # (`blog/backfill-*`) also carry `autoblog` so the review gate
+          # admits them; matching that label here would skip a daily slot
+          # for the whole day while a maintenance PR sat open.
+          OPEN_NUM=$(jq -r '
+            [.[]
+              | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
+              | .number] | .[0] // empty' <<<"$OPEN_JSON")
+          if [ -n "$OPEN_NUM" ]; then
+            echo "::notice::not due — open autoblog PR #$OPEN_NUM (in-flight lock). Close or merge it before dispatching."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" != "schedule" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Each slot has a DST pair (08:00 UTC = 1 AM PDT, 09:00 UTC = 1 AM
-          # PST). Accept the cron whose hour matches the current Pacific
-          # offset — matched by HOUR, not by the full cron string, so adding
-          # a weekday never requires editing this guard. The old string
-          # compare would have silently skipped any new cron (a skipped job
-          # reports success), which is the invisible failure the watchdog
-          # exists to describe.
-          SCHED="${{ github.event.schedule }}"
-          HOUR=$(echo "$SCHED" | awk '{print $2}')
-          UTC_OFFSET=$(TZ=America/Los_Angeles date +%z)   # -0700 (PDT) or -0800 (PST)
-          SLOT=$(TZ=America/Los_Angeles date +%a | tr '[:upper:]' '[:lower:]')   # sat / wed
-          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
-          echo "run_key=${RUN_DATE}-${SLOT}" >> "$GITHUB_OUTPUT"
-          if [ "$UTC_OFFSET" = "-0700" ] && [ "$HOUR" = "8" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$HOUR" = "9" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Schedule '$SCHED' does not match the current Pacific offset ($UTC_OFFSET); this is the off-DST twin of the slot and is skipped on purpose."
+          if [ "$INTERVAL_SECS" -ge 86400 ] && [ "$PACIFIC_HOUR" -ne "$HOUR_PT" ]; then
+            echo "::notice::not due — Pacific hour $PACIFIC_HOUR != AUTOBLOG_HOUR_PT $HOUR_PT (interval=$AUTOBLOG_INTERVAL)."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # Interval is measured from the prior *generation* (PR createdAt),
+          # not mergedAt. A 1 AM generate cannot merge until the :20 tick
+          # after AUTOBLOG_MERGE_DELAY (default 02:20). Using mergedAt made
+          # AGE ≈ 22h40m at the next 1 AM, skipped the slot, and the hour
+          # gate would not reconsider until another day — so default 1d
+          # shipped every two days.
+          if ! MERGED_JSON=$(gh pr list --state merged --limit 1000 --json mergedAt,createdAt,headRefName); then
+            echo "::error::Could not list merged PRs — refusing to generate on a guess."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          LAST_ISO=$(jq -r '
+            [.[]
+              | select(.mergedAt != null)
+              | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
+              | .createdAt] | sort | last // empty' <<<"$MERGED_JSON")
+          if [ -n "$LAST_ISO" ]; then
+            # Compare calendar slots, never elapsed seconds: spring DST makes
+            # consecutive Pacific midnights 23h apart, which would skip a day.
+            if [ "$INTERVAL_SECS" -lt 86400 ]; then
+              LAST_SLOT=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y%m%d%H)
+              NOW_SLOT=$(TZ=America/Los_Angeles date +%Y%m%d%H)
+              if [ "$NOW_SLOT" -le "$LAST_SLOT" ]; then
+                echo "::notice::not due — last blog/auto-* hour $LAST_SLOT, now $NOW_SLOT."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            else
+              LAST_DAY=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%d)
+              NEED_DAYS=$(( INTERVAL_SECS / 86400 ))
+              DAYS=$(python3 -c "from datetime import date; print((date.fromisoformat('$RUN_DATE')-date.fromisoformat('$LAST_DAY')).days)")
+              if [ "$DAYS" -lt "$NEED_DAYS" ]; then
+                echo "::notice::not due — last blog/auto-* day $LAST_DAY, $DAYS calendar day(s) < $NEED_DAYS ($AUTOBLOG_INTERVAL)."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
+
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
 
   generate:
     name: Generate Blog Draft
@@ -149,11 +280,10 @@ jobs:
       # post becomes a PR with red CI, which the auto-fix loop and a human can
       # both act on. A discarded post is invisible and unrecoverable.
 
-      # At two posts a week the other slot's post is usually still an open
-      # PR, invisible on disk. Download the blog files each open autoblog PR
-      # added so the generator treats them as published (topic dedup,
-      # category rotation, slug check). Advisory: a failure here must not
-      # cost the post — disk-based dedup still applies.
+      # An in-flight post is an open PR, invisible on disk. Download the
+      # blog files each open autoblog PR added so the generator treats them
+      # as published (topic dedup, category rotation, slug check). Advisory:
+      # a failure here must not cost the post — disk-based dedup still applies.
       - name: Collect posts pending in open autoblog PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -259,7 +389,7 @@ jobs:
 
           BODY_FILE=$(mktemp)
           {
-            echo "## Weekly Auto-Generated Blog Run"
+            echo "## Auto-Generated Blog Run"
             echo
             echo "- Status: \`$STATUS\`"
             echo "- Planned title: $PLAN_TITLE"
@@ -338,7 +468,7 @@ jobs:
           # before this head is reviewable. Pushing is what starts the clock:
           # autoblog-review.yml runs on the new head, can add
           # autoblog-approved-pending, and autoblog-merge-pending.yml publishes
-          # 24h later on that label alone. This generation run failing is not a
+          # after AUTOBLOG_MERGE_DELAY on that label alone. This generation run failing is not a
           # check on the PR, so a label applied afterwards — and failing — would
           # leave a dead link auto-publishing with every signal green.
           if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number'); then

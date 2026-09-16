@@ -8,6 +8,14 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-16] cadence knob (hourly tick + repo vars)
+
+- Generate, merge, and watchdog crons are now ticks. Pace is `AUTOBLOG_INTERVAL`
+  (default `1d`), merge wait is `AUTOBLOG_MERGE_DELAY` (default `1h`), and
+  unresolved Codex P1 comments hold merge when `AUTOBLOG_HOLD_ON_CODEX_P1` is
+  true. Watchdog windows are derived from the interval.
+- [[concepts/delivery-guarantee]] table and watchdog section updated.
+
 ## [2026-09-07] examples/ resync for the twice-weekly cadence + refresh/backfill
 
 - `examples/` now mirrors the pulse-website Phase D+E workflow set: Wed+Sat
