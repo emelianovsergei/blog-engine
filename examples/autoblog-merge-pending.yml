@@ -128,8 +128,16 @@ jobs:
               echo "PR #$NUM: skipped — could not read reviews for approval time"
               continue
             fi
-            APPROVED_AT=$(jq -r '[.[][] | select(.state=="APPROVED") | .submitted_at] | last // empty' <<<"$REVIEWS")
-            START="${APPROVED_AT:-$CREATED}"
+            if ! HEAD_NOW=$(gh pr view "$NUM" --json headRefOid --jq .headRefOid); then
+              echo "PR #$NUM: skipped — could not read head SHA for approval window"
+              continue
+            fi
+            APPROVED_AT=$(jq -r --arg h "$HEAD_NOW" '[.[][] | select(.state=="APPROVED" and .commit_id==$h) | .submitted_at] | last // empty' <<<"$REVIEWS")
+            if [ -z "$APPROVED_AT" ]; then
+              echo "PR #$NUM: skipped — no APPROVED review on current head (fail closed; review --approve is best-effort)"
+              continue
+            fi
+            START="$APPROVED_AT"
             START_TS=$(date -u -d "$START" +%s)
             AGE=$((NOW - START_TS))
 
@@ -152,6 +160,7 @@ jobs:
                   repository(owner:$owner, name:$name) {
                     pullRequest(number:$num) {
                       reviewThreads(first:100) {
+                        pageInfo { hasNextPage }
                         nodes {
                           isResolved
                           comments(first:20) {
@@ -163,6 +172,10 @@ jobs:
                   }
                 }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
                 echo "PR #$NUM: skipped — could not read Codex review threads (fail-closed P1 hold)"
+                continue
+              fi
+              if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$THREADS")" = "true" ]; then
+                echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P1 hold)"
                 continue
               fi
               P1=$(jq -r '

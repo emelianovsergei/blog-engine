@@ -167,7 +167,7 @@ jobs:
           # AGE ≈ 22h40m at the next 1 AM, skipped the slot, and the hour
           # gate would not reconsider until another day — so default 1d
           # shipped every two days.
-          if ! MERGED_JSON=$(gh pr list --state merged --limit 60 --json mergedAt,createdAt,headRefName); then
+          if ! MERGED_JSON=$(gh pr list --state merged --label autoblog --limit 100 --json mergedAt,createdAt,headRefName); then
             echo "::error::Could not list merged PRs — refusing to generate on a guess."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 1

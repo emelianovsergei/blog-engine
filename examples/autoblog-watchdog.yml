@@ -50,6 +50,7 @@ jobs:
     env:
       STRANDED_PR_DAYS: 21
       AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
+      AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
       AUTOBLOG_EXPECTED_OVERRIDE: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '' }}
 
     steps:
@@ -86,10 +87,15 @@ jobs:
           # Derived so EXPECTED_POSTS_PER_WEEK cannot go stale when pace changes.
           # 1d uses a 3-day window (expected 2) so the first days after a
           # twice-weekly → daily cutover do not false-alarm.
+          DELAY_SECS=$(parse_duration "$AUTOBLOG_MERGE_DELAY")
           if [ "$INTERVAL_SECS" -le 3600 ]; then
-            # In-flight lock + default 1h merge delay → ~12 posts/day, not 24.
+            # In-flight lock: one post at a time. Attainable per day is
+            # 24h / (interval + merge delay), not 24.
+            CYCLE=$(( INTERVAL_SECS + DELAY_SECS ))
+            if [ "$CYCLE" -lt 3600 ]; then CYCLE=3600; fi
             WINDOW_DAYS=1
-            EXPECTED_POSTS_PER_WEEK=10
+            EXPECTED_POSTS_PER_WEEK=$(( 86400 / CYCLE ))
+            if [ "$EXPECTED_POSTS_PER_WEEK" -lt 1 ]; then EXPECTED_POSTS_PER_WEEK=1; fi
             DELIVERY_STALE_DAYS=2
           elif [ "$INTERVAL_SECS" -le 86400 ]; then
             WINDOW_DAYS=3
