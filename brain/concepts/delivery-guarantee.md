@@ -58,10 +58,10 @@ optional override.
 
 | Interval | Window | Expected `blog/auto-*` merges | Stale days |
 |---|---|---|---|
-| `1h` | 1 day | 20 | 2 |
+| `1h` | 1 day | 10 | 2 |
 | `1d` (default) | 3 days | 2 | 3 |
 | `7d` | 7 days | 1 | 10 |
-| `30d` | 35 days | 1 | 40 |
+| `30d`+ | interval days | 1 | interval + 10 |
 
 Daily uses a 3-day window so a twice-weekly → daily cutover does not
 false-alarm. Refresh and backfill PRs are excluded from the count.

@@ -87,8 +87,9 @@ jobs:
           # 1d uses a 3-day window (expected 2) so the first days after a
           # twice-weekly → daily cutover do not false-alarm.
           if [ "$INTERVAL_SECS" -le 3600 ]; then
+            # In-flight lock + default 1h merge delay → ~12 posts/day, not 24.
             WINDOW_DAYS=1
-            EXPECTED_POSTS_PER_WEEK=20
+            EXPECTED_POSTS_PER_WEEK=10
             DELIVERY_STALE_DAYS=2
           elif [ "$INTERVAL_SECS" -le 86400 ]; then
             WINDOW_DAYS=3
@@ -99,9 +100,10 @@ jobs:
             EXPECTED_POSTS_PER_WEEK=1
             DELIVERY_STALE_DAYS=10
           else
-            WINDOW_DAYS=35
+            DAYS=$(( INTERVAL_SECS / 86400 ))
+            WINDOW_DAYS=$DAYS
             EXPECTED_POSTS_PER_WEEK=1
-            DELIVERY_STALE_DAYS=40
+            DELIVERY_STALE_DAYS=$(( DAYS + 10 ))
           fi
           if [ -n "$AUTOBLOG_EXPECTED_OVERRIDE" ]; then
             EXPECTED_POSTS_PER_WEEK="$AUTOBLOG_EXPECTED_OVERRIDE"

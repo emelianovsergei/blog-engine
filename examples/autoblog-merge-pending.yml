@@ -38,6 +38,7 @@ permissions:
   # gate below reads that as "CI failing" for every PR, forever. The job
   # still exits 0, so this looks exactly like a healthy no-op run.
   actions: read
+  issues: read
 
 jobs:
   merge:
@@ -117,12 +118,22 @@ jobs:
               continue
             fi
 
-            CREATED_TS=$(date -u -d "$CREATED" +%s)
-            AGE=$((NOW - CREATED_TS))
+            # Override window starts when autoblog-approved-pending was
+            # applied, not when the PR opened. Review + autofix + CI can
+            # already exceed AUTOBLOG_MERGE_DELAY; counting from createdAt
+            # would then merge on the next :20 tick with no human window.
+            if ! EVENTS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${NUM}/events" --paginate); then
+              echo "PR #$NUM: skipped — could not read issue events for approval time"
+              continue
+            fi
+            APPROVED_AT=$(jq -r '[.[] | select(.event=="labeled" and .label.name=="autoblog-approved-pending") | .created_at] | last // empty' <<<"$EVENTS")
+            START="${APPROVED_AT:-$CREATED}"
+            START_TS=$(date -u -d "$START" +%s)
+            AGE=$((NOW - START_TS))
 
             if [ "$AGE" -lt "$THRESHOLD" ]; then
               REMAIN=$(( (THRESHOLD - AGE + 59) / 60 ))
-              echo "PR #$NUM: too young (${REMAIN}m left in $AUTOBLOG_MERGE_DELAY window)"
+              echo "PR #$NUM: too young (${REMAIN}m left in $AUTOBLOG_MERGE_DELAY window since ${APPROVED_AT:-createdAt})"
               continue
             fi
 

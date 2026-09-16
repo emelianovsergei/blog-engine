@@ -164,12 +164,23 @@ jobs:
               | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
               | .createdAt] | sort | last // empty' <<<"$MERGED_JSON")
           if [ -n "$LAST_ISO" ]; then
-            LAST_TS=$(date -u -d "$LAST_ISO" +%s)
-            NOW_TS=$(date -u +%s)
+            # Floor to the cadence slot, not the exact createdAt. Generate
+            # starts at 1:00 and the PR exists at ~1:05; elapsed-seconds
+            # against createdAt is then < 1d at the next 1:00 tick and the
+            # hour gate skips the rest of the day.
+            if [ "$INTERVAL_SECS" -lt 86400 ]; then
+              LAST_FLOOR=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%dT%H:00:00)
+              NOW_FLOOR=$(TZ=America/Los_Angeles date +%Y-%m-%dT%H:00:00)
+              LAST_TS=$(TZ=America/Los_Angeles date -d "$LAST_FLOOR" +%s)
+              NOW_TS=$(TZ=America/Los_Angeles date -d "$NOW_FLOOR" +%s)
+            else
+              LAST_DAY=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%d)
+              LAST_TS=$(TZ=America/Los_Angeles date -d "$LAST_DAY 00:00:00" +%s)
+              NOW_TS=$(TZ=America/Los_Angeles date -d "$RUN_DATE 00:00:00" +%s)
+            fi
             AGE=$((NOW_TS - LAST_TS))
             if [ "$AGE" -lt "$INTERVAL_SECS" ]; then
-              REMAIN=$(( (INTERVAL_SECS - AGE) / 60 ))
-              echo "::notice::not due — last blog/auto-* opened $LAST_ISO, ${REMAIN}m left in $AUTOBLOG_INTERVAL."
+              echo "::notice::not due — last blog/auto-* slot $LAST_ISO (floored), age ${AGE}s < $AUTOBLOG_INTERVAL."
               echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
