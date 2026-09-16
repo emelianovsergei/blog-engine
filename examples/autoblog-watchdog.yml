@@ -92,6 +92,9 @@ jobs:
             # In-flight lock: one post at a time. Attainable per day is
             # 24h / (interval + merge delay), not 24.
             CYCLE=$(( INTERVAL_SECS + DELAY_SECS ))
+            # Ceil to the next hour: generate at :00, merge at :20, so a
+            # 30m delay still occupies two hourly slots.
+            CYCLE=$(( (CYCLE + 3599) / 3600 * 3600 ))
             if [ "$CYCLE" -lt 3600 ]; then CYCLE=3600; fi
             WINDOW_DAYS=1
             EXPECTED_POSTS_PER_WEEK=$(( 86400 / CYCLE ))

@@ -213,6 +213,10 @@ jobs:
               FAILED=1
               continue
             fi
+            if [ "$HEAD_SHA" != "$HEAD_NOW" ]; then
+              echo "PR #$NUM: skipped — head moved from ${HEAD_NOW:0:10} to ${HEAD_SHA:0:10} after the approval window was measured"
+              continue
+            fi
 
             CHECKS_OUT=$(gh pr checks "$NUM" 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
             if [ "$CHECKS_RC" -ne 0 ]; then
