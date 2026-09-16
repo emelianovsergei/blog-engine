@@ -4,8 +4,8 @@
 # Triggered by the weekly autoblog draft PR (label `autoblog` or branch
 # prefix `autoblog/*`). Runs the Claude AI review and, if it passes the
 # gate, marks the PR ready and adds the `autoblog-approved-pending` label.
-# A separate workflow (autoblog-merge-pending.yml) handles the 24h delay
-# and final merge.
+# A separate workflow (autoblog-merge-pending.yml) handles the merge delay
+# (`AUTOBLOG_MERGE_DELAY`, default 1h) and final merge.
 #
 # On a genuine gate FAILURE (review exit 2) this workflow now also runs a
 # bounded auto-fix loop: it asks Claude Sonnet to revise the post against
@@ -172,6 +172,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAT: ${{ secrets.AUTOBLOG_PAT }}
           PR: ${{ github.event.pull_request.number }}
+          AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
         run: |
           # GitHub Actions runs `run:` steps with `bash -eo pipefail`, so
           # errexit stays ON. We rely on it: the merge-gate label add at the end
@@ -199,7 +200,7 @@ jobs:
             echo "::warning::Could not resolve PR node id; skipping mark-ready (merge-pending will retry with the PAT)."
           fi
           gh pr review "$PR" --approve \
-            --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a 24h human-override window." \
+            --body "Autoblog AI review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a ${AUTOBLOG_MERGE_DELAY} human-override window." \
             || true
           # Clear any stale failed label first (best-effort), THEN apply the
           # merge-gate label LAST and UNguarded: under errexit a failure here

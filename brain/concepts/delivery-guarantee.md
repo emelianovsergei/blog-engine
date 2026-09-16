@@ -17,7 +17,7 @@ every repo provisioned from it.
 
 | Workflow | Role |
 |---|---|
-| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when an autoblog PR is already open or the last `blog/auto-*` merge is inside the interval. `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
+| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
 | `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). |
 | `autoblog-merge-pending.yml` | Hourly tick at :20 over `autoblog-approved-pending`. Age gate is `AUTOBLOG_MERGE_DELAY` (default `1h`). Unresolved Codex P1 comments skip merge when `AUTOBLOG_HOLD_ON_CODEX_P1` is true. Label + head-SHA-pinned CI gates unchanged. |
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |

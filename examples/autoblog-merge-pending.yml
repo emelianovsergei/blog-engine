@@ -156,7 +156,7 @@ jobs:
                 [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
                   | select(.isResolved == false)
                   | .comments.nodes[]?
-                  | select(.author.login == "chatgpt-codex-connector[bot]")
+                  | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                   | select(.body | test("badge/P1-|P1 Badge"; "i"))
                 ] | length' <<<"$THREADS")
               if [ "${P1:-0}" -gt 0 ]; then
