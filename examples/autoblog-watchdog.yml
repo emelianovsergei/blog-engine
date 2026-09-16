@@ -88,6 +88,7 @@ jobs:
           # 1d uses a 3-day window (expected 2) so the first days after a
           # twice-weekly → daily cutover do not false-alarm.
           DELAY_SECS=$(parse_duration "$AUTOBLOG_MERGE_DELAY")
+          if [ "$INTERVAL_SECS" -eq 0 ]; then INTERVAL_SECS=3600; fi
           if [ "$INTERVAL_SECS" -le 3600 ]; then
             # In-flight lock: one post at a time. Attainable per day is
             # 24h / (interval + merge delay), not 24.

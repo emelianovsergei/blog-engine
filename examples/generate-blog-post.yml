@@ -81,6 +81,13 @@ jobs:
             echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          if [ "$INTERVAL_SECS" -eq 0 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=0 is not a generate cadence. Use 1h or Nd. 0 is valid for AUTOBLOG_MERGE_DELAY only."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "$INTERVAL_SECS" -gt 0 ] && [ "$INTERVAL_SECS" -lt 3600 ]; then
             echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is shorter than the hourly tick. Use 1h or Nd (15m is valid for AUTOBLOG_MERGE_DELAY only)."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -167,7 +174,7 @@ jobs:
           # AGE ≈ 22h40m at the next 1 AM, skipped the slot, and the hour
           # gate would not reconsider until another day — so default 1d
           # shipped every two days.
-          if ! MERGED_JSON=$(gh pr list --state merged --label autoblog --limit 100 --json mergedAt,createdAt,headRefName); then
+          if ! MERGED_JSON=$(gh pr list --state merged --limit 200 --json mergedAt,createdAt,headRefName); then
             echo "::error::Could not list merged PRs — refusing to generate on a guess."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 1
