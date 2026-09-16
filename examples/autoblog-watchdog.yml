@@ -22,7 +22,7 @@ name: Autoblog Watchdog
 
 on:
   schedule:
-    - cron: "0 18 * * 1,4"   # Monday + Thursday ~10-11 AM PT — after each slot's generation + 24h merge window
+    - cron: "0 18 * * *"   # daily ~10-11 AM PT
   workflow_dispatch:
 
 permissions:
@@ -42,32 +42,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Job-level so the alert text, the close-comment and the assessment cannot
-    # drift apart. These were previously set per-step while the issue titles and
-    # bodies hardcoded "10 days" — change the window and the alerts would keep
-    # quoting the old one, and the close step's title match (which must equal
-    # the alert step's title exactly) would silently stop matching.
-    #
-    # Two different questions, two different thresholds.
-    #
-    # DELIVERY_STALE_DAYS answers "is the pipeline still producing?" and tracks
-    # the weekly cadence plus the 24h merge window and a skipped week.
-    #
-    # STRANDED_PR_DAYS answers "is a finished post stuck?" and is deliberately
-    # longer: a post can sit legitimately through a slow review or an auto-fix
-    # cycle, and alarming at the delivery cadence would make an ordinary
-    # unhurried review look like a fault.
+    # Cadence windows are derived from AUTOBLOG_INTERVAL in the assess step
+    # and exported via GITHUB_ENV so the alert text, close-comment and
+    # assessment cannot drift. STRANDED_PR_DAYS stays a constant: a post can
+    # sit through a slow review, and alarming at the delivery cadence would
+    # make an ordinary unhurried review look like a fault.
     env:
-      DELIVERY_STALE_DAYS: 10
       STRANDED_PR_DAYS: 21
-      # Cadence check: merged NEW-post PRs (branch blog/auto-*, not refresh or
-      # backfill) in the last WINDOW_DAYS must reach EXPECTED_POSTS_PER_WEEK.
-      # The repo variable defaults to 1 so the check cannot false-alarm before
-      # the first Wednesday post has merged; set AUTOBLOG_EXPECTED_POSTS_PER_WEEK
-      # to 2 once it has. "Did anything ship in 10 days" alone cannot see one
-      # of two weekly slots stopping.
-      WINDOW_DAYS: 7
-      EXPECTED_POSTS_PER_WEEK: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '1' }}
+      AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
+      AUTOBLOG_EXPECTED_OVERRIDE: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '' }}
 
     steps:
       - name: Assess autoblog delivery
@@ -82,6 +65,53 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          parse_duration() {
+            local raw="$1" num unit
+            raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+            if [ "$raw" = "0" ]; then echo 0; return 0; fi
+            case "$raw" in
+              *[0-9]m) num="${raw%m}"; unit=60 ;;
+              *[0-9]h) num="${raw%h}"; unit=3600 ;;
+              *[0-9]d) num="${raw%d}"; unit=86400 ;;
+              *) echo "::error::AUTOBLOG duration '$1' must be 0 or N plus m|h|d." >&2; return 1 ;;
+            esac
+            case "$num" in
+              ''|*[!0-9]*) echo "::error::AUTOBLOG duration '$1' has a non-numeric count." >&2; return 1 ;;
+            esac
+            echo $((10#$num * unit))
+          }
+
+          INTERVAL_SECS=$(parse_duration "$AUTOBLOG_INTERVAL")
+          # Derived so EXPECTED_POSTS_PER_WEEK cannot go stale when pace changes.
+          # 1d uses a 3-day window (expected 2) so the first days after a
+          # twice-weekly → daily cutover do not false-alarm.
+          if [ "$INTERVAL_SECS" -le 3600 ]; then
+            WINDOW_DAYS=1
+            EXPECTED_POSTS_PER_WEEK=20
+            DELIVERY_STALE_DAYS=2
+          elif [ "$INTERVAL_SECS" -le 86400 ]; then
+            WINDOW_DAYS=3
+            EXPECTED_POSTS_PER_WEEK=2
+            DELIVERY_STALE_DAYS=3
+          elif [ "$INTERVAL_SECS" -le 604800 ]; then
+            WINDOW_DAYS=7
+            EXPECTED_POSTS_PER_WEEK=1
+            DELIVERY_STALE_DAYS=10
+          else
+            WINDOW_DAYS=35
+            EXPECTED_POSTS_PER_WEEK=1
+            DELIVERY_STALE_DAYS=40
+          fi
+          if [ -n "$AUTOBLOG_EXPECTED_OVERRIDE" ]; then
+            EXPECTED_POSTS_PER_WEEK="$AUTOBLOG_EXPECTED_OVERRIDE"
+          fi
+          {
+            echo "WINDOW_DAYS=$WINDOW_DAYS"
+            echo "EXPECTED_POSTS_PER_WEEK=$EXPECTED_POSTS_PER_WEEK"
+            echo "DELIVERY_STALE_DAYS=$DELIVERY_STALE_DAYS"
+          } >> "$GITHUB_ENV"
+          echo "Derived cadence: interval=$AUTOBLOG_INTERVAL window=${WINDOW_DAYS}d expected=$EXPECTED_POSTS_PER_WEEK stale=${DELIVERY_STALE_DAYS}d"
 
           # A merged autoblog PR is the delivery event itself.
           #
@@ -416,7 +446,7 @@ jobs:
             echo "3. **\`autoblog-link-repair-needed\`** — a dead link is still in the prose; rewrite the sentence and the gate clears."
             echo "4. **No checks at all** — the head was pushed without raising events; close and reopen the PR to re-trigger."
             echo
-            echo "_Updated by the weekly watchdog. Closed automatically once nothing is stuck._"
+            echo "_Updated by the daily watchdog. Closed automatically once nothing is stuck._"
           } > "$BODY_FILE"
 
           if [ -n "$EXISTING" ]; then
