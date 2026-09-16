@@ -82,7 +82,21 @@ jobs:
             exit 1
           fi
           if [ "$INTERVAL_SECS" -gt 0 ] && [ "$INTERVAL_SECS" -lt 3600 ]; then
-            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is shorter than the hourly tick. Use 1h or longer (15m is valid for AUTOBLOG_MERGE_DELAY only)."
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is shorter than the hourly tick. Use 1h or Nd (15m is valid for AUTOBLOG_MERGE_DELAY only)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -gt 3600 ] && [ "$INTERVAL_SECS" -lt 86400 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is between 1h and 1d. Use 1h or a whole-day interval (1d, 7d, 30d)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=invalid" >> "$GITHUB_OUTPUT"
+            echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$INTERVAL_SECS" -ge 86400 ] && [ $((INTERVAL_SECS % 86400)) -ne 0 ]; then
+            echo "::error::AUTOBLOG_INTERVAL=$AUTOBLOG_INTERVAL is not a whole number of days. Use 1d, 7d, 30d."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "slot=invalid" >> "$GITHUB_OUTPUT"
             echo "run_key=${RUN_DATE}-invalid" >> "$GITHUB_OUTPUT"
@@ -164,25 +178,25 @@ jobs:
               | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
               | .createdAt] | sort | last // empty' <<<"$MERGED_JSON")
           if [ -n "$LAST_ISO" ]; then
-            # Floor to the cadence slot, not the exact createdAt. Generate
-            # starts at 1:00 and the PR exists at ~1:05; elapsed-seconds
-            # against createdAt is then < 1d at the next 1:00 tick and the
-            # hour gate skips the rest of the day.
+            # Compare calendar slots, never elapsed seconds: spring DST makes
+            # consecutive Pacific midnights 23h apart, which would skip a day.
             if [ "$INTERVAL_SECS" -lt 86400 ]; then
-              LAST_FLOOR=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%dT%H:00:00)
-              NOW_FLOOR=$(TZ=America/Los_Angeles date +%Y-%m-%dT%H:00:00)
-              LAST_TS=$(TZ=America/Los_Angeles date -d "$LAST_FLOOR" +%s)
-              NOW_TS=$(TZ=America/Los_Angeles date -d "$NOW_FLOOR" +%s)
+              LAST_SLOT=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y%m%d%H)
+              NOW_SLOT=$(TZ=America/Los_Angeles date +%Y%m%d%H)
+              if [ "$NOW_SLOT" -le "$LAST_SLOT" ]; then
+                echo "::notice::not due — last blog/auto-* hour $LAST_SLOT, now $NOW_SLOT."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             else
               LAST_DAY=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%d)
-              LAST_TS=$(TZ=America/Los_Angeles date -d "$LAST_DAY 00:00:00" +%s)
-              NOW_TS=$(TZ=America/Los_Angeles date -d "$RUN_DATE 00:00:00" +%s)
-            fi
-            AGE=$((NOW_TS - LAST_TS))
-            if [ "$AGE" -lt "$INTERVAL_SECS" ]; then
-              echo "::notice::not due — last blog/auto-* slot $LAST_ISO (floored), age ${AGE}s < $AUTOBLOG_INTERVAL."
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
-              exit 0
+              NEED_DAYS=$(( INTERVAL_SECS / 86400 ))
+              DAYS=$(python3 -c "from datetime import date; print((date.fromisoformat('$RUN_DATE')-date.fromisoformat('$LAST_DAY')).days)")
+              if [ "$DAYS" -lt "$NEED_DAYS" ]; then
+                echo "::notice::not due — last blog/auto-* day $LAST_DAY, $DAYS calendar day(s) < $NEED_DAYS ($AUTOBLOG_INTERVAL)."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
           fi
 
