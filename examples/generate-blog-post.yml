@@ -162,8 +162,10 @@ jobs:
             exit 0
           fi
 
-          if [ "$INTERVAL_SECS" -ge 86400 ] && [ "$PACIFIC_HOUR" -ne "$HOUR_PT" ]; then
-            echo "::notice::not due — Pacific hour $PACIFIC_HOUR != AUTOBLOG_HOUR_PT $HOUR_PT (interval=$AUTOBLOG_INTERVAL)."
+          # GitHub schedule ticks are often tens of minutes late. Exact hour
+          # equality skipped the whole day when the 1 AM PT tick landed at 2 AM.
+          if [ "$INTERVAL_SECS" -ge 86400 ] && [ "$PACIFIC_HOUR" -lt "$HOUR_PT" ]; then
+            echo "::notice::not due — Pacific hour $PACIFIC_HOUR < AUTOBLOG_HOUR_PT $HOUR_PT (interval=$AUTOBLOG_INTERVAL)."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
