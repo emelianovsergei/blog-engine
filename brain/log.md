@@ -8,6 +8,16 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-17] hour gate: first tick at or after HOUR_PT
+
+GitHub hourly ticks are often tens of minutes late. Exact
+`PACIFIC_HOUR == AUTOBLOG_HOUR_PT` skipped Pulse’s 2026-09-17 slot
+(tick at 2:06 AM PT, green skip). Due-check is now first tick at or after
+that hour on a due calendar day; closed same-day drafts consume the slot;
+a late tick that wraps past midnight catch-up generates. Copied to both
+consumers. #39. [[concepts/delivery-guarantee]] ·
+[[concepts/unreachable-success-path]].
+
 ## [2026-09-16] cadence knob (hourly tick + repo vars)
 
 - Generate, merge, and watchdog crons are now ticks. Pace is `AUTOBLOG_INTERVAL`

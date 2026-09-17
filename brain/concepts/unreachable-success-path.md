@@ -3,7 +3,7 @@ type: "concept"
 title: "Unreachable Success Paths (Silent Green)"
 description: "The recurring autoblog bug shape: an automated check whose success branch cannot be reached, failing in a way that looks like patience or approval."
 tags: ["concepts", "ci", "workflows", "reliability"]
-timestamp: "2026-08-02"
+timestamp: "2026-09-17"
 sources: []
 ---
 # Unreachable Success Paths (Silent Green)
@@ -19,6 +19,18 @@ a fix landed looks like a fix landed. So run-level green is never evidence of
 delivery — see [[concepts/delivery-guarantee]] for the check that is.
 
 ## Known instances
+
+**Exact hour equality + delayed Actions tick → green skip, missed day.**
+`generate-blog-post.yml` for `AUTOBLOG_INTERVAL>=1d` required
+`PACIFIC_HOUR == AUTOBLOG_HOUR_PT`. GitHub hourly crons are often tens of
+minutes (sometimes an hour) late. Pulse's 2026-09-17 1 AM PT slot never
+fired; the next tick at 09:06 UTC (2 AM PT) logged
+`not due — Pacific hour 2 != AUTOBLOG_HOUR_PT 1` and skipped the generate
+job. A skipped job is a green check. Same shape as the DST off-twin skip
+that hid the 2026-07-25 outage. Fixed in #39: first tick **at or after**
+the hour on a due calendar day; catch-up if a late tick wraps past
+midnight and days already exceed the interval. See
+[[concepts/delivery-guarantee]].
 
 **Permission missing → gate skips everything, forever.**
 `gh pr checks` does not stop at the status rollup; it resolves

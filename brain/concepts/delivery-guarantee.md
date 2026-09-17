@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (eight since v0.17), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-16"
+timestamp: "2026-09-17"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -17,7 +17,7 @@ every repo provisioned from it.
 
 | Workflow | Role |
 |---|---|
-| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
+| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). Closed unmerged drafts count as that day's attempt; retry is `workflow_dispatch`. For `>=1d`, generate on the first tick **at or after** `AUTOBLOG_HOUR_PT` (exact `==` skipped Pulse 2026-09-17 when GitHub fired at 2:06 AM PT). If a late tick crosses Pacific midnight and calendar days already exceed the interval, catch up. `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
 | `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). |
 | `autoblog-merge-pending.yml` | Hourly tick at :20 over `autoblog-approved-pending`. Age gate is `AUTOBLOG_MERGE_DELAY` (default `1h`). Unresolved Codex P1 comments skip merge when `AUTOBLOG_HOLD_ON_CODEX_P1` is true. Label + head-SHA-pinned CI gates unchanged. |
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |
@@ -64,7 +64,11 @@ optional override.
 | `30d`+ | interval days | 1 | interval + 10 |
 
 Daily uses a 3-day window so a twice-weekly → daily cutover does not
-false-alarm. Refresh and backfill PRs are excluded from the count.
+false-alarm **once two daily posts have merged**. The first daily watchdog
+(2026-09-16, ~3h after the cadence merge) still opened stall issues on both
+consumers: history was weekly, so 1 merge in 3 days < expected 2. They close
+when the count catches up. Refresh and backfill PRs are excluded from the
+count.
 
 `STRANDED_PR_DAYS: 21` is still a constant: a post can sit through a slow
 review, and alarming at the delivery cadence would make an ordinary unhurried
