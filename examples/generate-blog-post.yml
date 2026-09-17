@@ -162,14 +162,6 @@ jobs:
             exit 0
           fi
 
-          # GitHub schedule ticks are often tens of minutes late. Exact hour
-          # equality skipped the whole day when the 1 AM PT tick landed at 2 AM.
-          if [ "$INTERVAL_SECS" -ge 86400 ] && [ "$PACIFIC_HOUR" -lt "$HOUR_PT" ]; then
-            echo "::notice::not due — Pacific hour $PACIFIC_HOUR < AUTOBLOG_HOUR_PT $HOUR_PT (interval=$AUTOBLOG_INTERVAL)."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           # Interval is measured from the prior *generation* (PR createdAt),
           # not mergedAt. A 1 AM generate cannot merge until the :20 tick
           # after AUTOBLOG_MERGE_DELAY (default 02:20). Using mergedAt made
@@ -186,10 +178,10 @@ jobs:
               | select(.mergedAt != null)
               | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
               | .createdAt] | sort | last // empty' <<<"$MERGED_JSON")
-          if [ -n "$LAST_ISO" ]; then
-            # Compare calendar slots, never elapsed seconds: spring DST makes
-            # consecutive Pacific midnights 23h apart, which would skip a day.
-            if [ "$INTERVAL_SECS" -lt 86400 ]; then
+          if [ "$INTERVAL_SECS" -lt 86400 ]; then
+            if [ -n "$LAST_ISO" ]; then
+              # Compare calendar slots, never elapsed seconds: spring DST makes
+              # consecutive Pacific midnights 23h apart, which would skip a day.
               LAST_SLOT=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y%m%d%H)
               NOW_SLOT=$(TZ=America/Los_Angeles date +%Y%m%d%H)
               if [ "$NOW_SLOT" -le "$LAST_SLOT" ]; then
@@ -197,15 +189,31 @@ jobs:
                 echo "should_run=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
-            else
+            fi
+          else
+            NEED_DAYS=$(( INTERVAL_SECS / 86400 ))
+            DAYS=$NEED_DAYS
+            if [ -n "$LAST_ISO" ]; then
               LAST_DAY=$(TZ=America/Los_Angeles date -d "$LAST_ISO" +%Y-%m-%d)
-              NEED_DAYS=$(( INTERVAL_SECS / 86400 ))
               DAYS=$(python3 -c "from datetime import date; print((date.fromisoformat('$RUN_DATE')-date.fromisoformat('$LAST_DAY')).days)")
               if [ "$DAYS" -lt "$NEED_DAYS" ]; then
                 echo "::notice::not due — last blog/auto-* day $LAST_DAY, $DAYS calendar day(s) < $NEED_DAYS ($AUTOBLOG_INTERVAL)."
                 echo "should_run=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
+            fi
+            # GitHub ticks are often tens of minutes late. Exact hour equality
+            # skipped a whole day when the 1 AM PT tick landed at 2 AM.
+            # At-or-after HOUR_PT on a due day. If a late tick crosses Pacific
+            # midnight, PACIFIC_HOUR wraps below HOUR_PT while DAYS already
+            # exceeds NEED_DAYS — catch that up instead of waiting until tonight.
+            if [ "$PACIFIC_HOUR" -lt "$HOUR_PT" ]; then
+              if [ -z "$LAST_ISO" ] || [ "$DAYS" -le "$NEED_DAYS" ]; then
+                echo "::notice::not due — Pacific hour $PACIFIC_HOUR < AUTOBLOG_HOUR_PT $HOUR_PT (interval=$AUTOBLOG_INTERVAL)."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::notice::catch-up — Pacific hour $PACIFIC_HOUR < AUTOBLOG_HOUR_PT $HOUR_PT but $DAYS calendar day(s) > $NEED_DAYS; generating."
             fi
           fi
 
