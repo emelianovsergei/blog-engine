@@ -168,16 +168,18 @@ jobs:
           # AGE ≈ 22h40m at the next 1 AM, skipped the slot, and the hour
           # gate would not reconsider until another day — so default 1d
           # shipped every two days.
-          if ! MERGED_JSON=$(gh pr list --state merged --limit 1000 --json mergedAt,createdAt,headRefName); then
-            echo "::error::Could not list merged PRs — refusing to generate on a guess."
+          # Closed includes merged. A rejected same-day draft must still
+          # consume the slot; otherwise widening the hour window would
+          # regenerate on the next tick. Retry is workflow_dispatch.
+          if ! CLOSED_JSON=$(gh pr list --state closed --limit 1000 --json createdAt,headRefName); then
+            echo "::error::Could not list closed PRs — refusing to generate on a guess."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           LAST_ISO=$(jq -r '
             [.[]
-              | select(.mergedAt != null)
               | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
-              | .createdAt] | sort | last // empty' <<<"$MERGED_JSON")
+              | .createdAt] | sort | last // empty' <<<"$CLOSED_JSON")
           if [ "$INTERVAL_SECS" -lt 86400 ]; then
             if [ -n "$LAST_ISO" ]; then
               # Compare calendar slots, never elapsed seconds: spring DST makes
