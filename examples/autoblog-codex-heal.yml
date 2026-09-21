@@ -139,6 +139,7 @@ jobs:
                     nodes {
                       id
                       isResolved
+                      isOutdated
                       comments(first:20) {
                         nodes {
                           databaseId
@@ -173,6 +174,10 @@ jobs:
               | .comments.nodes[0]?
               | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
               | select(.body | test("badge/P0-|P0 Badge|badge/P1-|P1 Badge"; "i"))
+              | select(
+                  ($t.isOutdated != true)
+                  or (.body | test("badge/P0-|P0 Badge"; "i"))
+                )
               | {
                   threadId: $t.id,
                   databaseId,
@@ -272,15 +277,18 @@ jobs:
       - name: Resolve stale P0/P1 threads
         if: steps.decide.outputs.action == 'resolve'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
           OLD_FINDINGS: ${{ steps.decide.outputs.old_findings }}
           HEAD: ${{ steps.decide.outputs.head }}
         run: |
           set -euo pipefail
           echo "$OLD_FINDINGS" | jq -r '.[].threadId' | while read -r tid; do
             [ -n "$tid" ] || continue
-            gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id="$tid"
-            echo "resolved $tid"
+            if ! gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id="$tid"; then
+              echo "::warning::Could not resolve thread $tid (resolveReviewThread needs AUTOBLOG_PAT with pull-request write)"
+            else
+              echo "resolved $tid"
+            fi
           done
           gh pr comment "$PR" --body "Codex re-reviewed \`${HEAD:0:10}\` with no new P0/P1. Resolved the previous P0/P1 threads so merge-pending can ship. P2 nits left open."
 

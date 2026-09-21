@@ -163,6 +163,7 @@ jobs:
                       pageInfo { hasNextPage }
                       nodes {
                         isResolved
+                        isOutdated
                         comments(first:20) {
                           nodes { author { login } body }
                         }
@@ -178,6 +179,9 @@ jobs:
               echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P0/P1 hold)"
               continue
             fi
+            # P0 always blocks, including outdated threads, until resolved
+            # or Codex re-reviews the new head. P1 outdated after a rewrite
+            # is the auto-heal success path and must not hold.
             P0=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
                 | select(.isResolved == false)
@@ -187,7 +191,7 @@ jobs:
               ] | length' <<<"$THREADS")
             P1=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P1-|P1 Badge"; "i"))
@@ -231,10 +235,51 @@ jobs:
               continue
             fi
 
-            CHECKS_OUT=$(gh pr checks "$NUM" 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
-            if [ "$CHECKS_RC" -ne 0 ]; then
-              echo "PR #$NUM: skipped — CI not green (gh pr checks rc=$CHECKS_RC)"
-              echo "$CHECKS_OUT" | head -20
+            # Classify the rollup fail-closed. Helper Autoblog Codex Heal is
+            # ignored. CheckRun uses name/conclusion/status; StatusContext
+            # uses context/state. Unknown terminal conclusions fail. Zero
+            # remaining checks fail (same as old gh pr checks).
+            if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
+              echo "::warning::Could not read checks for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+            CLASS=$(jq -c '
+              def ident: (.name // .context // "");
+              def helper:
+                ((.workflowName // "") == "Autoblog Codex Heal")
+                or (ident | startswith("Heal PR "));
+              def pending:
+                ((.conclusion // "") == "")
+                and ((.status // .state // "") as $s
+                  | $s == "IN_PROGRESS" or $s == "QUEUED" or $s == "PENDING"
+                    or $s == "WAITING" or $s == "REQUESTED" or $s == "EXPECTED");
+              def pass:
+                ((.conclusion // .state // "") as $s
+                  | $s == "SUCCESS" or $s == "pass");
+              def skip:
+                ((.conclusion // "") as $s
+                  | $s == "SKIPPED" or $s == "NEUTRAL" or $s == "skipping");
+              [.statusCheckRollup[]? | select(ident != "") | select(helper | not)] as $c
+              | if ($c | length) == 0 then {empty:true, fail:[], pending:[]}
+                else {
+                  empty:false,
+                  fail: [$c[] | select(pending | not) | select(pass | not) | select(skip | not) | ident],
+                  pending: [$c[] | select(pending) | ident]
+                } end
+            ' <<<"$ROLLUP")
+            if [ "$(jq -r .empty <<<"$CLASS")" = "true" ]; then
+              echo "PR #$NUM: skipped — no CI checks on this head"
+              continue
+            fi
+            FAILING=$(jq -r '.fail | unique | join(", ")' <<<"$CLASS")
+            PENDING=$(jq -r '.pending | length' <<<"$CLASS")
+            if [ -n "$FAILING" ]; then
+              echo "PR #$NUM: skipped — CI not green: $FAILING"
+              continue
+            fi
+            if [ "${PENDING:-0}" -gt 0 ]; then
+              echo "PR #$NUM: skipped — $PENDING check(s) still running"
               continue
             fi
 
@@ -273,6 +318,7 @@ jobs:
                       pageInfo { hasNextPage }
                       nodes {
                         isResolved
+                        isOutdated
                         comments(first:20) {
                           nodes { author { login } body }
                         }
@@ -293,7 +339,7 @@ jobs:
               ] | length' <<<"$THREADS_NOW")
             P1_NOW=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P1-|P1 Badge"; "i"))
