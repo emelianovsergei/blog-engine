@@ -425,6 +425,40 @@ test("a location of frontmatter.faqs[0].answer requests an FAQ edit without the 
   assert.match(out[0]?.answer ?? "", /breaker/);
 });
 
+test("a paragraph edit that only cites the FAQ answer does not rewrite faqs", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [{ question: "Changed?", answer: "Changed." }],
+      },
+      markdown: "# New\n\nThe paragraph now matches the FAQ.",
+      changeNotes: "Revised the paragraph.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "The paragraph contradicts the FAQ answer.",
+        suggestion: "Revise this paragraph.",
+        location: "content/blog/post.mdx:40",
+      },
+    ],
+  };
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: review,
+  });
+  assert.deepEqual(result.frontmatter.faqs, faqSet);
+  assert.match(result.markdown, /paragraph now matches/);
+});
+
 test("a file:line location plus FAQ-answer prose still updates the answer", async () => {
   const gemini = makeFakeGemini({
     candidatesJson: {
