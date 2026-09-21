@@ -31,7 +31,7 @@ function usage(): string {
   return `Usage: blog-engine-rewrite --post <path.md> --review <result.json> --site pulse|promax \\
                            --business "<Business Name>" \\
                            --service-areas "Sacramento,Roseville,..." \\
-                           [--notes-out change-notes.md] [--model grok-4.6] \\
+                           [--notes-out change-notes.md] [--model grok-4.7] \\
                            [--link-policy content/policy/link-constraints.json] \\
                            [--audit-out rewrite-audit.json] [--no-link-audit] \\
                            [--required-headings "A|B"] [--faq-policy appended-by-code|written-by-model]`;

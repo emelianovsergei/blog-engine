@@ -367,7 +367,7 @@ jobs:
             --site pulse \
             --business "HVAC Pulse" \
             --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
-            --model grok-4.6 \
+            --model grok-4.7 \
             --link-policy content/policy/link-constraints.json \
             --required-headings "When to Call PULSE HVAC" \
             --faq-policy appended-by-code \

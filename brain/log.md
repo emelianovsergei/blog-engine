@@ -8,6 +8,12 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-21] Text defaults move to grok-4.7
+
+Review, rewrite, refresh, keywords, topic candidates, and wiki ingest
+default to `grok-4.7`. The adapter still sends `reasoning_effort: low`.
+Image generation stays `grok-imagine-image-2.0`. Package version 0.18.0.
+
 ## [2026-09-21] FAQ answers, heal GH_REPO, watchdog day floor
 
 Codex heal could not change a FAQ answer: `mergeFrontmatter` dropped `faqs`,

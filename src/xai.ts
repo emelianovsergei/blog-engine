@@ -109,9 +109,9 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
           max_tokens: maxTokens,
           messages: [{ role: "user", content: promptText }],
         };
-        // Behavioral probe: the xAI models API exposes no capability flags,
-        // and docs.x.ai/docs/guides/reasoning only documents reasoning_effort
-        // for grok-4.5/grok-4.6 — so send it by default and learn from a
+        // Behavioral probe: the xAI models API exposes no capability flags.
+        // grok-4.5, grok-4.6, and grok-4.7 accept reasoning_effort (4.7
+        // confirmed 2026-09-21). Send low by default and learn from a
         // rejection (below) instead of hardcoding a model list.
         if (!reasoningEffortUnsupported.has(req.model)) {
           body.reasoning_effort = "low";
