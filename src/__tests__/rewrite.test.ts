@@ -278,7 +278,7 @@ test("an issue that does not mention FAQs leaves faqs untouched", async () => {
   assert.equal(result.frontmatter.title, "New title that is long enough for the schema");
 });
 
-test("a FAQ issue that changes the question text does not replace faqs", async () => {
+test("a FAQ issue that changes the question text is rejected", async () => {
   const gemini = makeFakeGemini({
     candidatesJson: {
       frontmatter: {
@@ -289,12 +289,81 @@ test("a FAQ issue that changes the question text does not replace faqs", async (
       changeNotes: "Rewrote the FAQ question.",
     },
   });
+  await assert.rejects(
+    rewriteBlogPost({
+      gemini,
+      config: sampleConfig,
+      frontmatter: { ...frontmatter, faqs: faqSet },
+      markdown,
+      reviewFeedback: faqReview,
+    }),
+    /FAQ answer change/,
+  );
+});
+
+test("a FAQ issue can fill an empty answer and keeps extra entry fields", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          { question: "Should I book same-day?", answer: "Shut the system off at the breaker. Call 911 if you see smoke." },
+          { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+        ],
+      },
+      markdown,
+      changeNotes: "Filled the empty FAQ answer.",
+    },
+  });
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: {
+      ...frontmatter,
+      faqs: [
+        { question: "Should I book same-day?", answer: "  ", id: "same-day" },
+        { question: "How much does AC cost to fix?", answer: "It depends on the part.", id: "cost" },
+      ],
+    },
+    markdown,
+    reviewFeedback: faqReview,
+  });
+  const out = result.frontmatter.faqs as Array<{ question: string; answer: string; id: string }>;
+  assert.equal(out[0]?.id, "same-day");
+  assert.match(out[0]?.answer ?? "", /breaker/);
+  assert.equal(out[1]?.id, "cost");
+});
+
+test("an issue that only tells the rewriter to fix the body does not change faqs", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [{ question: "Changed?", answer: "Changed." }],
+      },
+      markdown: "# New\n\nBody aligned with the FAQ.",
+      changeNotes: "Fixed the body so it matches the FAQ.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "The body contradicts the FAQ answer.",
+        suggestion: "Correct the body. Do not change the FAQ.",
+        location: "markdown",
+      },
+    ],
+    summary: "Body and FAQ disagree.",
+  };
   const result = await rewriteBlogPost({
     gemini,
     config: sampleConfig,
     frontmatter: { ...frontmatter, faqs: faqSet },
     markdown,
-    reviewFeedback: faqReview,
+    reviewFeedback: review,
   });
   assert.deepEqual(result.frontmatter.faqs, faqSet);
 });
