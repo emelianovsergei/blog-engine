@@ -11,8 +11,9 @@
 #
 # List open PRs with label `autoblog-approved-pending`, squash-merge each
 # one older than the delay. `autoblog-hold` skips (manual pause).
-# `autoblog-review-failed` skips. Unresolved Codex P1 review comments skip
-# when AUTOBLOG_HOLD_ON_CODEX_P1 is true (default).
+# `autoblog-review-failed` skips. Unresolved Codex P0 comments always
+# skip. Unresolved Codex P1 comments skip when AUTOBLOG_HOLD_ON_CODEX_P1
+# is true (default). P2 nits ship.
 
 name: Autoblog Merge Pending
 
@@ -147,46 +148,58 @@ jobs:
               continue
             fi
 
-            # Codex P1 hold. P2 nits ship. Unresolved threads only — a
-            # resolved P1 is a human saying the finding is done. GraphQL
-            # failure fail-closes (skip) so a token blip cannot publish a
-            # safety finding. Disable with AUTOBLOG_HOLD_ON_CODEX_P1=false.
-            HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
-            case "$HOLD_P1" in true|1|yes)
-              OWNER="${GITHUB_REPOSITORY%/*}"
-              REPO="${GITHUB_REPOSITORY#*/}"
-              if ! THREADS=$(gh api graphql -f query='
-                query($owner:String!,$name:String!,$num:Int!) {
-                  repository(owner:$owner, name:$name) {
-                    pullRequest(number:$num) {
-                      reviewThreads(first:100) {
-                        pageInfo { hasNextPage }
-                        nodes {
-                          isResolved
-                          comments(first:20) {
-                            nodes { author { login } body }
-                          }
+            # Codex hold. P0 always blocks. P1 blocks when
+            # AUTOBLOG_HOLD_ON_CODEX_P1 is true. P2 nits ship. Unresolved
+            # threads only — a resolved finding is a human saying it is
+            # done. GraphQL failure fail-closes (skip) so a token blip
+            # cannot publish a safety finding.
+            OWNER="${GITHUB_REPOSITORY%/*}"
+            REPO="${GITHUB_REPOSITORY#*/}"
+            if ! THREADS=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!) {
+                repository(owner:$owner, name:$name) {
+                  pullRequest(number:$num) {
+                    reviewThreads(first:100) {
+                      pageInfo { hasNextPage }
+                      nodes {
+                        isResolved
+                        comments(first:20) {
+                          nodes { author { login } body }
                         }
                       }
                     }
                   }
-                }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
-                echo "PR #$NUM: skipped — could not read Codex review threads (fail-closed P1 hold)"
-                continue
-              fi
-              if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$THREADS")" = "true" ]; then
-                echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P1 hold)"
-                continue
-              fi
-              P1=$(jq -r '
-                [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                  | select(.isResolved == false)
-                  | .comments.nodes[]?
-                  | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
-                  | select(.body | test("badge/P1-|P1 Badge"; "i"))
-                ] | length' <<<"$THREADS")
+                }
+              }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
+              echo "PR #$NUM: skipped — could not read Codex review threads (fail-closed P0/P1 hold)"
+              continue
+            fi
+            if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$THREADS")" = "true" ]; then
+              echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P0/P1 hold)"
+              continue
+            fi
+            P0=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P0-|P0 Badge"; "i"))
+              ] | length' <<<"$THREADS")
+            P1=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P1-|P1 Badge"; "i"))
+              ] | length' <<<"$THREADS")
+            if [ "${P0:-0}" -gt 0 ]; then
+              echo "::warning::PR #$NUM: skipped — $P0 unresolved Codex P0 comment(s). autoblog-codex-heal should rewrite."
+              continue
+            fi
+            HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
+            case "$HOLD_P1" in true|1|yes)
               if [ "${P1:-0}" -gt 0 ]; then
-                echo "PR #$NUM: skipped — $P1 unresolved Codex P1 comment(s). Rewrite, resolve the thread, or set AUTOBLOG_HOLD_ON_CODEX_P1=false."
+                echo "::warning::PR #$NUM: skipped — $P1 unresolved Codex P1 comment(s). autoblog-codex-heal should rewrite; or resolve the thread / set AUTOBLOG_HOLD_ON_CODEX_P1=false."
                 continue
               fi
               ;;
@@ -250,7 +263,55 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels re-verified — marking ready + squash-merging."
+            # Codex can leave a P0/P1 after the earlier thread snapshot
+            # without moving HEAD, so --match-head-commit would still merge.
+            if ! THREADS_NOW=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!) {
+                repository(owner:$owner, name:$name) {
+                  pullRequest(number:$num) {
+                    reviewThreads(first:100) {
+                      pageInfo { hasNextPage }
+                      nodes {
+                        isResolved
+                        comments(first:20) {
+                          nodes { author { login } body }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
+              echo "PR #$NUM: skipped — could not re-read Codex threads immediately before merge"
+              continue
+            fi
+            P0_NOW=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P0-|P0 Badge"; "i"))
+              ] | length' <<<"$THREADS_NOW")
+            P1_NOW=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P1-|P1 Badge"; "i"))
+              ] | length' <<<"$THREADS_NOW")
+            if [ "${P0_NOW:-0}" -gt 0 ]; then
+              echo "::warning::PR #$NUM: skipped — $P0_NOW unresolved Codex P0 arrived after the earlier snapshot"
+              continue
+            fi
+            HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
+            case "$HOLD_P1" in true|1|yes)
+              if [ "${P1_NOW:-0}" -gt 0 ]; then
+                echo "::warning::PR #$NUM: skipped — $P1_NOW unresolved Codex P1 arrived after the earlier snapshot"
+                continue
+              fi
+              ;;
+            esac
+
+            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels and Codex threads re-verified — marking ready + squash-merging."
             # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
             # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
             # mutation and the `gh pr ready` fallback use the PAT. The node-id

@@ -8,6 +8,16 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-21] Codex P0/P1 heal
+
+AI-approved autoblog PRs with unresolved Codex P1 sat unmerged while
+merge-pending stayed green and generate skipped the next slot (Pulse #381,
+Promax #299). `autoblog-codex-heal.yml` rewrites P0/P1 only, waits for a
+Codex re-review of the new head, then resolves the old threads.
+Merge-pending now always holds P0. Watchdog surfaces a P1 hold after
+merge-delay+3h, not 21 days. [[concepts/codex-heal]] ·
+[[concepts/delivery-guarantee]] · [[concepts/unreachable-success-path]].
+
 ## [2026-09-17] hour gate: first tick at or after HOUR_PT
 
 GitHub hourly ticks are often tens of minutes late. Exact
