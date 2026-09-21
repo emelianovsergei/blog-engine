@@ -239,41 +239,71 @@ function readFaqEntries(raw: unknown, requireAnswer: boolean): Array<Record<stri
   return out;
 }
 
+type FaqIssue = { message: string; suggestion: string; location?: string };
+
 /**
  * Copy revised answers onto the original entries when every question is unchanged.
  * An empty original answer can be filled. Extra keys on the original entry stay.
- * Returns null when the revision drops, reorders, or empties an answer.
+ * When `onlyIndexes` is set, answers outside those indexes stay as they were.
+ * Returns null when nothing changes, a question changes, or a requested answer is empty.
  */
-function mergeFaqAnswers(original: unknown, revised: unknown): Array<Record<string, unknown>> | null {
+function mergeFaqAnswers(
+  original: unknown,
+  revised: unknown,
+  onlyIndexes: readonly number[] = [],
+): Array<Record<string, unknown>> | null {
   const prev = readFaqEntries(original, false);
   const next = readFaqEntries(revised, true);
   if (!prev || !next || prev.length !== next.length) return null;
+  const allowAll = onlyIndexes.length === 0;
   let changed = false;
+  const merged: Array<Record<string, unknown>> = [];
   for (let i = 0; i < prev.length; i += 1) {
-    if (String(prev[i]!.question).trim() !== String(next[i]!.question).trim()) return null;
-    const prevRaw = prev[i]!.answer;
+    const entry = prev[i]!;
+    if (String(entry.question).trim() !== String(next[i]!.question).trim()) return null;
+    const prevRaw = entry.answer;
     const prevAnswer = typeof prevRaw === "string" ? prevRaw.trim() : "";
-    if (prevAnswer !== String(next[i]!.answer).trim()) changed = true;
+    const useModel = allowAll || onlyIndexes.includes(i);
+    const nextAnswer = useModel ? String(next[i]!.answer).trim() : prevAnswer;
+    if (useModel && !nextAnswer) return null;
+    if (useModel && prevAnswer !== nextAnswer) changed = true;
+    merged.push({
+      ...entry,
+      question: String(entry.question).trim(),
+      answer: nextAnswer,
+    });
   }
   if (!changed) return null;
-  return prev.map((entry, i) => ({
-    ...entry,
-    question: String(entry.question).trim(),
-    answer: String(next[i]!.answer).trim(),
-  }));
+  return merged;
 }
 
-/** True only when an issue asks to change a frontmatter FAQ answer, not the body. */
-function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<{ message: string; suggestion: string; location?: string }> }): boolean {
-  return review.issues.some((issue) => {
-    const loc = issue.location ?? "";
-    const text = `${issue.message}\n${issue.suggestion}`;
-    const blob = `${loc}\n${text}`;
-    if (!/\bfaqs?\b/i.test(blob)) return false;
-    const pointsAtFaq = /\bfaqs?\b/i.test(loc) || /\bfrontmatter\b/i.test(text);
-    const asksAnswer = /\banswer\b/i.test(`${loc}\n${text}`);
-    return pointsAtFaq && asksAnswer;
-  });
+/** A Codex heal location is `file.mdx:line`, not `frontmatter.faqs`. Prose that asks to change a FAQ answer is enough. */
+function issueRequestsFaqAnswerEdit(issue: FaqIssue): boolean {
+  const loc = issue.location ?? "";
+  const text = `${issue.message}\n${issue.suggestion}`;
+  if (!/\bfaqs?\b/i.test(`${loc}\n${text}`)) return false;
+  const pointsAtFaqField = /\bfaqs?\b/i.test(loc);
+  const mentionsFaqAnswer = /\bfaqs?\b/i.test(text) && /\banswer\b/i.test(text);
+  if (!pointsAtFaqField && !mentionsFaqAnswer) return false;
+  const doNotChangeFaq = /\b(do not|don't|never)\s+(?:change|edit|update|touch)\b[^.]*\bfaq\b/i.test(text);
+  if (doNotChangeFaq && !pointsAtFaqField) return false;
+  const bodyOnly = /\b(correct|fix|change|update|edit)\s+the\s+body\b/i.test(issue.suggestion) && !/\bfaq\b/i.test(issue.suggestion);
+  if (bodyOnly && !pointsAtFaqField) return false;
+  return true;
+}
+
+function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<FaqIssue> }): boolean {
+  return review.issues.some(issueRequestsFaqAnswerEdit);
+}
+
+function requestedFaqIndexes(review: { issues: ReadonlyArray<FaqIssue> }): number[] {
+  const indexes: number[] = [];
+  for (const issue of review.issues) {
+    if (!issueRequestsFaqAnswerEdit(issue)) continue;
+    const match = (issue.location ?? "").match(/faqs\[(\d+)\]/i);
+    if (match?.[1]) indexes.push(Number(match[1]));
+  }
+  return indexes;
 }
 interface RawRewrite {
   frontmatter?: unknown;
@@ -340,7 +370,11 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
   const revisedFrontmatter = parsed.frontmatter as RawRewriteFrontmatter;
   const frontmatter = mergeFrontmatter(args.frontmatter, revisedFrontmatter);
   if (reviewAsksForFaqEdit(args.reviewFeedback)) {
-    const faqs = mergeFaqAnswers(args.frontmatter.faqs, revisedFrontmatter.faqs);
+    const faqs = mergeFaqAnswers(
+      args.frontmatter.faqs,
+      revisedFrontmatter.faqs,
+      requestedFaqIndexes(args.reviewFeedback),
+    );
     if (!faqs) {
       throw new Error(
         "Rewrite rejected: the review asks for a FAQ answer change, but the revised faqs omit the list, change a question, or leave an answer empty",

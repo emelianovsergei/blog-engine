@@ -493,3 +493,114 @@ test("a location of frontmatter.faqs[0].answer requests an FAQ edit without the 
   const out = result.frontmatter.faqs as Array<{ answer: string }>;
   assert.match(out[0]?.answer ?? "", /breaker/);
 });
+
+test("a file:line location plus FAQ-answer prose still updates the answer", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          { question: "Should I book same-day?", answer: "Shut the system off at the breaker. Call 911 if you see smoke." },
+          { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+        ],
+      },
+      markdown,
+      changeNotes: "Added the breaker instruction.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "Fix the unsafe FAQ answer.",
+        suggestion: "Add the breaker instruction.",
+        location: "content/blog/post.mdx:40",
+      },
+    ],
+  };
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: review,
+  });
+  const out = result.frontmatter.faqs as Array<{ answer: string }>;
+  assert.match(out[0]?.answer ?? "", /breaker/);
+});
+
+test("an issue with no location that names the FAQ answer still updates it", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          { question: "Should I book same-day?", answer: "Shut the system off at the breaker." },
+          { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+        ],
+      },
+      markdown,
+      changeNotes: "Expanded the FAQ answer.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "The FAQ answer is incomplete.",
+        suggestion: "Add the shutoff sentence.",
+      },
+    ],
+  };
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: review,
+  });
+  const out = result.frontmatter.faqs as Array<{ answer: string }>;
+  assert.match(out[0]?.answer ?? "", /breaker/);
+});
+
+test("a single FAQ index does not let the model rewrite the other answers", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          { question: "Should I book same-day?", answer: "Shut the system off at the breaker. Call 911 if you see smoke." },
+          { question: "How much does AC cost to fix?", answer: "A hallucinated price of exactly $50." },
+        ],
+      },
+      markdown,
+      changeNotes: "Fixed the first FAQ and rewrote the second.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "Missing breaker guidance.",
+        suggestion: "Add the shutoff sentence.",
+        location: "frontmatter.faqs[0].answer",
+      },
+    ],
+  };
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: review,
+  });
+  const out = result.frontmatter.faqs as Array<{ answer: string }>;
+  assert.match(out[0]?.answer ?? "", /breaker/);
+  assert.equal(out[1]?.answer, "It depends on the part.");
+});
