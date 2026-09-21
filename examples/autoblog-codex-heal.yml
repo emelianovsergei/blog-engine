@@ -71,6 +71,7 @@ jobs:
             echo "$labels" | grep -q 'autoblog-hold' && return 1
             echo "$labels" | grep -q 'autoblog-review-failed' && return 1
             echo "$labels" | grep -q 'autoblog-link-repair-needed' && return 1
+            echo "$labels" | grep -q 'autoblog-codex-p1' && return 1
             echo "$labels" | grep -q 'autoblog-backfill' && return 1
             case "$head" in
               blog/auto-*|blog/refresh-*|autoblog/*) return 0 ;;
@@ -191,8 +192,11 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          ATTEMPTS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/commits" \
-            | jq '[.[].commit.message | select(contains("[autoblog-codexfix]"))] | length')
+          # Count posted run markers, not only successful commits. A no-diff
+          # rewrite or a failed build never creates [autoblog-codexfix], and
+          # counting commits alone would retry the paid rewrite forever.
+          ATTEMPTS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            | jq '[.[][]? | select(.body | contains("<!-- autoblog-codex-heal-run -->"))] | length')
           echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
 
           if [ "$HEAD_N" -gt 0 ]; then
@@ -213,20 +217,26 @@ jobs:
             exit 0
           fi
 
-          # Codex judged this HEAD? Review object on this SHA, or a +1
-          # reaction created after the HEAD commit (clean pass has no SHA).
-          REVIEWS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews")
+          # Codex judged this HEAD? A review object carries commit_id.
+          # A clean pass may only 👍 the `@codex review` comment this
+          # workflow posted with the SHA in the body — issue-level +1
+          # reactions have no SHA and must not resolve threads.
+          REVIEWS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews")
           CODEX_ON_HEAD=$(jq -r --arg h "$HEAD" '
-            [.[] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
-                 | select(.commit_id == $h)] | length' <<<"$REVIEWS")
-          COMMIT_AT=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD}" --jq .commit.committer.date)
-          PLUS1_AFTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/reactions" \
-            | jq -r --arg t "$COMMIT_AT" \
-            '[.[] | select(.content=="+1")
-                  | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
-                  | select(.created_at >= $t)] | length')
-          echo "codex_on_head=$CODEX_ON_HEAD plus1_after=$PLUS1_AFTER commit_at=$COMMIT_AT"
-          if [ "${CODEX_ON_HEAD:-0}" -gt 0 ] || [ "${PLUS1_AFTER:-0}" -gt 0 ]; then
+            [.[][]? | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                   | select(.commit_id == $h)] | length' <<<"$REVIEWS")
+          PLUS1_ON_HEAD=0
+          COMMENT_IDS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            | jq -r --arg h "$HEAD" '
+              [.[][]? | select(.body | contains("autoblog-codex-heal-head: " + $h)) | .id] | .[]')
+          for cid in $COMMENT_IDS; do
+            n=$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}/reactions" \
+              | jq '[.[] | select(.content=="+1")
+                         | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")] | length')
+            PLUS1_ON_HEAD=$((PLUS1_ON_HEAD + n))
+          done
+          echo "codex_on_head=$CODEX_ON_HEAD plus1_on_head_comment=$PLUS1_ON_HEAD"
+          if [ "${CODEX_ON_HEAD:-0}" -gt 0 ] || [ "${PLUS1_ON_HEAD:-0}" -gt 0 ]; then
             echo "action=resolve" >> "$GITHUB_OUTPUT"
           else
             echo "action=wait" >> "$GITHUB_OUTPUT"
@@ -248,7 +258,7 @@ jobs:
           set -euo pipefail
           gh label create autoblog-codex-p1 --color E4A838 --description "Codex P0/P1 hold; auto-heal gave up" >/dev/null 2>&1 || true
           gh pr edit "$PR" --add-label autoblog-codex-p1 || true
-          gh pr comment "$PR" --body "$(printf '## Autoblog Codex heal — gave up\n\nAuto-heal already made %s of %s `[autoblog-codexfix]` attempts and Codex still has unresolved P0/P1 on this head. Human needed: edit the post, comment `/autoblog rewrite`, or resolve the thread if the finding is wrong.\n' "$ATTEMPTS" "$MAX_ATTEMPTS")"
+          gh pr comment "$PR" --body "$(printf '## Autoblog Codex heal — gave up\n\nAuto-heal already made %s of %s runs (no-diff, failed build, and successful `[autoblog-codexfix]` commits all count) and Codex still has unresolved P0/P1 on this head. Human needed: edit the post, comment `/autoblog rewrite`, or resolve the thread if the finding is wrong.\n' "$ATTEMPTS" "$MAX_ATTEMPTS")"
 
       - name: Resolve stale P0/P1 threads
         if: steps.decide.outputs.action == 'resolve'
@@ -268,6 +278,16 @@ jobs:
       - name: Skip
         if: steps.decide.outputs.action == 'wait' || steps.decide.outputs.action == 'noop'
         run: echo "PR #$PR action=${{ steps.decide.outputs.action }} — nothing to push."
+
+      - name: Record heal run toward cap
+        if: steps.decide.outputs.action == 'fix'
+        env:
+          ATTEMPTS: ${{ steps.decide.outputs.attempts }}
+          HEAD: ${{ steps.decide.outputs.head }}
+        run: |
+          set -euo pipefail
+          N=$((ATTEMPTS + 1))
+          gh pr comment "$PR" --body "$(printf '<!-- autoblog-codex-heal-run -->\nCodex heal run %s of %s on `%s`.' "$N" "$MAX_ATTEMPTS" "${HEAD:0:10}")"
 
       - name: Checkout PR branch
         if: steps.decide.outputs.action == 'fix'
@@ -393,12 +413,17 @@ jobs:
           set -euo pipefail
           REF=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           git push origin "HEAD:$REF"
-          # Codex does not re-review on synchronize. Ask it to judge the new head.
-          gh pr comment "$PR" --body "@codex review"
+          SHA=$(git rev-parse HEAD)
+          # Codex does not re-review on synchronize. SHA is in the body so a
+          # later 👍 on this comment is bound to this head, not the PR issue.
+          gh pr comment "$PR" --body "$(printf '@codex review\n\n<!-- autoblog-codex-heal-head: %s -->' "$SHA")"
 
       - name: Rewrite produced no diff
         if: steps.decide.outputs.action == 'fix' && steps.commit.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment "$PR" --body "Codex heal rewrite returned the same post (no diff). Not burning another attempt. Human needed, or resolve the thread if the finding is wrong."
+          set -euo pipefail
+          gh label create autoblog-codex-p1 --color E4A838 --description "Codex P0/P1 hold; auto-heal gave up" >/dev/null 2>&1 || true
+          gh pr edit "$PR" --add-label autoblog-codex-p1 || true
+          gh pr comment "$PR" --body "Codex heal rewrite returned the same post (no diff). Labelled \`autoblog-codex-p1\` so the hourly scan stops. Human needed: edit the post, or resolve the thread if the finding is wrong."

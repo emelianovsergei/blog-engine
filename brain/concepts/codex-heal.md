@@ -41,10 +41,14 @@ P2s, has no attempt cap, and has no build gate.
 
 ## Loop-prevention
 
-- Attempt counter = PR commits whose message contains `[autoblog-codexfix]`.
-  Cap is `AUTOBLOG_MAX_CODEXFIX` (default 2). Separate from
-  `[autoblog-autofix]` / `[autoblog-cifix]` so a first-pass PASS still has
-  budget, and a rewrite that then fails AI review still has the review loop.
+- Attempt counter = PR comments containing `<!-- autoblog-codex-heal-run -->`,
+  posted at the start of every rewrite (including no-diff and failed
+  builds). Successful pushes still use `[autoblog-codexfix]` in the commit
+  message. Cap is `AUTOBLOG_MAX_CODEXFIX` (default 2). `autoblog-codex-p1`
+  is terminal: eligibility skips it. Separate from `[autoblog-autofix]` /
+  `[autoblog-cifix]`.
+- A clean Codex pass is a review whose `commit_id` equals HEAD, or a 👍 on
+  the `@codex review` comment that embeds that SHA. Issue-level 👍 is ignored.
 - Do not resolve P0/P1 threads on the push. Merge-pending holds on any
   unresolved P1; resolving immediately would let it squash a head Codex has
   not seen. Resolve only after Codex has judged the new HEAD (review
