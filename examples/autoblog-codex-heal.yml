@@ -103,6 +103,11 @@ jobs:
     needs: list
     if: needs.list.outputs.prs != '[]' && needs.list.outputs.prs != ''
     runs-on: ubuntu-latest
+    # Workflow-level group is `scan` on schedule vs the PR number on review,
+    # so those two can overlap. Serialize the paid rewrite per PR here.
+    concurrency:
+      group: autoblog-codex-heal-pr-${{ matrix.pr }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
