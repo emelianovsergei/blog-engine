@@ -235,31 +235,45 @@ jobs:
               continue
             fi
 
-            # All checks except Autoblog Codex Heal (a helper: FORBIDDEN
-            # resolve must not block). --required is wrong here: repos
-            # without branch protection have no required contexts and gh
-            # exits 1 with "no required checks reported".
+            # Classify the rollup fail-closed. Helper Autoblog Codex Heal is
+            # ignored. CheckRun uses name/conclusion/status; StatusContext
+            # uses context/state. Unknown terminal conclusions fail. Zero
+            # remaining checks fail (same as old gh pr checks).
             if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
               echo "::warning::Could not read checks for #$NUM; leaving for next run."
               FAILED=1
               continue
             fi
-            FAILING=$(jq -r '
-              [.statusCheckRollup[]?
-                | select((.workflowName // "") != "Autoblog Codex Heal")
-                | select((.name // "") != "")
-                | select((.conclusion // .state // "") as $s
-                    | $s == "FAILURE" or $s == "ERROR" or $s == "CANCELLED"
-                      or $s == "TIMED_OUT" or $s == "fail")
-                | .name] | unique | join(", ")' <<<"$ROLLUP")
-            PENDING=$(jq -r '
-              [.statusCheckRollup[]?
-                | select((.workflowName // "") != "Autoblog Codex Heal")
-                | select((.name // "") != "")
-                | select((.conclusion // "") == "")
-                | select((.status // .state // "") as $s
-                    | $s == "IN_PROGRESS" or $s == "QUEUED" or $s == "PENDING")
-                | .name] | length' <<<"$ROLLUP")
+            CLASS=$(jq -c '
+              def ident: (.name // .context // "");
+              def helper:
+                ((.workflowName // "") == "Autoblog Codex Heal")
+                or (ident | startswith("Heal PR "));
+              def pending:
+                ((.conclusion // "") == "")
+                and ((.status // .state // "") as $s
+                  | $s == "IN_PROGRESS" or $s == "QUEUED" or $s == "PENDING"
+                    or $s == "WAITING" or $s == "REQUESTED" or $s == "EXPECTED");
+              def pass:
+                ((.conclusion // .state // "") as $s
+                  | $s == "SUCCESS" or $s == "pass");
+              def skip:
+                ((.conclusion // "") as $s
+                  | $s == "SKIPPED" or $s == "NEUTRAL" or $s == "skipping");
+              [.statusCheckRollup[]? | select(ident != "") | select(helper | not)] as $c
+              | if ($c | length) == 0 then {empty:true, fail:[], pending:[]}
+                else {
+                  empty:false,
+                  fail: [$c[] | select(pending | not) | select(pass | not) | select(skip | not) | ident],
+                  pending: [$c[] | select(pending) | ident]
+                } end
+            ' <<<"$ROLLUP")
+            if [ "$(jq -r .empty <<<"$CLASS")" = "true" ]; then
+              echo "PR #$NUM: skipped — no CI checks on this head"
+              continue
+            fi
+            FAILING=$(jq -r '.fail | unique | join(", ")' <<<"$CLASS")
+            PENDING=$(jq -r '.pending | length' <<<"$CLASS")
             if [ -n "$FAILING" ]; then
               echo "PR #$NUM: skipped — CI not green: $FAILING"
               continue
