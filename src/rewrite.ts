@@ -225,41 +225,50 @@ interface RawRewriteFrontmatter {
   [key: string]: unknown;
 }
 
-interface FaqEntry {
-  question: string;
-  answer: string;
-}
-
-function asFaqList(raw: unknown): FaqEntry[] | null {
+function readFaqEntries(raw: unknown, requireAnswer: boolean): Array<Record<string, unknown>> | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
-  const out: FaqEntry[] = [];
+  const out: Array<Record<string, unknown>> = [];
   for (const entry of raw) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const question = (entry as { question?: unknown }).question;
-    const answer = (entry as { answer?: unknown }).answer;
-    if (typeof question !== "string" || !question.trim()) return null;
-    if (typeof answer !== "string" || !answer.trim()) return null;
-    out.push({ question: question.trim(), answer: answer.trim() });
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.question !== "string" || !record.question.trim()) return null;
+    if (record.answer !== undefined && typeof record.answer !== "string") return null;
+    if (requireAnswer && (typeof record.answer !== "string" || !record.answer.trim())) return null;
+    out.push(record);
   }
   return out;
 }
 
-/** Apply revised answers only when every question string is unchanged. */
-function mergeFaqAnswers(original: unknown, revised: unknown): FaqEntry[] | null {
-  const prev = asFaqList(original);
-  const next = asFaqList(revised);
+/**
+ * Copy revised answers onto the original entries when every question is unchanged.
+ * An empty original answer can be filled. Extra keys on the original entry stay.
+ * Returns null when the revision drops, reorders, or empties an answer.
+ */
+function mergeFaqAnswers(original: unknown, revised: unknown): Array<Record<string, unknown>> | null {
+  const prev = readFaqEntries(original, false);
+  const next = readFaqEntries(revised, true);
   if (!prev || !next || prev.length !== next.length) return null;
-  if (prev.some((entry, i) => entry.question !== next[i]!.question)) return null;
-  return prev.map((entry, i) => ({ question: entry.question, answer: next[i]!.answer }));
+  for (let i = 0; i < prev.length; i += 1) {
+    if (String(prev[i]!.question).trim() !== String(next[i]!.question).trim()) return null;
+  }
+  return prev.map((entry, i) => ({
+    ...entry,
+    question: String(entry.question).trim(),
+    answer: String(next[i]!.answer).trim(),
+  }));
 }
 
-function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<{ message: string; suggestion: string; location?: string }>; suggestions: readonly string[]; summary: string }): boolean {
-  const text = [
-    ...review.issues.flatMap((issue) => [issue.message, issue.suggestion, issue.location ?? ""]),
-    ...review.suggestions,
-    review.summary,
-  ].join("\n");
-  return /\bfaqs?\b/i.test(text);
+/** True only when an issue asks to change a frontmatter FAQ answer, not the body. */
+function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<{ message: string; suggestion: string; location?: string }> }): boolean {
+  return review.issues.some((issue) => {
+    const loc = issue.location ?? "";
+    const text = `${issue.message}\n${issue.suggestion}`;
+    const blob = `${loc}\n${text}`;
+    if (!/\bfaqs?\b/i.test(blob)) return false;
+    const pointsAtFaq = /\bfaqs?\b/i.test(loc) || /\bfrontmatter\b/i.test(text);
+    const asksAnswer = /\banswer\b/i.test(text);
+    return pointsAtFaq && asksAnswer;
+  });
 }
 interface RawRewrite {
   frontmatter?: unknown;
@@ -327,7 +336,12 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
   const frontmatter = mergeFrontmatter(args.frontmatter, revisedFrontmatter);
   if (reviewAsksForFaqEdit(args.reviewFeedback)) {
     const faqs = mergeFaqAnswers(args.frontmatter.faqs, revisedFrontmatter.faqs);
-    if (faqs) frontmatter.faqs = faqs;
+    if (!faqs) {
+      throw new Error(
+        "Rewrite rejected: the review asks for a FAQ answer change, but the revised faqs omit the list, change a question, or leave an answer empty",
+      );
+    }
+    frontmatter.faqs = faqs;
   }
   const markdown = parsed.markdown.trim();
   if (args.rubric) {

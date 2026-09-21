@@ -54,10 +54,12 @@ repository and every call dies with "not a git repository." `autoblog-ci-heal.ym
 sets the same `GH_REPO` on the job: the report step runs with no checkout
 unless the failure is a dead link.
 
-The window cutoff and the stale cutoff are the start of that UTC day, not
-`now` minus N days. The 18:00Z cron often starts after 20:00Z. On 2026-09-20
-it started at 20:19Z and a rolling cutoff dropped Promax's 19:02Z merge from
-three days earlier, so one real miss looked like two.
+For a window longer than one day, the cutoff is the start of that UTC day,
+not `now` minus N days. The 18:00Z cron often starts after 20:00Z. On
+2026-09-20 it started at 20:19Z and a rolling cutoff dropped Promax's 19:02Z
+merge from three days earlier, so one real miss looked like two. A one-day
+hourly window stays a rolling 24 hours, so yesterday's posts cannot hide a
+silent day.
 
 Window, expected count and stale days are **derived from `AUTOBLOG_INTERVAL`**
 in the assess step and exported via `GITHUB_ENV`, so the alert text cannot
