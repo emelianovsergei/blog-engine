@@ -1,0 +1,404 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/autoblog-codex-heal.yml
+# Also copy examples/scripts/codex-comments-to-review.sh to
+# .github/scripts/codex-comments-to-review.sh
+#
+# AI review auto-fix only runs when the review gate fails. Codex P0/P1
+# comments arrive after a PASS, and autoblog-merge-pending then holds the
+# PR forever while generate's in-flight lock drops the next slot. This
+# workflow rewrites against those findings, waits for Codex to re-review
+# the new head, then resolves the old threads so merge-pending can ship.
+#
+# P2 nits are ignored. P0 always heals; P1 heals whenever merge-pending
+# would hold it. Cap is AUTOBLOG_MAX_CODEXFIX (default 2), counted by
+# [autoblog-codexfix] marker commits. Do not ask Codex to "address that
+# feedback" — that path also rewrites P2s and has no build gate.
+#
+# Adjust --site / --business / --service-areas / rubric flags to match
+# autoblog-review.yml in this repo. The worked example is Pulse.
+
+name: Autoblog Codex Heal
+
+on:
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: '25 * * * *'   # hourly, :25 — after merge-pending at :20
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to heal (empty = all eligible)
+        required: false
+
+# contents stays read on the job token: push uses AUTOBLOG_PAT so the
+# synchronize event retriggers Autoblog AI Review.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: autoblog-codex-heal-${{ github.event.pull_request.number || github.event.inputs.pr || 'scan' }}
+  cancel-in-progress: false
+
+jobs:
+  list:
+    name: List eligible PRs
+    if: >
+      github.event_name != 'pull_request_review' ||
+      github.event.review.user.login == 'chatgpt-codex-connector[bot]'
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+    steps:
+      - name: List
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          REVIEW_PR: ${{ github.event.pull_request.number }}
+          DISPATCH_PR: ${{ github.event.inputs.pr }}
+        run: |
+          set -euo pipefail
+          eligible() {
+            local num="$1" json labels head
+            json=$(gh pr view "$num" --json labels,headRefName,state)
+            [ "$(jq -r .state <<<"$json")" = "OPEN" ] || return 1
+            labels=$(jq -r '[.labels[].name] | join(",")' <<<"$json")
+            head=$(jq -r .headRefName <<<"$json")
+            echo "$labels" | grep -q 'autoblog-approved-pending' || return 1
+            echo "$labels" | grep -q 'autoblog-hold' && return 1
+            echo "$labels" | grep -q 'autoblog-review-failed' && return 1
+            echo "$labels" | grep -q 'autoblog-link-repair-needed' && return 1
+            echo "$labels" | grep -q 'autoblog-backfill' && return 1
+            case "$head" in
+              blog/auto-*|blog/refresh-*|autoblog/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          PRS=()
+          if [ "$EVENT" = "pull_request_review" ] && [ -n "${REVIEW_PR:-}" ]; then
+            eligible "$REVIEW_PR" && PRS+=("$REVIEW_PR")
+          elif [ "$EVENT" = "workflow_dispatch" ] && [ -n "${DISPATCH_PR:-}" ]; then
+            eligible "$DISPATCH_PR" && PRS+=("$DISPATCH_PR")
+          else
+            while read -r num; do
+              [ -n "$num" ] || continue
+              eligible "$num" && PRS+=("$num")
+            done < <(gh pr list --label autoblog-approved-pending --state open --limit 50 --json number,headRefName --jq '.[].number')
+          fi
+          if [ "${#PRS[@]}" -eq 0 ]; then
+            echo "prs=[]" >> "$GITHUB_OUTPUT"
+            echo "No eligible autoblog PRs."
+            exit 0
+          fi
+          JSON=$(printf '%s\n' "${PRS[@]}" | jq -R . | jq -sc .)
+          echo "prs=$JSON" >> "$GITHUB_OUTPUT"
+          echo "Eligible: $JSON"
+
+  heal:
+    name: Heal PR ${{ matrix.pr }}
+    needs: list
+    if: needs.list.outputs.prs != '[]' && needs.list.outputs.prs != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJson(needs.list.outputs.prs) }}
+    env:
+      GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ matrix.pr }}
+      MAX_ATTEMPTS: ${{ vars.AUTOBLOG_MAX_CODEXFIX || '2' }}
+    steps:
+      - name: Decide fix / resolve / wait
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          HEAD=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+
+          if ! THREADS=$(gh api graphql -f query='
+            query($owner:String!,$name:String!,$num:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$num) {
+                  reviewThreads(first:100) {
+                    pageInfo { hasNextPage }
+                    nodes {
+                      id
+                      isResolved
+                      comments(first:20) {
+                        nodes {
+                          databaseId
+                          author { login }
+                          body
+                          path
+                          originalLine
+                          line
+                          originalCommit { oid }
+                          commit { oid }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f owner="$OWNER" -f name="$REPO" -F num="$PR"); then
+            echo "::warning::Could not read Codex threads for #$PR — leaving for next run."
+            echo "action=wait" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$THREADS")" = "true" ]; then
+            echo "::warning::#$PR has more than 100 review threads — fail-closed wait."
+            echo "action=wait" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FINDINGS=$(jq -c --arg h "$HEAD" '
+            [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+              | select(.isResolved == false)
+              | . as $t
+              | .comments.nodes[0]?
+              | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+              | select(.body | test("badge/P0-|P0 Badge|badge/P1-|P1 Badge"; "i"))
+              | {
+                  threadId: $t.id,
+                  databaseId,
+                  body,
+                  path,
+                  line: (.line // .originalLine),
+                  commit: ((.commit.oid // .originalCommit.oid) // "")
+                }
+            ]' <<<"$THREADS")
+          HEAD_FINDINGS=$(jq -c --arg h "$HEAD" '[.[] | select(.commit == $h)]' <<<"$FINDINGS")
+          OLD_FINDINGS=$(jq -c --arg h "$HEAD" '[.[] | select(.commit != $h)]' <<<"$FINDINGS")
+          HEAD_N=$(jq 'length' <<<"$HEAD_FINDINGS")
+          OLD_N=$(jq 'length' <<<"$OLD_FINDINGS")
+          echo "head_n=$HEAD_N old_n=$OLD_N head=$HEAD"
+
+          {
+            echo "head_findings<<EOF"
+            echo "$HEAD_FINDINGS"
+            echo "EOF"
+            echo "old_findings<<EOF"
+            echo "$OLD_FINDINGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          ATTEMPTS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/commits" \
+            | jq '[.[].commit.message | select(contains("[autoblog-codexfix]"))] | length')
+          echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
+
+          if [ "$HEAD_N" -gt 0 ]; then
+            if [ "$HAS_PAT" != "true" ]; then
+              echo "action=no-pat" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
+              echo "action=cap" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "action=fix" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$OLD_N" -eq 0 ]; then
+            echo "action=noop" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Codex judged this HEAD? Review object on this SHA, or a +1
+          # reaction created after the HEAD commit (clean pass has no SHA).
+          REVIEWS=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews")
+          CODEX_ON_HEAD=$(jq -r --arg h "$HEAD" '
+            [.[] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                 | select(.commit_id == $h)] | length' <<<"$REVIEWS")
+          COMMIT_AT=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD}" --jq .commit.committer.date)
+          PLUS1_AFTER=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/reactions" \
+            | jq -r --arg t "$COMMIT_AT" \
+            '[.[] | select(.content=="+1")
+                  | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                  | select(.created_at >= $t)] | length')
+          echo "codex_on_head=$CODEX_ON_HEAD plus1_after=$PLUS1_AFTER commit_at=$COMMIT_AT"
+          if [ "${CODEX_ON_HEAD:-0}" -gt 0 ] || [ "${PLUS1_AFTER:-0}" -gt 0 ]; then
+            echo "action=resolve" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=wait" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No PAT
+        if: steps.decide.outputs.action == 'no-pat'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "$PR" --body "Codex P0/P1 is holding merge, but \`AUTOBLOG_PAT\` is not configured so an automated rewrite could not retrigger review. Fix the post or add the secret."
+
+      - name: Cap reached
+        if: steps.decide.outputs.action == 'cap'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ATTEMPTS: ${{ steps.decide.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          gh label create autoblog-codex-p1 --color E4A838 --description "Codex P0/P1 hold; auto-heal gave up" >/dev/null 2>&1 || true
+          gh pr edit "$PR" --add-label autoblog-codex-p1 || true
+          gh pr comment "$PR" --body "$(printf '## Autoblog Codex heal — gave up\n\nAuto-heal already made %s of %s `[autoblog-codexfix]` attempts and Codex still has unresolved P0/P1 on this head. Human needed: edit the post, comment `/autoblog rewrite`, or resolve the thread if the finding is wrong.\n' "$ATTEMPTS" "$MAX_ATTEMPTS")"
+
+      - name: Resolve stale P0/P1 threads
+        if: steps.decide.outputs.action == 'resolve'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_FINDINGS: ${{ steps.decide.outputs.old_findings }}
+          HEAD: ${{ steps.decide.outputs.head }}
+        run: |
+          set -euo pipefail
+          echo "$OLD_FINDINGS" | jq -r '.[].threadId' | while read -r tid; do
+            [ -n "$tid" ] || continue
+            gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id="$tid"
+            echo "resolved $tid"
+          done
+          gh pr comment "$PR" --body "Codex re-reviewed \`${HEAD:0:10}\` with no new P0/P1. Resolved the previous P0/P1 threads so merge-pending can ship. P2 nits left open."
+
+      - name: Skip
+        if: steps.decide.outputs.action == 'wait' || steps.decide.outputs.action == 'noop'
+        run: echo "PR #$PR action=${{ steps.decide.outputs.action }} — nothing to push."
+
+      - name: Checkout PR branch
+        if: steps.decide.outputs.action == 'fix'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.decide.outputs.head }}
+          token: ${{ secrets.AUTOBLOG_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: steps.decide.outputs.action == 'fix'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        if: steps.decide.outputs.action == 'fix'
+        run: npm ci
+
+      - name: Identify post and map Codex findings
+        if: steps.decide.outputs.action == 'fix'
+        id: map
+        env:
+          HEAD_FINDINGS: ${{ steps.decide.outputs.head_findings }}
+        run: |
+          set -euo pipefail
+          FILE=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+            --jq '[.[].filename | select(test("^(content|src/content)/blog/.*\\.(md|mdx)$"))] | .[0] // empty')
+          if [ -z "$FILE" ]; then
+            echo "::error::No blog markdown on #$PR"
+            exit 1
+          fi
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/.github/scripts/codex-comments-to-review.sh?ref=${DEFAULT_BRANCH}" \
+            --jq .content | base64 -d > /tmp/codex-comments-to-review.sh
+          echo "$HEAD_FINDINGS" | bash /tmp/codex-comments-to-review.sh > review-result.json
+          echo "Mapped $(jq '.issues | length' review-result.json) Codex P0/P1 issue(s) for $FILE"
+
+      - name: Rewrite post
+        if: steps.decide.outputs.action == 'fix'
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npx blog-engine-rewrite \
+            --post "${{ steps.map.outputs.file }}" \
+            --review review-result.json \
+            --site pulse \
+            --business "HVAC Pulse" \
+            --service-areas "Sacramento,Carmichael,Roseville,Citrus Heights,Folsom,Elk Grove,Rancho Cordova,Fair Oaks" \
+            --model grok-4.6 \
+            --link-policy content/policy/link-constraints.json \
+            --required-headings "When to Call PULSE HVAC" \
+            --faq-policy appended-by-code \
+            --audit-out rewrite-audit.json \
+            --notes-out change-notes.md
+
+      - name: Structural guard
+        if: steps.decide.outputs.action == 'fix'
+        run: >
+          npm run blog:check --
+          "${{ steps.map.outputs.file }}"
+          --base "${{ steps.decide.outputs.head }}"
+
+      - name: Validate build
+        if: steps.decide.outputs.action == 'fix'
+        run: npm run build
+
+      - name: Commit rewrite
+        if: steps.decide.outputs.action == 'fix'
+        id: commit
+        env:
+          ATTEMPTS: ${{ steps.decide.outputs.attempts }}
+        run: |
+          set -euo pipefail
+          git config user.name "autoblog-bot"
+          git config user.email "autoblog-bot@users.noreply.github.com"
+          git add "${{ steps.map.outputs.file }}"
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Rewrite produced no diff."
+            exit 0
+          fi
+          N=$((ATTEMPTS + 1))
+          git commit -m "autoblog: address Codex P0/P1 attempt ${N} [autoblog-codexfix]"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "attempt_n=$N" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Reply in P0/P1 threads
+        if: steps.decide.outputs.action == 'fix' && steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT }}
+          HEAD_FINDINGS: ${{ steps.decide.outputs.head_findings }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          N: ${{ steps.commit.outputs.attempt_n }}
+        run: |
+          set -euo pipefail
+          NOTES=$(head -c 500 change-notes.md || true)
+          echo "$HEAD_FINDINGS" | jq -r '.[].databaseId' | while read -r cid; do
+            [ -n "$cid" ] || continue
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments/${cid}/replies" \
+              -f body="$(printf 'Addressed in %s (Codex heal attempt %s of %s).\n\n%s' "$SHA" "$N" "$MAX_ATTEMPTS" "$NOTES")"
+          done
+
+      - name: Sticky change notes
+        if: steps.decide.outputs.action == 'fix' && steps.commit.outputs.changed == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          number: ${{ matrix.pr }}
+          path: change-notes.md
+          header: autoblog-codexfix
+
+      - name: Push and request Codex re-review
+        if: steps.decide.outputs.action == 'fix' && steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          REF=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          git push origin "HEAD:$REF"
+          # Codex does not re-review on synchronize. Ask it to judge the new head.
+          gh pr comment "$PR" --body "@codex review"
+
+      - name: Rewrite produced no diff
+        if: steps.decide.outputs.action == 'fix' && steps.commit.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "$PR" --body "Codex heal rewrite returned the same post (no diff). Not burning another attempt. Human needed, or resolve the thread if the finding is wrong."

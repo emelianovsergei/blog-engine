@@ -20,6 +20,13 @@ delivery — see [[concepts/delivery-guarantee]] for the check that is.
 
 ## Known instances
 
+**Codex P1 hold + green merge job → in-flight lock drops the next post.**
+`autoblog-merge-pending.yml` skip-logs unresolved Codex P1 and exits 0.
+Generate then skips (`open autoblog PR #N (in-flight lock)`). Watchdog
+`STRANDED_PR_DAYS=21` does not fire. Pulse #381 and Promax #299 sat in
+that state. Fixed by [[concepts/codex-heal]] plus a watchdog hold at
+merge-delay+3h and an always-on P0 hold.
+
 **Exact hour equality + delayed Actions tick → green skip, missed day.**
 `generate-blog-post.yml` for `AUTOBLOG_INTERVAL>=1d` required
 `PACIFIC_HOUR == AUTOBLOG_HOUR_PT`. GitHub hourly crons are often tens of

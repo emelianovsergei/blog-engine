@@ -49,6 +49,9 @@ jobs:
     # make an ordinary unhurried review look like a fault.
     env:
       STRANDED_PR_DAYS: 21
+      # Approved-pending + unresolved Codex P0/P1 older than merge delay + this.
+      # 21 days is too long: generate's in-flight lock drops daily slots immediately.
+      CODEX_HOLD_GRACE_HOURS: 3
       AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
       AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
       AUTOBLOG_EXPECTED_OVERRIDE: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '' }}
@@ -238,6 +241,56 @@ jobs:
                 )
               | select(.createdAt < $cutoff)
               | select([.labels[].name] | index("autoblog-hold") == null) ]' <<<"$OPEN_JSON")
+
+          # Codex P0/P1 hold is a silent-green skip in merge-pending. At
+          # daily cadence the in-flight lock then drops the next slot, so
+          # wait 21 days to notice. Surface those PRs after merge-delay+3h.
+          OWNER="${GITHUB_REPOSITORY%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          HOLD_CUTOFF_TS=$(( $(date -u +%s) - DELAY_SECS - CODEX_HOLD_GRACE_HOURS * 3600 ))
+          HOLD_CUTOFF=$(date -u -d "@$HOLD_CUTOFF_TS" +%Y-%m-%dT%H:%M:%SZ)
+          HELD_EXTRA="[]"
+          while read -r num created; do
+            [ -n "$num" ] || continue
+            if ! THREADS=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!) {
+                repository(owner:$owner, name:$name) {
+                  pullRequest(number:$num) {
+                    reviewThreads(first:100) {
+                      nodes {
+                        isResolved
+                        comments(first:20) {
+                          nodes { author { login } body }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' -f owner="$OWNER" -f name="$REPO" -F num="$num"); then
+              echo "::warning::Could not read Codex threads for #$num"
+              continue
+            fi
+            P01=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P0-|P0 Badge|badge/P1-|P1 Badge"; "i"))
+              ] | length' <<<"$THREADS")
+            if [ "${P01:-0}" -gt 0 ]; then
+              ROW=$(jq -c --argjson n "$num" '.[] | select(.number == $n)' <<<"$OPEN_JSON")
+              HELD_EXTRA=$(jq -c --argjson row "$ROW" '. + [$row]' <<<"$HELD_EXTRA")
+              echo "Codex P0/P1 hold: #$num ($P01 unresolved) opened $created"
+            fi
+          done < <(jq -r --arg cutoff "$HOLD_CUTOFF" '
+            .[]
+            | select([.labels[].name] | index("autoblog-approved-pending"))
+            | select([.labels[].name] | index("autoblog-hold") == null)
+            | select(.createdAt < $cutoff)
+            | "\(.number) \(.createdAt)"' <<<"$OPEN_JSON")
+
+          STRANDED=$(jq -c --argjson extra "$HELD_EXTRA" '
+            ($extra + .) | unique_by(.number)' <<<"$STRANDED")
           STRANDED_COUNT=$(jq -r 'length' <<<"$STRANDED")
 
           echo "stranded_count=$STRANDED_COUNT" >> "$GITHUB_OUTPUT"
@@ -245,7 +298,7 @@ jobs:
             <<<"$STRANDED" > stranded.md
 
           if [ "$STRANDED_COUNT" -gt 0 ]; then
-            echo "::warning::$STRANDED_COUNT autoblog PR(s) open longer than ${STRANDED_PR_DAYS} days"
+            echo "::warning::$STRANDED_COUNT autoblog PR(s) stranded (${STRANDED_PR_DAYS}-day open or Codex P0/P1 hold past merge delay + ${CODEX_HOLD_GRACE_HOURS}h)"
             cat stranded.md
           fi
 
@@ -457,6 +510,7 @@ jobs:
             echo "2. **\`autoblog-review-failed\`** — the auto-fix loop hit its cap and wants a human."
             echo "3. **\`autoblog-link-repair-needed\`** — a dead link is still in the prose; rewrite the sentence and the gate clears."
             echo "4. **No checks at all** — the head was pushed without raising events; close and reopen the PR to re-trigger."
+            echo "5. **Unresolved Codex P0/P1** — \`autoblog-merge-pending\` holds on purpose. \`autoblog-codex-heal\` should rewrite; if it labelled \`autoblog-codex-p1\` it hit its cap."
             echo
             echo "_Updated by the daily watchdog. Closed automatically once nothing is stuck._"
           } > "$BODY_FILE"

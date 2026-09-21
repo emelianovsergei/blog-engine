@@ -49,6 +49,7 @@ sources: []
 
 *   [[concepts/autofix-loop|Auto-Fix Loop (Review Failure Recovery)]]
 *   [[concepts/ci-heal|Red-CI Self-Heal]]
+*   [[concepts/codex-heal|Codex P0/P1 Self-Heal]]
 *   [[concepts/delivery-guarantee|Delivery Guarantee (Consumer Workflow Set + Watchdog)]]
 *   [[concepts/demand-signal|Search-Demand Signal]]
 *   [[concepts/quality-gates|Quality Gates & AI Review Rubric]]

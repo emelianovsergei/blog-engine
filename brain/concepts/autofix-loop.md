@@ -67,4 +67,7 @@ hand-rolled frontmatter parser mangling nested YAML — fixed in v0.7.1 by
 switching to the `yaml` package. The verified-facts block stays as defense in
 depth against genuine model miscounts.)
 
+Codex P0/P1 on a **passing** review is a different loop: [[concepts/codex-heal]].
+This file stays the AI-review-fail path.
+
 See [[concepts/quality-gates]], [[modules/review]], [[modules/rewrite]].

@@ -1,13 +1,13 @@
 # Wiki Health Report
 
-*Generated on: 2026-09-07T07:54:12.906Z*
+*Generated on: 2026-09-21T13:34:29.367Z*
 
 ## Summary
 
-*   **Total Wiki Files**: 46
+*   **Total Wiki Files**: 47
 *   **Schema Violations**: 0
 *   **Broken Links**: 0
-*   **Orphan Pages**: 10
+*   **Orphan Pages**: 9
 *   **Stale Pages**: 5
 
 > [!NOTE]
@@ -17,7 +17,6 @@
 
 *The following pages have no incoming links:*
 
-*   [[concepts/ci-heal]]
 *   [[concepts/demand-signal]]
 *   [[concepts/release-procedure]]
 *   [[concepts/shared-rubric]]
