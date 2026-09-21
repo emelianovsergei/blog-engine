@@ -436,3 +436,60 @@ test("an issue that only tells the rewriter to fix the body does not change faqs
   });
   assert.deepEqual(result.frontmatter.faqs, faqSet);
 });
+
+test("a FAQ issue that returns the same answers is rejected", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: { title: frontmatter.title, faqs: faqSet },
+      markdown: "# New\n\nUnrelated body edit.",
+      changeNotes: "Edited the body only.",
+    },
+  });
+  await assert.rejects(
+    rewriteBlogPost({
+      gemini,
+      config: sampleConfig,
+      frontmatter: { ...frontmatter, faqs: faqSet },
+      markdown,
+      reviewFeedback: faqReview,
+    }),
+    /FAQ answer change/,
+  );
+});
+
+test("a location of frontmatter.faqs[0].answer requests an FAQ edit without the word answer in the prose", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          { question: "Should I book same-day?", answer: "Shut the system off at the breaker. Call 911 if you see smoke." },
+          { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+        ],
+      },
+      markdown,
+      changeNotes: "Added the shutoff sentence.",
+    },
+  });
+  const review: ReviewResult = {
+    ...failingReview,
+    issues: [
+      {
+        dimension: "contentQuality",
+        severity: "blocker",
+        message: "The emergency guidance is incomplete.",
+        suggestion: "Add the shutoff sentence.",
+        location: "frontmatter.faqs[0].answer",
+      },
+    ],
+  };
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: review,
+  });
+  const out = result.frontmatter.faqs as Array<{ answer: string }>;
+  assert.match(out[0]?.answer ?? "", /breaker/);
+});
