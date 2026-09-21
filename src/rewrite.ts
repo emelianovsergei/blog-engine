@@ -251,7 +251,8 @@ function mergeFaqAnswers(original: unknown, revised: unknown): Array<Record<stri
   let changed = false;
   for (let i = 0; i < prev.length; i += 1) {
     if (String(prev[i]!.question).trim() !== String(next[i]!.question).trim()) return null;
-    const prevAnswer = typeof prev[i]!.answer === "string" ? prev[i]!.answer.trim() : "";
+    const prevRaw = prev[i]!.answer;
+    const prevAnswer = typeof prevRaw === "string" ? prevRaw.trim() : "";
     if (prevAnswer !== String(next[i]!.answer).trim()) changed = true;
   }
   if (!changed) return null;
