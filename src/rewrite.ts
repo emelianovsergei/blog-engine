@@ -57,7 +57,7 @@ export interface RewriteBlogPostArgs {
 export interface RewriteResult {
   /** Revised markdown body. */
   markdown: string;
-  /** Possibly revised frontmatter (title / description / slug / tags / category). */
+  /** Revised frontmatter. Identity fields stay. FAQ answers change only when the review asks. */
   frontmatter: BlogPostFrontmatter;
   /** 1-3 sentences explaining what changed and why. */
   changeNotes: string;
@@ -75,6 +75,17 @@ const rewriteSchema = {
         slug: { type: "string" },
         category: { type: "string" },
         tags: { type: "array", items: { type: "string" } },
+        faqs: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+              answer: { type: "string" },
+            },
+            required: ["question", "answer"],
+          },
+        },
       },
       required: ["title"],
     },
@@ -168,6 +179,7 @@ Constraints:
 - Do NOT change the post's topic or category unless an issue explicitly demands it.
 - Keep the same approximate length (within +/- 25%).
 - Maintain the post's tone and Sacramento-local framing.
+- If an issue is about a frontmatter FAQ answer, update that answer in frontmatter.faqs and keep each question string unchanged. Do not add a Frequently Asked Questions section to the markdown body. If no issue mentions an FAQ, return frontmatter.faqs unchanged.
 ${structureRules(args.rubric)}${linkRules}
 ${accuracyRules}`;
 }
@@ -209,7 +221,90 @@ interface RawRewriteFrontmatter {
   category?: unknown;
   tags?: unknown;
   date?: unknown;
+  faqs?: unknown;
   [key: string]: unknown;
+}
+
+function readFaqEntries(raw: unknown, requireAnswer: boolean): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: Array<Record<string, unknown>> = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.question !== "string" || !record.question.trim()) return null;
+    if (record.answer !== undefined && typeof record.answer !== "string") return null;
+    if (requireAnswer && (typeof record.answer !== "string" || !record.answer.trim())) return null;
+    out.push(record);
+  }
+  return out;
+}
+
+type FaqIssue = { message: string; suggestion: string; location?: string };
+
+/**
+ * Copy revised answers onto the original entries when every question is unchanged.
+ * An empty original answer can be filled. Extra keys on the original entry stay.
+ * When `onlyIndexes` is set, answers outside those indexes stay as they were.
+ * Returns null when nothing changes, a question changes, or a requested answer is empty.
+ */
+function mergeFaqAnswers(
+  original: unknown,
+  revised: unknown,
+  onlyIndexes: readonly number[] = [],
+): Array<Record<string, unknown>> | null {
+  const prev = readFaqEntries(original, false);
+  const next = readFaqEntries(revised, true);
+  if (!prev || !next || prev.length !== next.length) return null;
+  const allowAll = onlyIndexes.length === 0;
+  let changed = false;
+  const merged: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < prev.length; i += 1) {
+    const entry = prev[i]!;
+    if (String(entry.question).trim() !== String(next[i]!.question).trim()) return null;
+    const prevRaw = entry.answer;
+    const prevAnswer = typeof prevRaw === "string" ? prevRaw.trim() : "";
+    const useModel = allowAll || onlyIndexes.includes(i);
+    const nextAnswer = useModel ? String(next[i]!.answer).trim() : prevAnswer;
+    if (useModel && !nextAnswer) return null;
+    if (useModel && prevAnswer !== nextAnswer) changed = true;
+    merged.push({
+      ...entry,
+      question: String(entry.question).trim(),
+      answer: nextAnswer,
+    });
+  }
+  if (!changed) return null;
+  return merged;
+}
+
+/** A Codex heal location is `file.mdx:line`, not `frontmatter.faqs`. Prose that asks to change a FAQ answer is enough. */
+function issueRequestsFaqAnswerEdit(issue: FaqIssue): boolean {
+  const loc = issue.location ?? "";
+  const text = `${issue.message}\n${issue.suggestion}`;
+  if (!/\bfaqs?\b/i.test(`${loc}\n${text}`)) return false;
+  const pointsAtFaqField = /\bfaqs?\b/i.test(loc);
+  const mentionsFaqAnswer = /\bfaqs?\b/i.test(text) && /\banswer\b/i.test(text);
+  if (!pointsAtFaqField && !mentionsFaqAnswer) return false;
+  const doNotChangeFaq = /\b(do not|don't|never)\s+(?:change|edit|update|touch)\b[^.]*\bfaq\b/i.test(text);
+  if (doNotChangeFaq && !pointsAtFaqField) return false;
+  const editsProse = /\b(correct|fix|change|update|edit|revise)\b[^.]*\b(body|paragraph|section|markdown)\b/i.test(issue.suggestion);
+  const editsFaq = /\b(correct|fix|change|update|edit|revise)\b[^.]*\bfaq\b/i.test(issue.suggestion);
+  if (editsProse && !editsFaq && !pointsAtFaqField) return false;
+  return true;
+}
+
+function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<FaqIssue> }): boolean {
+  return review.issues.some(issueRequestsFaqAnswerEdit);
+}
+
+function requestedFaqIndexes(review: { issues: ReadonlyArray<FaqIssue> }): number[] {
+  const indexes: number[] = [];
+  for (const issue of review.issues) {
+    if (!issueRequestsFaqAnswerEdit(issue)) continue;
+    const match = (issue.location ?? "").match(/faqs\[(\d+)\]/i);
+    if (match?.[1]) indexes.push(Number(match[1]));
+  }
+  return indexes;
 }
 interface RawRewrite {
   frontmatter?: unknown;
@@ -273,10 +368,21 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
     throw new Error("Rewrite response missing required 'frontmatter' or 'markdown' fields");
   }
 
-  const frontmatter = mergeFrontmatter(
-    args.frontmatter,
-    parsed.frontmatter as RawRewriteFrontmatter,
-  );
+  const revisedFrontmatter = parsed.frontmatter as RawRewriteFrontmatter;
+  const frontmatter = mergeFrontmatter(args.frontmatter, revisedFrontmatter);
+  if (reviewAsksForFaqEdit(args.reviewFeedback)) {
+    const faqs = mergeFaqAnswers(
+      args.frontmatter.faqs,
+      revisedFrontmatter.faqs,
+      requestedFaqIndexes(args.reviewFeedback),
+    );
+    if (!faqs) {
+      throw new Error(
+        "Rewrite rejected: the review asks for a FAQ answer change, but the revised faqs omit the list, change a question, or leave an answer empty",
+      );
+    }
+    frontmatter.faqs = faqs;
+  }
   const markdown = parsed.markdown.trim();
   if (args.rubric) {
     const problem = structuralViolation(markdown, args.rubric);

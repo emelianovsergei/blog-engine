@@ -3,10 +3,19 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-09-07"
+timestamp: "2026-09-21"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-21] FAQ answers, heal GH_REPO, watchdog day floor
+
+Codex heal could not change a FAQ answer: `mergeFrontmatter` dropped `faqs`,
+the second run returned no diff, and the PR was labelled `autoblog-codex-p1`.
+A review that mentions an FAQ now copies answers when the question strings
+stay the same. CI-heal sets job-level `GH_REPO` so a non-link failure can
+comment without a checkout. Watchdog cutoffs floor to `00:00:00Z` so a late
+18:00Z cron does not drop the first day's merge. [[concepts/delivery-guarantee]].
 
 ## [2026-09-21] Codex P0/P1 heal
 

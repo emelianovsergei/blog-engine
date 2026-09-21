@@ -128,8 +128,9 @@ jobs:
       # nothing is pushed and the post is left in its prior state.
       # Same structural guard as the automatic autofix path: the rewritten
       # file is still uncommitted here, so HEAD is the pre-rewrite version.
-      # A dropped FAQ, a re-cased required heading or a changed protected
-      # frontmatter key (slug, date, faqs, citations, …) stops the commit.
+      # A dropped FAQ, a re-cased required heading, or a changed protected
+      # frontmatter key (slug, date, citations, …) stops the commit. FAQ
+      # answers may change when every question stays in order.
       - name: Validate rewritten post structure
         run: npm run blog:check -- "${{ steps.files.outputs.file }}" --base HEAD
 

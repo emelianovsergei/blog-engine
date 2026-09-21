@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (nine since Codex heal), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-17"
+timestamp: "2026-09-21"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -50,7 +50,16 @@ one is a silent missing week.
 `autoblog-watchdog.yml` runs daily ~10-11 AM PT and asks the only question that
 matters: did a post actually reach `main`? It is pure API (no checkout), so it
 sets `GH_REPO` explicitly; without a working tree `gh` cannot infer the
-repository and every call dies with "not a git repository."
+repository and every call dies with "not a git repository." `autoblog-ci-heal.yml`
+sets the same `GH_REPO` on the job: the report step runs with no checkout
+unless the failure is a dead link.
+
+For a window longer than one day, the cutoff is the start of that UTC day,
+not `now` minus N days. The 18:00Z cron often starts after 20:00Z. On
+2026-09-20 it started at 20:19Z and a rolling cutoff dropped Promax's 19:02Z
+merge from three days earlier, so one real miss looked like two. A one-day
+hourly window stays a rolling 24 hours, so yesterday's posts cannot hide a
+silent day.
 
 Window, expected count and stale days are **derived from `AUTOBLOG_INTERVAL`**
 in the assess step and exported via `GITHUB_ENV`, so the alert text cannot

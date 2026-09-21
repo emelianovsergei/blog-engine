@@ -319,8 +319,10 @@ jobs:
 
       # Structural guard on the rewrite BEFORE the build and the commit. An
       # FAQ section written into the body, a re-cased required heading, or a
-      # change to a protected frontmatter key (faqs, summary, citations, …)
-      # fails here, so nothing is pushed and the loop ends this round. The
+      # change to a protected frontmatter key (summary, citations, …)
+      # fails here. FAQ answers may change when every question stays in
+      # order; a new, dropped, or reordered question still fails. Nothing
+      # is pushed and the loop ends this round. The
       # 2026-08-29 Promax autofix deleted a post's visible FAQ while its
       # FAQPage JSON-LD stayed — a Google FAQ-policy violation that shipped.
       - name: 'Auto-fix: structural guard'
