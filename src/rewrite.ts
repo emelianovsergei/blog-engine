@@ -48,7 +48,7 @@ export interface RewriteBlogPostArgs {
 export interface RewriteResult {
   /** Revised markdown body. */
   markdown: string;
-  /** Possibly revised frontmatter (title / description / slug / tags / category). */
+  /** Revised frontmatter. Identity fields stay. FAQ answers change only when the review asks. */
   frontmatter: BlogPostFrontmatter;
   /** 1-3 sentences explaining what changed and why. */
   changeNotes: string;
@@ -66,6 +66,17 @@ const rewriteSchema = {
         slug: { type: "string" },
         category: { type: "string" },
         tags: { type: "array", items: { type: "string" } },
+        faqs: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+              answer: { type: "string" },
+            },
+            required: ["question", "answer"],
+          },
+        },
       },
       required: ["title"],
     },
@@ -159,6 +170,7 @@ Constraints:
 - Do NOT change the post's topic or category unless an issue explicitly demands it.
 - Keep the same approximate length (within +/- 25%).
 - Maintain the post's tone and Sacramento-local framing.
+- If an issue is about a frontmatter FAQ answer, update that answer in frontmatter.faqs and keep each question string unchanged. Do not add a Frequently Asked Questions section to the markdown body. If no issue mentions an FAQ, return frontmatter.faqs unchanged.
 ${linkRules}
 ${accuracyRules}`;
 }
@@ -170,7 +182,45 @@ interface RawRewriteFrontmatter {
   category?: unknown;
   tags?: unknown;
   date?: unknown;
+  faqs?: unknown;
   [key: string]: unknown;
+}
+
+interface FaqEntry {
+  question: string;
+  answer: string;
+}
+
+function asFaqList(raw: unknown): FaqEntry[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: FaqEntry[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const question = (entry as { question?: unknown }).question;
+    const answer = (entry as { answer?: unknown }).answer;
+    if (typeof question !== "string" || !question.trim()) return null;
+    if (typeof answer !== "string" || !answer.trim()) return null;
+    out.push({ question: question.trim(), answer: answer.trim() });
+  }
+  return out;
+}
+
+/** Apply revised answers only when every question string is unchanged. */
+function mergeFaqAnswers(original: unknown, revised: unknown): FaqEntry[] | null {
+  const prev = asFaqList(original);
+  const next = asFaqList(revised);
+  if (!prev || !next || prev.length !== next.length) return null;
+  if (prev.some((entry, i) => entry.question !== next[i]!.question)) return null;
+  return prev.map((entry, i) => ({ question: entry.question, answer: next[i]!.answer }));
+}
+
+function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<{ message: string; suggestion: string; location?: string }>; suggestions: readonly string[]; summary: string }): boolean {
+  const text = [
+    ...review.issues.flatMap((issue) => [issue.message, issue.suggestion, issue.location ?? ""]),
+    ...review.suggestions,
+    review.summary,
+  ].join("\n");
+  return /\bfaqs?\b/i.test(text);
 }
 interface RawRewrite {
   frontmatter?: unknown;
@@ -234,10 +284,12 @@ export async function rewriteBlogPost(args: RewriteBlogPostArgs): Promise<Rewrit
     throw new Error("Rewrite response missing required 'frontmatter' or 'markdown' fields");
   }
 
-  const frontmatter = mergeFrontmatter(
-    args.frontmatter,
-    parsed.frontmatter as RawRewriteFrontmatter,
-  );
+  const revisedFrontmatter = parsed.frontmatter as RawRewriteFrontmatter;
+  const frontmatter = mergeFrontmatter(args.frontmatter, revisedFrontmatter);
+  if (reviewAsksForFaqEdit(args.reviewFeedback)) {
+    const faqs = mergeFaqAnswers(args.frontmatter.faqs, revisedFrontmatter.faqs);
+    if (faqs) frontmatter.faqs = faqs;
+  }
   const markdown = parsed.markdown.trim();
   const changeNotes =
     typeof parsed.changeNotes === "string" && parsed.changeNotes.trim()
