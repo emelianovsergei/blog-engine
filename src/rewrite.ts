@@ -209,9 +209,13 @@ function mergeFaqAnswers(original: unknown, revised: unknown): Array<Record<stri
   const prev = readFaqEntries(original, false);
   const next = readFaqEntries(revised, true);
   if (!prev || !next || prev.length !== next.length) return null;
+  let changed = false;
   for (let i = 0; i < prev.length; i += 1) {
     if (String(prev[i]!.question).trim() !== String(next[i]!.question).trim()) return null;
+    const prevAnswer = typeof prev[i]!.answer === "string" ? prev[i]!.answer.trim() : "";
+    if (prevAnswer !== String(next[i]!.answer).trim()) changed = true;
   }
+  if (!changed) return null;
   return prev.map((entry, i) => ({
     ...entry,
     question: String(entry.question).trim(),
@@ -227,7 +231,7 @@ function reviewAsksForFaqEdit(review: { issues: ReadonlyArray<{ message: string;
     const blob = `${loc}\n${text}`;
     if (!/\bfaqs?\b/i.test(blob)) return false;
     const pointsAtFaq = /\bfaqs?\b/i.test(loc) || /\bfrontmatter\b/i.test(text);
-    const asksAnswer = /\banswer\b/i.test(text);
+    const asksAnswer = /\banswer\b/i.test(`${loc}\n${text}`);
     return pointsAtFaq && asksAnswer;
   });
 }
