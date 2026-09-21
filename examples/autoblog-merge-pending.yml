@@ -163,6 +163,7 @@ jobs:
                       pageInfo { hasNextPage }
                       nodes {
                         isResolved
+                        isOutdated
                         comments(first:20) {
                           nodes { author { login } body }
                         }
@@ -180,14 +181,14 @@ jobs:
             fi
             P0=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P0-|P0 Badge"; "i"))
               ] | length' <<<"$THREADS")
             P1=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P1-|P1 Badge"; "i"))
@@ -273,6 +274,7 @@ jobs:
                       pageInfo { hasNextPage }
                       nodes {
                         isResolved
+                        isOutdated
                         comments(first:20) {
                           nodes { author { login } body }
                         }
@@ -286,14 +288,14 @@ jobs:
             fi
             P0_NOW=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P0-|P0 Badge"; "i"))
               ] | length' <<<"$THREADS_NOW")
             P1_NOW=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false)
+                | select(.isResolved == false and .isOutdated == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P1-|P1 Badge"; "i"))
