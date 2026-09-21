@@ -235,13 +235,37 @@ jobs:
               continue
             fi
 
-            # Required checks only. Autoblog Codex Heal is a helper: a
-            # failed resolve (GITHUB_TOKEN FORBIDDEN) must not block a
-            # post whose Regression tests / Run tests already passed.
-            CHECKS_OUT=$(gh pr checks "$NUM" --required 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
-            if [ "$CHECKS_RC" -ne 0 ]; then
-              echo "PR #$NUM: skipped — required CI not green (gh pr checks --required rc=$CHECKS_RC)"
-              echo "$CHECKS_OUT" | head -20
+            # All checks except Autoblog Codex Heal (a helper: FORBIDDEN
+            # resolve must not block). --required is wrong here: repos
+            # without branch protection have no required contexts and gh
+            # exits 1 with "no required checks reported".
+            if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
+              echo "::warning::Could not read checks for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+            FAILING=$(jq -r '
+              [.statusCheckRollup[]?
+                | select((.workflowName // "") != "Autoblog Codex Heal")
+                | select((.name // "") != "")
+                | select((.conclusion // .state // "") as $s
+                    | $s == "FAILURE" or $s == "ERROR" or $s == "CANCELLED"
+                      or $s == "TIMED_OUT" or $s == "fail")
+                | .name] | unique | join(", ")' <<<"$ROLLUP")
+            PENDING=$(jq -r '
+              [.statusCheckRollup[]?
+                | select((.workflowName // "") != "Autoblog Codex Heal")
+                | select((.name // "") != "")
+                | select((.conclusion // "") == "")
+                | select((.status // .state // "") as $s
+                    | $s == "IN_PROGRESS" or $s == "QUEUED" or $s == "PENDING")
+                | .name] | length' <<<"$ROLLUP")
+            if [ -n "$FAILING" ]; then
+              echo "PR #$NUM: skipped — CI not green: $FAILING"
+              continue
+            fi
+            if [ "${PENDING:-0}" -gt 0 ]; then
+              echo "PR #$NUM: skipped — $PENDING check(s) still running"
               continue
             fi
 

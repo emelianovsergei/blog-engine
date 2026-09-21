@@ -169,11 +169,15 @@ jobs:
 
           FINDINGS=$(jq -c --arg h "$HEAD" '
             [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-              | select(.isResolved == false and .isOutdated == false)
+              | select(.isResolved == false)
               | . as $t
               | .comments.nodes[0]?
               | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
               | select(.body | test("badge/P0-|P0 Badge|badge/P1-|P1 Badge"; "i"))
+              | select(
+                  ($t.isOutdated != true)
+                  or (.body | test("badge/P0-|P0 Badge"; "i"))
+                )
               | {
                   threadId: $t.id,
                   databaseId,
