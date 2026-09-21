@@ -287,8 +287,9 @@ function issueRequestsFaqAnswerEdit(issue: FaqIssue): boolean {
   if (!pointsAtFaqField && !mentionsFaqAnswer) return false;
   const doNotChangeFaq = /\b(do not|don't|never)\s+(?:change|edit|update|touch)\b[^.]*\bfaq\b/i.test(text);
   if (doNotChangeFaq && !pointsAtFaqField) return false;
-  const bodyOnly = /\b(correct|fix|change|update|edit)\s+the\s+body\b/i.test(issue.suggestion) && !/\bfaq\b/i.test(issue.suggestion);
-  if (bodyOnly && !pointsAtFaqField) return false;
+  const editsProse = /\b(correct|fix|change|update|edit|revise)\b[^.]*\b(body|paragraph|section|markdown)\b/i.test(issue.suggestion);
+  const editsFaq = /\b(correct|fix|change|update|edit|revise)\b[^.]*\bfaq\b/i.test(issue.suggestion);
+  if (editsProse && !editsFaq && !pointsAtFaqField) return false;
   return true;
 }
 
