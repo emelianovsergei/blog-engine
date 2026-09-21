@@ -48,6 +48,12 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'blog/refresh-') ||
        startsWith(github.event.workflow_run.head_branch, 'blog/backfill-'))
     runs-on: ubuntu-latest
+    env:
+      # Checkout runs only for a link repair. Every other red CI still
+      # reports from this job, with no git directory. Without GH_REPO,
+      # `gh pr comment` dies with "not a git repository" and the PR never
+      # gets the label. The watchdog already guards the same failure.
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Resolve the pull request for this branch
         id: pr

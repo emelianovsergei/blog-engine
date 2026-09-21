@@ -165,7 +165,10 @@ jobs:
             echo "::warning::Could not find any merged autoblog PR"
           else
             LAST_TS=$(date -u -d "$LAST_ISO" +%s)
-            CUTOFF=$(date -u -d "${DELIVERY_STALE_DAYS} days ago" +%s)
+            # Floor to the start of that UTC day. The 18:00Z cron often
+            # starts after 20:00Z (2026-09-20 ran at 20:19Z). A rolling
+            # timestamp then drops a delivery from the first calendar day.
+            CUTOFF=$(date -u -d "$(date -u -d "${DELIVERY_STALE_DAYS} days ago" +%Y-%m-%d) 00:00:00 UTC" +%s)
             echo "last_delivery=$(date -u -d "$LAST_ISO" +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
             if [ "$LAST_TS" -ge "$CUTOFF" ]; then
@@ -179,7 +182,9 @@ jobs:
           # Cadence: new-post merges in the window. Refresh (`blog/refresh-*`)
           # and backfill (`blog/backfill-*`) PRs carry the `autoblog` label for
           # the review gate but are not new posts, so they are excluded here.
-          WINDOW_CUTOFF=$(date -u -d "${WINDOW_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          # Same UTC-day floor as the stale cutoff above. A late runner must
+          # not push the first day's merge out of a 3-day window.
+          WINDOW_CUTOFF=$(date -u -d "${WINDOW_DAYS} days ago" +%Y-%m-%dT00:00:00Z)
           # gh's built-in --jq takes no --arg (see the stranded check below),
           # so filter the raw payload with real jq. A listing failure is an
           # error, not "zero posts": echoing 0 here would raise a false outage.

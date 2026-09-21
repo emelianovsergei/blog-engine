@@ -271,3 +271,99 @@ test("rewrite without a rubric keeps the pre-0.17 behaviour", async () => {
   });
   assert.match(result.markdown, /When to call a pro/);
 });
+
+const faqSet = [
+  { question: "Should I book same-day?", answer: "Use same-day if you smell burning." },
+  { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+];
+
+const faqReview: ReviewResult = {
+  ...failingReview,
+  issues: [
+    {
+      dimension: "contentQuality",
+      severity: "blocker",
+      message: "The FAQ answer for a burning smell only says to book same-day.",
+      suggestion: "Tell the reader to shut the system off at the breaker, and to leave and call 911 if they see smoke.",
+      location: "frontmatter.faqs",
+    },
+  ],
+  summary: "The FAQ answer is missing the shutoff line.",
+};
+
+test("a FAQ-answer issue updates that answer and keeps the questions", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [
+          {
+            question: "Should I book same-day?",
+            answer:
+              "If you smell burning and see no smoke, shut the system off at the breaker. If you see smoke, leave and call 911.",
+          },
+          { question: "How much does AC cost to fix?", answer: "It depends on the part." },
+        ],
+      },
+      markdown,
+      changeNotes: "Updated the burning-smell FAQ answer.",
+    },
+  });
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: faqReview,
+  });
+  const out = result.frontmatter.faqs as Array<{ question: string; answer: string }>;
+  assert.equal(out[0]?.question, "Should I book same-day?");
+  assert.match(out[0]?.answer ?? "", /breaker/);
+  assert.match(out[0]?.answer ?? "", /911/);
+  assert.equal(out[1]?.question, "How much does AC cost to fix?");
+  assert.equal(out[1]?.answer, "It depends on the part.");
+  assert.doesNotMatch(result.markdown, /Frequently Asked Questions/i);
+});
+
+test("an issue that does not mention FAQs leaves faqs untouched", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: "New title that is long enough for the schema",
+        faqs: [{ question: "Changed?", answer: "Changed." }],
+      },
+      markdown: "# New\n\nBody.",
+      changeNotes: "Expanded the description only.",
+    },
+  });
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: failingReview,
+  });
+  assert.deepEqual(result.frontmatter.faqs, faqSet);
+  assert.equal(result.frontmatter.title, "New title that is long enough for the schema");
+});
+
+test("a FAQ issue that changes the question text does not replace faqs", async () => {
+  const gemini = makeFakeGemini({
+    candidatesJson: {
+      frontmatter: {
+        title: frontmatter.title,
+        faqs: [{ question: "A different question?", answer: "Shut the breaker off and call 911 if you see smoke." }],
+      },
+      markdown,
+      changeNotes: "Rewrote the FAQ question.",
+    },
+  });
+  const result = await rewriteBlogPost({
+    gemini,
+    config: sampleConfig,
+    frontmatter: { ...frontmatter, faqs: faqSet },
+    markdown,
+    reviewFeedback: faqReview,
+  });
+  assert.deepEqual(result.frontmatter.faqs, faqSet);
+});
