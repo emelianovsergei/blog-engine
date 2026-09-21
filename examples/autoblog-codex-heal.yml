@@ -243,6 +243,10 @@ jobs:
           echo "codex_on_head=$CODEX_ON_HEAD plus1_on_head_comment=$PLUS1_ON_HEAD"
           if [ "${CODEX_ON_HEAD:-0}" -gt 0 ] || [ "${PLUS1_ON_HEAD:-0}" -gt 0 ]; then
             echo "action=resolve" >> "$GITHUB_OUTPUT"
+          elif [ -z "${COMMENT_IDS//[$'\n\t ']}" ]; then
+            # Head moved (AI auto-fix, human push) after the last @codex
+            # review request. Ask again or merge-pending waits forever.
+            echo "action=rerequest" >> "$GITHUB_OUTPUT"
           else
             echo "action=wait" >> "$GITHUB_OUTPUT"
           fi
@@ -283,6 +287,15 @@ jobs:
       - name: Skip
         if: steps.decide.outputs.action == 'wait' || steps.decide.outputs.action == 'noop'
         run: echo "PR #$PR action=${{ steps.decide.outputs.action }} — nothing to push."
+
+      - name: Re-request Codex on the current head
+        if: steps.decide.outputs.action == 'rerequest'
+        env:
+          HEAD: ${{ steps.decide.outputs.head }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --body "$(printf '@codex review\n\n<!-- autoblog-codex-heal-head: %s -->' "$HEAD")"
+          echo "Asked Codex to review $HEAD — waiting for the next review event."
 
       - name: Record heal run toward cap
         if: steps.decide.outputs.action == 'fix'

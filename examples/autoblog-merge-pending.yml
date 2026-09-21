@@ -263,7 +263,55 @@ jobs:
               continue
             fi
 
-            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels re-verified — marking ready + squash-merging."
+            # Codex can leave a P0/P1 after the earlier thread snapshot
+            # without moving HEAD, so --match-head-commit would still merge.
+            if ! THREADS_NOW=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!) {
+                repository(owner:$owner, name:$name) {
+                  pullRequest(number:$num) {
+                    reviewThreads(first:100) {
+                      pageInfo { hasNextPage }
+                      nodes {
+                        isResolved
+                        comments(first:20) {
+                          nodes { author { login } body }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' -f owner="$OWNER" -f name="$REPO" -F num="$NUM"); then
+              echo "PR #$NUM: skipped — could not re-read Codex threads immediately before merge"
+              continue
+            fi
+            P0_NOW=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P0-|P0 Badge"; "i"))
+              ] | length' <<<"$THREADS_NOW")
+            P1_NOW=$(jq -r '
+              [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
+                | select(.isResolved == false)
+                | .comments.nodes[]?
+                | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                | select(.body | test("badge/P1-|P1 Badge"; "i"))
+              ] | length' <<<"$THREADS_NOW")
+            if [ "${P0_NOW:-0}" -gt 0 ]; then
+              echo "::warning::PR #$NUM: skipped — $P0_NOW unresolved Codex P0 arrived after the earlier snapshot"
+              continue
+            fi
+            HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
+            case "$HOLD_P1" in true|1|yes)
+              if [ "${P1_NOW:-0}" -gt 0 ]; then
+                echo "::warning::PR #$NUM: skipped — $P1_NOW unresolved Codex P1 arrived after the earlier snapshot"
+                continue
+              fi
+              ;;
+            esac
+
+            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels and Codex threads re-verified — marking ready + squash-merging."
             # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
             # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
             # mutation and the `gh pr ready` fallback use the PAT. The node-id
