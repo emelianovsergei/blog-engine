@@ -179,9 +179,12 @@ jobs:
               echo "PR #$NUM: skipped — more than 100 review threads (fail-closed P0/P1 hold)"
               continue
             fi
+            # P0 always blocks, including outdated threads, until resolved
+            # or Codex re-reviews the new head. P1 outdated after a rewrite
+            # is the auto-heal success path and must not hold.
             P0=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false and .isOutdated == false)
+                | select(.isResolved == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P0-|P0 Badge"; "i"))
@@ -232,9 +235,12 @@ jobs:
               continue
             fi
 
-            CHECKS_OUT=$(gh pr checks "$NUM" 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
+            # Required checks only. Autoblog Codex Heal is a helper: a
+            # failed resolve (GITHUB_TOKEN FORBIDDEN) must not block a
+            # post whose Regression tests / Run tests already passed.
+            CHECKS_OUT=$(gh pr checks "$NUM" --required 2>&1) && CHECKS_RC=0 || CHECKS_RC=$?
             if [ "$CHECKS_RC" -ne 0 ]; then
-              echo "PR #$NUM: skipped — CI not green (gh pr checks rc=$CHECKS_RC)"
+              echo "PR #$NUM: skipped — required CI not green (gh pr checks --required rc=$CHECKS_RC)"
               echo "$CHECKS_OUT" | head -20
               continue
             fi
@@ -288,7 +294,7 @@ jobs:
             fi
             P0_NOW=$(jq -r '
               [.data.repository.pullRequest.reviewThreads.nodes[]? // empty
-                | select(.isResolved == false and .isOutdated == false)
+                | select(.isResolved == false)
                 | .comments.nodes[]?
                 | select((.author.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
                 | select(.body | test("badge/P0-|P0 Badge"; "i"))
