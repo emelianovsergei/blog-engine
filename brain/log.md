@@ -8,6 +8,16 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-22] Merge-pending ignores a superseded CANCELLED check
+
+Promax #308 stayed open because the rollup held a CANCELLED `review`
+beside a SUCCESS `review` three seconds later, both from Autoblog AI
+Review. The gate counted the cancelled run as CI not green. The match key is check type + workflow name + check name, and the
+passing run must have started later than the cancellation. A success
+from a different workflow does not hide a cancelled run. A newer
+cancellation still fails. A FAILURE of the same key still fails.
+[[concepts/delivery-guarantee]].
+
 ## [2026-09-22] Codex-heal Skip step keeps the PR echo in a block scalar
 
 A one-line `run:` value treats `#` as a YAML comment. `echo "PR #$PR ..."`
