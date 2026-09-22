@@ -239,9 +239,11 @@ jobs:
             # ignored. CheckRun uses name/conclusion/status; StatusContext
             # uses context/state. Unknown terminal conclusions fail. Zero
             # remaining checks fail (same as old gh pr checks).
-            # A CANCELLED check is ignored when the same name already
-            # passed. GitHub keeps the superseded run in the rollup.
-            # A FAILURE still fails beside a later SUCCESS.
+            # A CANCELLED check is ignored when the same workflow and
+            # check name already passed. The match key is check type +
+            # workflowName + name, so two workflows that both expose a
+            # job called review stay distinct. A FAILURE still fails
+            # beside a later SUCCESS of that same key.
             if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
               echo "::warning::Could not read checks for #$NUM; leaving for next run."
               FAILED=1
@@ -263,11 +265,13 @@ jobs:
               def skip:
                 ((.conclusion // "") as $s
                   | $s == "SKIPPED" or $s == "NEUTRAL" or $s == "skipping");
+              def matchkey:
+                ((.__typename // "") + "\u001f" + (.workflowName // "") + "\u001f" + ident);
               [.statusCheckRollup[]? | select(ident != "") | select(helper | not)] as $c
-              | [$c[] | select(pass) | ident] | unique as $passed
+              | [$c[] | select(pass) | matchkey] | unique as $passed
               | [$c[] | select(
                   . as $item
-                  | ($item | ident) as $n
+                  | ($item | matchkey) as $n
                   | ((($item.conclusion // "") == "CANCELLED") and ($passed | index($n) != null))
                   | not
                 )] as $live
