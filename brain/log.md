@@ -3,10 +3,16 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-09-21"
+timestamp: "2026-09-22"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-22] Codex-heal Skip step keeps the PR echo in a block scalar
+
+A one-line `run:` value treats `#` as a YAML comment. `echo "PR #$PR ..."`
+became `echo "PR` and failed the noop/wait path on Pulse and Promax.
+[[concepts/delivery-guarantee]].
 
 ## [2026-09-21] Text defaults move to grok-4.7
 

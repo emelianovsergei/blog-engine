@@ -292,9 +292,13 @@ jobs:
           done
           gh pr comment "$PR" --body "Codex re-reviewed \`${HEAD:0:10}\` with no new P0/P1. Resolved the previous P0/P1 threads so merge-pending can ship. P2 nits left open."
 
+      # A one-line run: value treats # as a YAML comment and truncates this echo.
       - name: Skip
         if: steps.decide.outputs.action == 'wait' || steps.decide.outputs.action == 'noop'
-        run: echo "PR #$PR action=${{ steps.decide.outputs.action }} — nothing to push."
+        env:
+          ACTION: ${{ steps.decide.outputs.action }}
+        run: |
+          echo "PR #${PR} action=${ACTION} — nothing to push."
 
       - name: Re-request Codex on the current head
         if: steps.decide.outputs.action == 'rerequest'

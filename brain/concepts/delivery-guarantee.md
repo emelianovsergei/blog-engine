@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (nine since Codex heal), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-21"
+timestamp: "2026-09-22"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -36,6 +36,8 @@ head-SHA pin, the label re-read, the `autoblog-link-repair-needed` skip, or the
 `actions: read` permission. Resynced verbatim from pulse-website in #20, which
 remains the convention (the templates carry pulse's real `--site`/`--business`
 values as the worked example).
+
+A one-line `run:` value treats `#` as a YAML comment, so an echo that prints a PR number stays in a block scalar. The Codex-heal `Skip` step failed both sites on 2026-09-22 when `echo "PR #$PR ..."` was cut to `echo "PR`.
 
 ## Persist before you gate
 
