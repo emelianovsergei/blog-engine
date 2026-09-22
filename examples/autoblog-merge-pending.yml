@@ -239,11 +239,9 @@ jobs:
             # ignored. CheckRun uses name/conclusion/status; StatusContext
             # uses context/state. Unknown terminal conclusions fail. Zero
             # remaining checks fail (same as old gh pr checks).
-            # A CANCELLED check is ignored when the same workflow and
-            # check name already passed. The match key is check type +
-            # workflowName + name, so two workflows that both expose a
-            # job called review stay distinct. A FAILURE still fails
-            # beside a later SUCCESS of that same key.
+            # A CANCELLED check is ignored only when a passing run of
+            # the same check type, workflowName, and name started later.
+            # A newer cancellation still fails. A FAILURE still fails.
             if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
               echo "::warning::Could not read checks for #$NUM; leaving for next run."
               FAILED=1
@@ -267,12 +265,16 @@ jobs:
                   | $s == "SKIPPED" or $s == "NEUTRAL" or $s == "skipping");
               def matchkey:
                 ((.__typename // "") + "\u001f" + (.workflowName // "") + "\u001f" + ident);
+              def stamp: (.startedAt // .completedAt // "");
               [.statusCheckRollup[]? | select(ident != "") | select(helper | not)] as $c
-              | [$c[] | select(pass) | matchkey] | unique as $passed
+              | [$c[] | select(pass) | {key: matchkey, stamp: stamp}] as $passes
               | [$c[] | select(
                   . as $item
                   | ($item | matchkey) as $n
-                  | ((($item.conclusion // "") == "CANCELLED") and ($passed | index($n) != null))
+                  | ($item | stamp) as $ts
+                  | ((($item.conclusion // "") == "CANCELLED")
+                      and ($ts != "")
+                      and ([$passes[] | select(.key == $n and .stamp > $ts)] | length > 0))
                   | not
                 )] as $live
               | if ($live | length) == 0 then {empty:true, fail:[], pending:[]}
