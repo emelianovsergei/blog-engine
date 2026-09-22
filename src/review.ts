@@ -17,7 +17,7 @@ import type {
   GeminiLike,
 } from "./types.js";
 
-export const DEFAULT_REVIEW_MODEL = "grok-4.6";
+export const DEFAULT_REVIEW_MODEL = "grok-4.7";
 
 export type ReviewDimension =
   | "contentQuality"
@@ -117,7 +117,7 @@ export interface ReviewBlogPostArgs {
   markdown: string;
   /** Optional published-post list — included in the prompt as duplication context. */
   existingPosts?: ExistingPostLike[];
-  /** Defaults to `grok-4.6`. */
+  /** Defaults to `grok-4.7`. */
   model?: string;
   /** Overrides the default gate (testing / forced-strict mode). */
   gate?: ReviewGate;

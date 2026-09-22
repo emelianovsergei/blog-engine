@@ -9,7 +9,7 @@
  *     [--howto-shape steps|nested] [--now YYYY-MM-DD] [--link-policy policy.json] \
  *     [--audit-out audit.json] [--notes-out notes.md] [--result-out result.json] \
  *     [--required-headings "A|B"] [--faq-policy appended-by-code|written-by-model] \
- *     [--model grok-4.6] [--no-link-audit]
+ *     [--model grok-4.7] [--no-link-audit]
  *
  * `--queries` is a JSON array of {query, impressions, position} (the page's
  * rows from loadGscPageSignal). `--howto-shape` picks how HowTo is written:
@@ -33,7 +33,7 @@ function usage(): string {
                             [--howto-shape steps|nested] [--now YYYY-MM-DD] [--link-policy policy.json] \\
                             [--audit-out audit.json] [--notes-out notes.md] [--result-out result.json] \\
                             [--required-headings "A|B"] [--faq-policy appended-by-code|written-by-model] \\
-                            [--model grok-4.6] [--no-link-audit]`;
+                            [--model grok-4.7] [--no-link-audit]`;
 }
 
 async function main(): Promise<number> {

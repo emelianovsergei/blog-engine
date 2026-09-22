@@ -12,7 +12,7 @@
  * `GEMINI_API_KEY` is set the script falls back to deterministic generation
  * from JSDoc so `wiki:ingest` still works offline and in CI.
  *
- *   Model override:  WIKI_INGEST_MODEL   (default "grok-4.6")
+ *   Model override:  WIKI_INGEST_MODEL   (default "grok-4.7")
  */
 import fs from "fs";
 import path from "path";
@@ -38,7 +38,7 @@ const MODULES_DIR = path.join(BRAIN_DIR, "modules");
 const CONCEPTS_DIR = path.join(BRAIN_DIR, "concepts");
 const REPORTS_DIR = path.join(BRAIN_DIR, "reports");
 const SRC_DIR = path.join(ROOT, "src");
-const MODEL = process.env.WIKI_INGEST_MODEL || "grok-4.6";
+const MODEL = process.env.WIKI_INGEST_MODEL || "grok-4.7";
 const TODAY = new Date().toISOString().split("T")[0]!;
 /** `--force` regenerates every page even when its source is unchanged — use it
  * to re-enrich existing pages with a better model after the source has settled. */

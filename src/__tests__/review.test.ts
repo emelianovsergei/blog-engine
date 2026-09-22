@@ -105,7 +105,7 @@ test("passes a well-formed post when all scores are above the floor", async () =
   assert.ok(result.overallScore > 8 && result.overallScore < 9);
   assert.equal(result.scores.length, 4);
   assert.match(result.thresholdReasoning, /Passed/);
-  assert.equal(result.modelUsed, "grok-4.6");
+  assert.equal(result.modelUsed, "grok-4.7");
 });
 
 test("fails when any dimension drops below the per-dimension floor", async () => {

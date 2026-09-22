@@ -5,11 +5,11 @@
  * script is the only place adapter behavior meets actual Grok:
  *
  *   1. discovery   GET /v1/language-models — which models/aliases this key
- *                  can reach; PASS iff grok-4.6 resolves ("find grok").
+ *                  can reach; PASS iff grok-4.7 resolves ("find grok").
  *   2. plain text  small completion, asserts non-empty text.
  *   3. JSON mode   the production reviewSchema, asserts required fields.
  *   4. truncation  tiny max_tokens, asserts the finish_reason=length throw.
- *   5. param probe informational: does a non-grok-4.5/4.6 model reject or
+ *   5. param probe informational: does a non-grok-4.5/4.6/4.7 model reject or
  *                  ignore reasoning_effort? Exercises the adaptive retry.
  *   6. image       grok-imagine-image-2.0 returns decodable JPEG bytes.
  *
@@ -23,7 +23,7 @@ import { reviewSchema } from "../src/review.js";
 
 const API_KEY = process.env.XAI_API_KEY;
 const MODELS_URL = "https://api.x.ai/v1/language-models";
-const PRIMARY_MODEL = "grok-4.6";
+const PRIMARY_MODEL = "grok-4.7";
 
 interface SmokeResult {
   name: string;
@@ -140,12 +140,12 @@ async function smokeImage(): Promise<SmokeResult> {
 }
 
 async function smokeParamProbe(models: LanguageModel[]): Promise<SmokeResult> {
-  const name = "reasoning_effort probe (non-4.5/4.6)";
+  const name = "reasoning_effort probe (non-4.5/4.6/4.7)";
   const target = models
     .map((m) => m.id)
-    .find((id): id is string => Boolean(id) && !/^grok-4\.[56]/.test(id!));
+    .find((id): id is string => Boolean(id) && !/^grok-4\.[567]/.test(id!));
   if (!target) {
-    return { name, status: "SKIP", detail: "no non-grok-4.5/4.6 model available to this key" };
+    return { name, status: "SKIP", detail: "no non-grok-4.5/4.6/4.7 model available to this key" };
   }
   // Record request bodies + response statuses (never headers) to report
   // empirically whether xAI rejects or ignores the param — the docs are silent.

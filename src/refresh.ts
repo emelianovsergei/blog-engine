@@ -22,7 +22,7 @@ import type { BlogPostFrontmatter } from "./review.js";
 import { DEFAULT_RUBRIC_CONSTRAINTS, countWords, hasExactH2, hasFaqHeading, stripFencedCode, type RubricConstraints } from "./rubric.js";
 import type { EngineConfig, GeminiLike } from "./types.js";
 
-export const DEFAULT_REFRESH_MODEL = "grok-4.6";
+export const DEFAULT_REFRESH_MODEL = "grok-4.7";
 
 export type RefreshField = "summary" | "faqs" | "targetKeyword" | "keywords" | "citations" | "howTo";
 export const ALL_REFRESH_FIELDS: readonly RefreshField[] = [

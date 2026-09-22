@@ -15,7 +15,7 @@ import {
 import type { FetchLike } from "./suggest.js";
 import type { GeminiLike } from "./types.js";
 
-export const DEFAULT_KEYWORD_MODEL = "grok-4.6";
+export const DEFAULT_KEYWORD_MODEL = "grok-4.7";
 
 export type SearchIntent = "informational" | "commercial" | "local";
 
