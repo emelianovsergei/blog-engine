@@ -8,6 +8,13 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-22] Merge-pending ignores a superseded CANCELLED check
+
+Promax #308 stayed open because the rollup held a CANCELLED `review`
+beside a SUCCESS `review` three seconds later. The gate counted the
+cancelled run as CI not green. A FAILURE next to a SUCCESS still fails.
+[[concepts/delivery-guarantee]].
+
 ## [2026-09-22] Codex-heal Skip step keeps the PR echo in a block scalar
 
 A one-line `run:` value treats `#` as a YAML comment. `echo "PR #$PR ..."`

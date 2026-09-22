@@ -239,6 +239,9 @@ jobs:
             # ignored. CheckRun uses name/conclusion/status; StatusContext
             # uses context/state. Unknown terminal conclusions fail. Zero
             # remaining checks fail (same as old gh pr checks).
+            # A CANCELLED check is ignored when the same name already
+            # passed. GitHub keeps the superseded run in the rollup.
+            # A FAILURE still fails beside a later SUCCESS.
             if ! ROLLUP=$(gh pr view "$NUM" --json statusCheckRollup); then
               echo "::warning::Could not read checks for #$NUM; leaving for next run."
               FAILED=1
@@ -261,11 +264,18 @@ jobs:
                 ((.conclusion // "") as $s
                   | $s == "SKIPPED" or $s == "NEUTRAL" or $s == "skipping");
               [.statusCheckRollup[]? | select(ident != "") | select(helper | not)] as $c
-              | if ($c | length) == 0 then {empty:true, fail:[], pending:[]}
+              | [$c[] | select(pass) | ident] | unique as $passed
+              | [$c[] | select(
+                  . as $item
+                  | ($item | ident) as $n
+                  | ((($item.conclusion // "") == "CANCELLED") and ($passed | index($n) != null))
+                  | not
+                )] as $live
+              | if ($live | length) == 0 then {empty:true, fail:[], pending:[]}
                 else {
                   empty:false,
-                  fail: [$c[] | select(pending | not) | select(pass | not) | select(skip | not) | ident],
-                  pending: [$c[] | select(pending) | ident]
+                  fail: [$live[] | select(pending | not) | select(pass | not) | select(skip | not) | ident],
+                  pending: [$live[] | select(pending) | ident]
                 } end
             ' <<<"$ROLLUP")
             if [ "$(jq -r .empty <<<"$CLASS")" = "true" ]; then
