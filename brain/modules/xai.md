@@ -48,4 +48,4 @@ xAI Grok Imagine image generation. Separate endpoint and model family from chat 
 
 ## Custom Notes
 
-*Add any developer notes, usage examples, or design decisions here. They will be preserved across ingestion runs.*
+`grok-4.7` text calls send `reasoning_effort: high`. Every other model stays at low. A high-effort chat call waits 360 seconds. A 180-second abort is not retried, and the composite client then serves Claude. Live pins: Pulse `v0.17.2`, PRO MAX `v0.15.2`. Main package `v0.18.1` has the same behavior.

@@ -40,7 +40,7 @@ every repo provisioned from it.
 | 0.15.0 | 2026-08 | both | search-demand signal made real |
 | 0.16.0 | 2026-08-19 | — (never pinned) | `gsc.ts` client, unused by consumers |
 | 0.17.0 | 2026-09-06 | pending | GSC-seeded candidates, refresh/backfill mode, rubric-aware rewrite guard, broad FAQ-heading + exact-H2 checks |
-| 0.18.1 | 2026-09-23 | tag after merge | grok-4.7 text calls use reasoning effort high. Pulse ships the same change as 0.17.2. Promax ships it as 0.15.2. |
+| 0.18.1 | 2026-09-23 | Pulse `v0.17.2`, PRO MAX `v0.15.2` | grok-4.7 text calls use reasoning effort high. Pins merged 2026-09-23. |
 
 ## Custom Notes
 
