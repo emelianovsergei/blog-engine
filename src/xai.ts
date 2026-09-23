@@ -76,10 +76,14 @@ export interface GrokAdapterOptions {
 const EMIT_SCHEMA_NAME = "emit_result";
 const DEFAULT_MAX_TOKENS = 16384;
 const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
-// Long enough for a 16k-token rewrite at reasoning_effort=low; short enough
-// that a hung xAI socket fails over to Claude instead of burning a CI runner.
-// Timeouts are *not* retried on the same provider (see isTransientError).
+// 180s fits a low-effort rewrite. grok-4.7 at high effort needs longer:
+// a timeout is not retried, and the composite client then serves Claude.
 const REQUEST_TIMEOUT_MS = 180_000;
+const HIGH_EFFORT_TIMEOUT_MS = 360_000;
+
+function reasoningEffortFor(model: string): "low" | "high" {
+  return model === "grok-4.7" ? "high" : "low";
+}
 
 interface GenConfig {
   responseMimeType?: string;
@@ -109,12 +113,11 @@ export function grokAdapter(opts: GrokAdapterOptions): GeminiLike {
           max_tokens: maxTokens,
           messages: [{ role: "user", content: promptText }],
         };
-        // Behavioral probe: the xAI models API exposes no capability flags.
-        // grok-4.5, grok-4.6, and grok-4.7 accept reasoning_effort (4.7
-        // confirmed 2026-09-21). Send low by default and learn from a
-        // rejection (below) instead of hardcoding a model list.
+        // grok-4.7 writes the live posts and runs at high effort. Every
+        // other model stays at low. A 4xx that names the parameter strips
+        // it and retries once (below).
         if (!reasoningEffortUnsupported.has(req.model)) {
-          body.reasoning_effort = "low";
+          body.reasoning_effort = reasoningEffortFor(req.model);
         }
         if (wantsJson) {
           body.response_format = {
@@ -189,7 +192,9 @@ export async function createGrokClient(opts: {
           "content-type": "application/json",
         },
         body: JSON.stringify(req),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(
+          req.reasoning_effort === "high" ? HIGH_EFFORT_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+        ),
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => "");

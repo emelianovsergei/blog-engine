@@ -3,10 +3,14 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-09-22"
+timestamp: "2026-09-23"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-23] grok-4.7 uses reasoning effort high
+
+Text calls for model `grok-4.7` send `reasoning_effort: high`. Every other model stays at low. A high-effort chat call waits up to 360s before the client gives up. A 180s abort would fall through to Claude and drop the Grok draft. Releases: 0.18.1 on main, 0.17.2 on the Pulse pin line, 0.15.2 on the Promax pin line.
 
 ## [2026-09-22] Merge-pending ignores a superseded CANCELLED check
 
