@@ -47,6 +47,20 @@ test("plain-text call maps string contents to a user message with reasoning_effo
   assert.equal(capture[0]!.response_format, undefined);
 });
 
+test("grok-4.7 sends reasoning_effort high", async () => {
+  const capture: XaiChatRequest[] = [];
+  const client = makeFakeXai(
+    () => ({ choices: [{ message: { content: "ok" } }] }),
+    capture,
+  );
+  const adapter = grokAdapter({ client });
+
+  await adapter.models.generateContent({ model: "grok-4.7", contents: "write the post" });
+
+  assert.equal(capture.length, 1);
+  assert.equal(capture[0]!.reasoning_effort, "high");
+});
+
 test("reasoning_effort is sent by default for any grok model", async () => {
   const capture: XaiChatRequest[] = [];
   const client = makeFakeXai(
@@ -303,6 +317,24 @@ test("createGrokClient posts to chat completions with the bearer token", async (
   assert.equal(headers.get("authorization"), "Bearer test-key");
   const body = JSON.parse(String(calls[0]!.init.body)) as { reasoning_effort: string };
   assert.equal(body.reasoning_effort, "low");
+});
+
+test("createGrokClient sends reasoning_effort high for grok-4.7", async () => {
+  const { createGrokClient } = await import("../xai.js");
+  const calls: Array<{ init: RequestInit }> = [];
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    calls.push({ init: init ?? {} });
+    return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const adapter = await createGrokClient({ apiKey: "test-key", fetchImpl });
+  await adapter.models.generateContent({ model: "grok-4.7", contents: "write the post" });
+
+  const body = JSON.parse(String(calls[0]!.init.body)) as { reasoning_effort: string };
+  assert.equal(body.reasoning_effort, "high");
 });
 
 test("embedContent is unsupported on the Grok adapter", async () => {
