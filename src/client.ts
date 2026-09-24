@@ -21,11 +21,32 @@ import { createGrokClient } from "./xai.js";
 import type { GeminiLike } from "./types.js";
 
 const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
-const DEFAULT_CLAUDE_FALLBACK_MODEL = "claude-sonnet-5";
+const DEFAULT_CLAUDE_FALLBACK_MODEL = "claude-opus-5-5";
 const DEFAULT_RETRIES = 3;
 
-/** True for retryable upstream errors (rate limits, 5xx, model-overload signals). */
+const UNDICI_TIMEOUT_CODES = new Set([
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+function isAbortOrTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError" || error.name.endsWith("TimeoutError")) return true;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && UNDICI_TIMEOUT_CODES.has(code);
+}
+
+/**
+ * True for retryable upstream errors (rate limits, 5xx, model-overload signals).
+ * A timeout is not retryable. Node fetch reports AbortSignal.timeout and
+ * Undici's 300s headers deadline as `TypeError: fetch failed`, with the
+ * timeout error on `error.cause`.
+ */
 export function isTransientError(error: unknown): boolean {
+  if (isAbortOrTimeout(error)) return false;
+  const cause = error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  if (isAbortOrTimeout(cause)) return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
     /\b(429|500|502|503|504)\b/.test(message) ||
