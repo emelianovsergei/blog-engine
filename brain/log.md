@@ -8,6 +8,10 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-24] Undici header timeouts are not retried
+
+Node fetch can fail at Undici's 300s headers deadline with `HeadersTimeoutError` (`UND_ERR_HEADERS_TIMEOUT`) wrapped as `TypeError: fetch failed`. Body and connect timeouts use the same rule. Release 0.17.4.
+
 ## [2026-09-24] Grok timeout fails over to Opus 5.5
 
 A Grok chat abort surfaces as `TypeError: fetch failed` with a timeout cause. That error is not retried. The Grok-failure model is `claude-opus-5-5`. A plain `fetch failed` with no timeout cause still retries. Release 0.17.3.
