@@ -56,6 +56,17 @@ test("isTransientError treats fetch failures as retryable but not timeouts", () 
   const wrappedAbort = new TypeError("fetch failed");
   (wrappedAbort as { cause?: unknown }).cause = abort;
   assert.equal(isTransientError(wrappedAbort), false);
+
+  const headers = new Error("Headers Timeout Error");
+  headers.name = "HeadersTimeoutError";
+  (headers as { code?: string }).code = "UND_ERR_HEADERS_TIMEOUT";
+  const wrappedHeaders = new TypeError("fetch failed");
+  (wrappedHeaders as { cause?: unknown }).cause = headers;
+  assert.equal(isTransientError(wrappedHeaders), false);
+
+  const body = new Error("Body Timeout Error");
+  (body as { code?: string }).code = "UND_ERR_BODY_TIMEOUT";
+  assert.equal(isTransientError(body), false);
 });
 
 test("composite preserves prototype text getters when attaching the served model", async () => {
@@ -196,6 +207,32 @@ test("grok failure falls back to claude-opus-5-5 and does not retry a timeout", 
 
   assert.equal(xModels.length, 1);
   assert.equal(res.text, "claude:claude-opus-5-5");
+  assert.equal(res.model, "claude-opus-5-5");
+  assert.deepEqual(cModels, ["claude-opus-5-5"]);
+});
+
+test("undici headers timeout fails over once", async () => {
+  const xModels: string[] = [];
+  const cModels: string[] = [];
+  const xai = scriptedClient({
+    label: "grok",
+    failTimes: 99,
+    error: () => {
+      const cause = new Error("Headers Timeout Error");
+      cause.name = "HeadersTimeoutError";
+      (cause as { code?: string }).code = "UND_ERR_HEADERS_TIMEOUT";
+      const wrapped = new TypeError("fetch failed");
+      (wrapped as { cause?: unknown }).cause = cause;
+      return wrapped;
+    },
+    models: xModels,
+  });
+  const claude = scriptedClient({ label: "claude", models: cModels });
+  const client = createCompositeClient({ xai, claude, retries: 3, sleep: noSleep });
+
+  const res = await client.models.generateContent({ model: "grok-4.7", contents: "x" });
+
+  assert.equal(xModels.length, 1);
   assert.equal(res.model, "claude-opus-5-5");
   assert.deepEqual(cModels, ["claude-opus-5-5"]);
 });
