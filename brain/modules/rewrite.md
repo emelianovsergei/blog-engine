@@ -42,6 +42,6 @@ Asks Gemini to revise the post to address review feedback. Throws on empty respo
   `/autoblog rewrite` comment. Loop safety is CI-owned: `[autoblog-autofix]`
   marker commits are the attempt counter, capped by `AUTOBLOG_MAX_AUTOFIX`
   (default 2). See [[concepts/autofix-loop]].
-- Auto-fix invokes it with `--model claude-sonnet-5`; deployed pulse pins
-  opus for the manual rewrite path — keep those distinct when syncing
-  templates to consumer repos.
+- Consumer review, Codex heal, and manual rewrite workflows pass
+  `--model grok-4.7`. A timeout on that call is not retried. The client
+  then serves `claude-opus-5-5`.
