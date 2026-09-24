@@ -10,7 +10,7 @@ sources: []
 
 ## [2026-09-24] Grok timeout fails over to Opus 5.5
 
-A Grok chat abort surfaces as `TypeError: fetch failed` with a timeout cause. That error is not retried. The Grok-failure model is `claude-opus-5-5`. A plain `fetch failed` with no timeout cause still retries. Release 0.18.2.
+A Grok chat abort surfaces as `TypeError: fetch failed` with a timeout cause. That error is not retried. Undici header, body, and connect timeouts count: `HeadersTimeoutError` (`UND_ERR_HEADERS_TIMEOUT`), `BodyTimeoutError`, and `ConnectTimeoutError`. Node's header deadline is 300s, ahead of the 360s abort. The Grok-failure model is `claude-opus-5-5`. A plain `fetch failed` with no timeout cause still retries. Release 0.18.2.
 
 ## [2026-09-23] grok-4.7 uses reasoning effort high
 
