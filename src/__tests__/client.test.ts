@@ -49,6 +49,13 @@ test("isTransientError treats fetch failures as retryable but not timeouts", () 
   abort.name = "AbortError";
   assert.equal(isTransientError(abort), false);
   assert.equal(isTransientError(new Error("TypeError: fetch failed")), true);
+
+  const wrapped = new TypeError("fetch failed");
+  (wrapped as { cause?: unknown }).cause = timeout;
+  assert.equal(isTransientError(wrapped), false);
+  const wrappedAbort = new TypeError("fetch failed");
+  (wrappedAbort as { cause?: unknown }).cause = abort;
+  assert.equal(isTransientError(wrappedAbort), false);
 });
 
 test("composite preserves prototype text getters when attaching the served model", async () => {
@@ -165,6 +172,32 @@ test("grok with no xAI client falls back to Claude when configured", async () =>
   assert.equal(res.text, "claude:claude-sonnet-5");
   assert.equal(res.model, "claude-sonnet-5");
   assert.deepEqual(cModels, ["claude-sonnet-5"]);
+});
+
+test("grok failure falls back to claude-opus-5-5 and does not retry a timeout", async () => {
+  const xModels: string[] = [];
+  const cModels: string[] = [];
+  const xai = scriptedClient({
+    label: "grok",
+    failTimes: 99,
+    error: () => {
+      const cause = new Error("The operation was aborted due to timeout");
+      cause.name = "TimeoutError";
+      const wrapped = new TypeError("fetch failed");
+      (wrapped as { cause?: unknown }).cause = cause;
+      return wrapped;
+    },
+    models: xModels,
+  });
+  const claude = scriptedClient({ label: "claude", models: cModels });
+  const client = createCompositeClient({ xai, claude, retries: 3, sleep: noSleep });
+
+  const res = await client.models.generateContent({ model: "grok-4.7", contents: "x" });
+
+  assert.equal(xModels.length, 1);
+  assert.equal(res.text, "claude:claude-opus-5-5");
+  assert.equal(res.model, "claude-opus-5-5");
+  assert.deepEqual(cModels, ["claude-opus-5-5"]);
 });
 
 test("grok failure falls back to Claude before Gemini", async () => {

@@ -3,10 +3,14 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-08-19"
+timestamp: "2026-09-24"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-24] Grok timeout fails over to Opus 5.5
+
+A Grok chat abort surfaces as `TypeError: fetch failed` with a timeout cause. That error is not retried. The Grok-failure model is `claude-opus-5-5`. A plain `fetch failed` with no timeout cause still retries. Release 0.15.3.
 
 ## [2026-08-19] ingest | 5 module page(s) updated
 
