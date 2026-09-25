@@ -610,6 +610,14 @@ jobs:
             echo "reason=no commit on this branch carries the autoblog/finalized status" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Finalize builds on main alone, so every commit before it must be
+          # main's. A branch commit placed ahead of the finalize commit (say a
+          # wiki edit) would otherwise ride along unexamined.
+          if [ -n "$(git rev-list "${FINALIZE}^@" "^origin/${BASE}")" ]; then
+            echo "bound=false" >> "$GITHUB_OUTPUT"
+            echo "reason=commits that are not on ${BASE} precede the finalize commit ${FINALIZE:0:10}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # The PR may change nothing but finalize's own outputs. A handoff
           # commit carrying app, workflow or any other file must not ride on
           # the verdict.

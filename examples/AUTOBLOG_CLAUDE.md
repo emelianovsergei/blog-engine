@@ -28,6 +28,8 @@ merge.
 - **One post per run.** If `blog/claude-<today>` already exists on origin, stop
   and report — today is done.
 - **Commit only `data/blog-claude-inbox/`.** No other file in the repo changes.
+  Finalize runs `main`'s code and takes only the four inbox files from your
+  branch; any other change you push is dropped.
   Preview files from `check` are removed by `handoff`.
 - **Your network reaches GitHub and npm only.** Weather, Search Console, the
   sibling site and Autocomplete come from the brief; the live link audit and

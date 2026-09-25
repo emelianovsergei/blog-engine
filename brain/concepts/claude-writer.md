@@ -27,7 +27,7 @@ supplies the judgment: topics, prose, and the review verdict.
 | Check | session, `claude.ts check` | `assertPlan`, the topic lock, `checkArticleBody`, the link policy offline, then an offline run of the real generator and `blog:check --strict`. |
 | Second-pass review | a separate subagent | [[modules/review]] `reviewBlogPost` through the relay client. The subagent answers the exact prompt, and the engine parses the answer and applies `computeGate()`: every gating dimension ≥ 6.0, no blockers, overall ≥ 7.0, `humanVoice` advisory ([[concepts/quality-gates]]). Up to 2 fix rounds. A post that still fails is never discarded. |
 | Handoff | session | Pushes `data/blog-claude-inbox/{plan.json, body.md, meta.json, review.md}` to `blog/claude-<date>`. If its git proxy allows only the session's own `claude/*` branch, it pushes there. |
-| Finalize | `blog-finalize.yml` | The generator in external-plan mode. Image, [[modules/link-audit]] and unlink, frontmatter, `checkBlogPostSource` and the run report are unchanged. A `claude/*` handoff reuses `blog/claude-<date>` only when that branch was finalized from the same source branch (recorded in the `autoblog/finalized` status); otherwise it gets its own suffixed branch. Opens a draft PR labelled `autoblog` and `autoblog-claude-reviewed`, plus `autoblog-review-failed` when the review or the rule checks failed. |
+| Finalize | `blog-finalize.yml` | Checks out `main` and takes only the four inbox files from the handoff branch, so no code from that branch runs and the finalized branch is `main` plus one commit. The generator in external-plan mode. Image, [[modules/link-audit]] and unlink, frontmatter, `checkBlogPostSource` and the run report are unchanged. A `claude/*` handoff reuses `blog/claude-<date>` only when that branch was finalized from the same source branch (recorded in the `autoblog/finalized` status); otherwise it gets its own suffixed branch. Opens a draft PR labelled `autoblog` and `autoblog-claude-reviewed`, plus `autoblog-review-failed` when the review or the rule checks failed. |
 | Review gate | `autoblog-review.yml` | The `claude-reviewed` job applies `autoblog-approved-pending` on a pass, but only while the post's files are unchanged since the finalize commit (the one carrying the `autoblog/finalized` status that finalize sets), except for `[autoblog-cifix]` repairs. The wiki pages and run report finalize wrote are bound the same way (commits that came from main aside). Any other edit waits for a human to add `autoblog-human-approved`, which approves the exact head it is applied to. A `[autoblog-cifix]` commit counts only if it deleted link syntax and nothing else: a link's brackets and destination, a whole image, a URL alone in parentheses, or whole citation entries. The Grok review and [[concepts/autofix-loop]] skip these PRs, and so does [[concepts/codex-heal]]. [[concepts/ci-heal]] still applies. |
 
 ## Consumer contract
@@ -46,6 +46,10 @@ runbook the Routine follows.
 
 `claude.ts` mirrors `rankCandidates` and `pickBest` because [[modules/rank]]
 does not export them. Change the weights in both places, or export them.
+
+## Trust boundary
+
+The second-pass review runs inside the writing session, and its verdict travels in `meta.json` beside the content. The digest catches an edit made after the review. It cannot catch a session that forges its own verdict. Only a reviewer running outside the session could, which would mean an API-key review in CI. The session is trusted to run the review honestly; CI, the link audit and the human override are the backstops.
 
 ## Network
 

@@ -49,14 +49,32 @@ jobs:
       issues: write
 
     steps:
-      - name: Checkout the handoff branch
+      # Trusted code only. package.json, the generator and every script run
+      # from main; the handoff branch contributes nothing but the four inbox
+      # data files (next step). Anything else on it never executes here and
+      # never reaches the PR: the finalized branch is main + one commit.
+      - name: Checkout main
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.ref || github.ref_name }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           # GITHUB_TOKEN pushes (contents: write). The PR is opened with
           # AUTOBLOG_PAT below so CI and review fire on it.
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Take the handoff data from the source branch
+        env:
+          SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "+refs/heads/${SOURCE}:refs/remotes/origin/${SOURCE}"
+          echo "SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")" >> "$GITHUB_ENV"
+          rm -rf data/blog-claude-inbox
+          mkdir -p data/blog-claude-inbox
+          for F in plan.json body.md meta.json review.md; do
+            git show "origin/${SOURCE}:data/blog-claude-inbox/$F" > "data/blog-claude-inbox/$F" 2>/dev/null \
+              || rm -f "data/blog-claude-inbox/$F"
+          done
 
       - name: Resolve run
         id: run
@@ -193,20 +211,6 @@ jobs:
             echo "::warning::Handed-off plan/body digest ${ACTUAL:0:12} does not match the reviewed digest ${REVIEWED:-none} — treating the review as failed."
             echo mismatch > "$RUNNER_TEMP/review-digest"
           fi
-          # A revised handoff pushed onto an already-finalized branch replaces
-          # that branch's earlier post WHATEVER its slug: a revision may rename
-          # it, and keying on the new slug alone left the old post on the
-          # branch to publish beside its replacement. Every post, image, run
-          # report and wiki page this branch added relative to main goes before
-          # the generator runs. Nothing on main is touched; the generator
-          # refuses a slug that is already published.
-          BASE=$(git merge-base origin/main HEAD)
-          git diff --name-only --diff-filter=A "$BASE" HEAD -- \
-              content/blog public/images/blog data/blog-generation-runs brain/blog \
-            | while read -r F; do
-                echo "Removing this branch's earlier finalize output: $F"
-                rm -f "$F"
-              done
           npm run blog:generate
         env:
           # Images only: Grok Imagine, Pexels fallback. No text model is called.
@@ -262,15 +266,6 @@ jobs:
           UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
           RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
           RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
-          # The verdict covers the new post only. A branch that also edits or
-          # deletes a post or image already on main (e.g. inside the handoff
-          # commit) carries unreviewed content.
-          MB=$(git merge-base origin/main HEAD)
-          TOUCHED=$(git diff --name-only --diff-filter=MDR "$MB" -- content/blog public/images/blog || true)
-          if [ -n "$TOUCHED" ]; then
-            REVIEW_PASS=false
-            RULES="$(printf '%s\n%s' "- review: this branch also changes published files: $(echo "$TOUCHED" | tr '\n' ' ')" "$RULES" | sed '/^- none$/d')"
-          fi
           if [ "$(cat "$RUNNER_TEMP/review-digest" 2>/dev/null || echo mismatch)" != "match" ]; then
             REVIEW_PASS=false
             RULES="$(printf '%s\n%s' "- review: the handed-off plan/body are not the ones the session reviewed (digest mismatch)" "$RULES" | sed '/^- none$/d')"
@@ -334,7 +329,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git rm -rq data/blog-claude-inbox
+          rm -rf data/blog-claude-inbox
           git add data/blog-generation-runs/ content/blog/ public/images/blog/ brain/ 2>/dev/null || git add data/blog-generation-runs/ content/blog/ public/images/blog/
           git commit -q -m "Add Claude-written blog post for ${RUN_KEY}"
 
@@ -390,8 +385,12 @@ jobs:
             fi
           fi
 
+          # The finalized branch is main + this commit, replacing the handoff.
+          # When the session pushed straight to TARGET, replace it only while
+          # it still holds the handoff finalized here: a newer handoff pushed
+          # meanwhile has its own run queued and must not be overwritten.
           if [ "$SOURCE" = "$TARGET" ]; then
-            git push origin "HEAD:refs/heads/$TARGET"
+            git push --force-with-lease="refs/heads/${TARGET}:${SOURCE_SHA}" origin "HEAD:refs/heads/$TARGET"
           else
             git push --force origin "HEAD:refs/heads/$TARGET"
           fi
