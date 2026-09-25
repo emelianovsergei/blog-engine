@@ -148,14 +148,19 @@ jobs:
           # Keep the review text before the inbox is removed.
           cp data/blog-claude-inbox/review.md "$RUNNER_TEMP/claude-review.md" 2>/dev/null || true
           # A revised handoff pushed onto an already-finalized branch replaces
-          # that branch's own post. A post that is on main is never touched:
-          # the generator refuses its slug instead.
-          SLUG=$(jq -r '.slug // empty' data/blog-claude-inbox/plan.json)
-          if [ -n "$SLUG" ] && [ -f "content/blog/${SLUG}.mdx" ] \
-            && ! git cat-file -e "origin/main:content/blog/${SLUG}.mdx" 2>/dev/null; then
-            echo "Replacing this branch's earlier finalize of ${SLUG}."
-            rm -f "content/blog/${SLUG}.mdx" "public/images/blog/${SLUG}.jpg"
-          fi
+          # that branch's earlier post WHATEVER its slug: a revision may rename
+          # it, and keying on the new slug alone left the old post on the
+          # branch to publish beside its replacement. Every post, image, run
+          # report and wiki page this branch added relative to main goes before
+          # the generator runs. Nothing on main is touched; the generator
+          # refuses a slug that is already published.
+          BASE=$(git merge-base origin/main HEAD)
+          git diff --name-only --diff-filter=A "$BASE" HEAD -- \
+              content/blog public/images/blog data/blog-generation-runs brain/blog \
+            | while read -r F; do
+                echo "Removing this branch's earlier finalize output: $F"
+                rm -f "$F"
+              done
           npm run blog:generate
         env:
           # Images only: Grok Imagine, Pexels fallback. No text model is called.
