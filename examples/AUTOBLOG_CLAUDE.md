@@ -197,6 +197,10 @@ round 3, hand off whatever the result.
 
 ## 9. Hand off and push
 
+`handoff` refuses a plan or body that changed after the last review, and
+finalize re-checks the same digest. If you touch either file after the
+verdict, run `check` and a new `review` round first.
+
 ```bash
 npm run autoblog:claude -- handoff
 git status --short          # only data/blog-claude-inbox/ may be new

@@ -19,6 +19,7 @@
  * `handoff` copies the deliverables to data/blog-claude-inbox/.
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
@@ -69,6 +70,20 @@ const PREVIEW_KEY = "claude-preview";
 const WRITER = process.env.AUTOBLOG_WRITER ?? "claude-opus-5-5 (scheduled Claude session)";
 
 const work = (name: string) => path.join(WORK, name);
+
+/**
+ * Digest of a plan + body pair. The review verdict is bound to it: `check`
+ * records it with the preview, `review` refuses a stale preview, `handoff`
+ * refuses content that changed after the review, and blog-finalize.yml
+ * recomputes it from the inbox (same bytes: plan, "\n--\n", body).
+ */
+function contentDigest(planPath: string, bodyPath: string): string {
+  return createHash("sha256")
+    .update(fs.readFileSync(planPath))
+    .update("\n--\n")
+    .update(fs.readFileSync(bodyPath))
+    .digest("hex");
+}
 
 // ─── io ─────────────────────────────────────────────────────────────────────
 
@@ -668,7 +683,7 @@ function cmdCheck(): void {
     process.exit(1);
   }
   const slug = checked.plan.slug;
-  writeJson(work("preview.json"), { slug });
+  writeJson(work("preview.json"), { slug, digest: contentDigest(work("plan.json"), work("body.md")) });
   const structural = spawnSync("npx", ["tsx", "scripts/check-blog-post.ts", previewPaths(slug).mdx, "--strict"], {
     cwd: ROOT,
     encoding: "utf-8",
@@ -733,7 +748,10 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
 async function cmdReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(work("preview.json"), "run `check` first — the reviewer grades the preview MDX");
-  const { slug } = readJson<{ slug: string }>(work("preview.json"));
+  const { slug, digest } = readJson<{ slug: string; digest?: string }>(work("preview.json"));
+  if (digest !== contentDigest(work("plan.json"), work("body.md"))) {
+    throw new Error("plan.json or body.md changed after `check`; run `check` again so the reviewer grades what you will hand off");
+  }
   const file = previewPaths(slug).mdx;
   const { frontmatter, body } = parseDocument(fs.readFileSync(file, "utf-8"));
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
@@ -760,7 +778,7 @@ async function cmdReview(): Promise<void> {
   }
   writeJson(work(`review-${round}.json`), result);
   fs.writeFileSync(work(`review-${round}.md`), renderReviewMarkdown(result));
-  writeJson(work("review.json"), { round, result });
+  writeJson(work("review.json"), { round, result, digest });
   console.log(renderReviewMarkdown(result));
   process.exit(result.pass ? 0 : 2);
 }
@@ -771,7 +789,13 @@ function cmdHandoff(): void {
   const ctx = loadContext();
   for (const f of ["plan.json", "body.md", "selection.json", "review.json"]) need(work(f), "finish the earlier steps first");
   const sel = readJson<{ selection: NonNullable<ExternalMeta["topicSelection"]>; ranked: unknown[] }>(work("selection.json"));
-  const review = readJson<{ round: number; result: ReviewResult }>(work("review.json"));
+  const review = readJson<{ round: number; result: ReviewResult; digest?: string }>(work("review.json"));
+  const digest = contentDigest(work("plan.json"), work("body.md"));
+  if (review.digest !== digest) {
+    throw new Error(
+      "plan.json or body.md changed after the last review; run `check` and `review` again (a new round) before handing off",
+    );
+  }
   const meta: ExternalMeta & { runDate: string; runAt: string; briefDate: string; autocompleteLive: boolean } = {
     writer: WRITER,
     runDate: ctx.runDate,
@@ -781,7 +805,12 @@ function cmdHandoff(): void {
     topicSelection: sel.selection,
     ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
     candidates: sel.ranked,
-    claudeReview: { pass: review.result.pass, fixRounds: Math.max(0, review.round - 1), result: review.result },
+    claudeReview: {
+      pass: review.result.pass,
+      fixRounds: Math.max(0, review.round - 1),
+      result: review.result,
+      digest,
+    },
   };
   removePreview();
   fs.rmSync(INBOX, { recursive: true, force: true });
@@ -818,7 +847,9 @@ if (!command || !commands[command]) {
   console.error(`usage: autoblog:claude <${Object.keys(commands).join("|")}> — see AUTOBLOG_CLAUDE.md`);
   process.exit(2);
 }
-Promise.resolve(commands[command]()).catch((error: Error) => {
-  console.error(`❌ ${command}: ${error.message}`);
-  process.exit(1);
-});
+Promise.resolve()
+  .then(() => commands[command]())
+  .catch((error: Error) => {
+    console.error(`❌ ${command}: ${error.message}`);
+    process.exit(1);
+  });

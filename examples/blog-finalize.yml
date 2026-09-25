@@ -147,6 +147,18 @@ jobs:
           set -euo pipefail
           # Keep the review text before the inbox is removed.
           cp data/blog-claude-inbox/review.md "$RUNNER_TEMP/claude-review.md" 2>/dev/null || true
+          # The session's verdict covers exactly the plan and body it reviewed
+          # (scripts/autoblog/claude.ts contentDigest: plan, "\n--\n", body).
+          # Anything else handed off is unreviewed, whatever meta.json says.
+          ACTUAL=$( { cat data/blog-claude-inbox/plan.json; printf '\n--\n'; cat data/blog-claude-inbox/body.md; } \
+            | sha256sum | cut -d' ' -f1)
+          REVIEWED=$(jq -r '.claudeReview.digest // empty' data/blog-claude-inbox/meta.json)
+          if [ -n "$REVIEWED" ] && [ "$ACTUAL" = "$REVIEWED" ]; then
+            echo match > "$RUNNER_TEMP/review-digest"
+          else
+            echo "::warning::Handed-off plan/body digest ${ACTUAL:0:12} does not match the reviewed digest ${REVIEWED:-none} — treating the review as failed."
+            echo mismatch > "$RUNNER_TEMP/review-digest"
+          fi
           # A revised handoff pushed onto an already-finalized branch replaces
           # that branch's earlier post WHATEVER its slug: a revision may rename
           # it, and keying on the new slug alone left the old post on the
@@ -216,6 +228,10 @@ jobs:
           UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
           RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
           RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
+          if [ "$(cat "$RUNNER_TEMP/review-digest" 2>/dev/null || echo mismatch)" != "match" ]; then
+            REVIEW_PASS=false
+            RULES="$(printf '%s\n%s' "- review: the handed-off plan/body are not the ones the session reviewed (digest mismatch)" "$RULES" | sed '/^- none$/d')"
+          fi
           CANDIDATES=$(jq -r '.candidates // [] | .[] | "| \(.score // "") | \(.categoryId // "") | \(.topic // "") | \(.hintQuery // "") | \(.similarity // "") |"' "$REPORT")
 
           PR_TITLE="Blog: ${RUN_DATE} Claude-written post"
@@ -304,6 +320,19 @@ jobs:
           # previous finalize's labels. Removing an absent label is a no-op;
           # the read-back below catches a removal that really failed.
           if [ -n "$EXISTING_PR" ]; then
+            # Take the old head off the merge path BEFORE any blocker is
+            # cleared: otherwise a merge tick between here and the push below
+            # (or a failed push) could publish the old head. The review job
+            # re-applies the label to the new head if it earns it.
+            gh pr edit "$EXISTING_PR" --remove-label autoblog-approved-pending || true
+            if ! OLD_LABELS=$(gh pr view "$EXISTING_PR" --json labels --jq '[.labels[].name] | join(",")'); then
+              echo "::error::Could not read labels of #$EXISTING_PR — refusing to clear blockers on a head that may still be approved."
+              exit 1
+            fi
+            if grep -q 'autoblog-approved-pending' <<<"$OLD_LABELS"; then
+              echo "::error::Could not remove autoblog-approved-pending from #$EXISTING_PR; the post is safe at refs/autoblog-recovery/${RUN_KEY}."
+              exit 1
+            fi
             gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
             if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
               gh pr edit "$EXISTING_PR" --add-label autoblog-review-failed
