@@ -33,7 +33,8 @@
 #   - Repo variable (optional): AUTOBLOG_MAX_AUTOFIX = max automatic fix
 #       attempts per branch generation (default 2).
 #   - Labels (create once): autoblog, autoblog-approved-pending,
-#       autoblog-review-failed, autoblog-hold, autoblog-human-approved
+#       autoblog-review-failed, autoblog-hold, autoblog-human-approved,
+#       autoblog-review-failed-overridden
 #       (blog-finalize.yml also creates the ones Claude posts need)
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
@@ -762,7 +763,11 @@ jobs:
       - name: Summarize the session review
         id: verdict
         env:
-          FAILED: ${{ contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed') }}
+          # A failed session verdict stays failed after a human override: the
+          # override swaps the blocker for autoblog-review-failed-overridden,
+          # so a stale human approval falls back to "failed", never to the
+          # Claude-pass path.
+          FAILED: ${{ contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed') || contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed-overridden') }}
           BOUND: ${{ steps.bound.outputs.bound }}
           REASON: ${{ steps.bound.outputs.reason }}
           HUMAN: ${{ steps.human.outputs.current }}
@@ -840,8 +845,12 @@ jobs:
           WHO="Claude session review passed"
           if [ "$HUMAN" = "true" ]; then
             WHO="Human approval (autoblog-human-approved)"
-            # The human's call overrides the session verdict.
-            gh pr edit "$PR" --remove-label autoblog-review-failed || true
+            # The human's call overrides the session verdict for this head only.
+            # Keep a non-blocking record of the failure so a later head needs a
+            # human again.
+            if gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx autoblog-review-failed; then
+              gh pr edit "$PR" --add-label autoblog-review-failed-overridden --remove-label autoblog-review-failed || true
+            fi
           fi
           gh pr review "$PR" --approve \
             --body "${WHO}. Adding \`autoblog-approved-pending\` — will auto-merge after a ${AUTOBLOG_MERGE_DELAY} human-override window." \
@@ -853,4 +862,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
-        run: gh pr edit "$PR" --remove-label autoblog-approved-pending || true
+        run: |
+          gh pr edit "$PR" --remove-label autoblog-approved-pending || true
+          # A human override that no longer covers the head: the session's
+          # failed verdict is back in force, blocker label included.
+          if gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx autoblog-review-failed-overridden; then
+            gh pr edit "$PR" --add-label autoblog-review-failed --remove-label autoblog-review-failed-overridden || true
+          fi

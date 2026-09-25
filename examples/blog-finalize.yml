@@ -445,7 +445,8 @@ jobs:
                    "autoblog-claude-reviewed|5319E7|Written and reviewed in the scheduled Claude session" \
                    "autoblog-review-failed|B60205|AI review failed — needs a human" \
                    "autoblog-link-repair-needed|B60205|Dead link still in the post — blocks auto-merge" \
-                   "autoblog-human-approved|0E8A16|A human reviewed this exact head — publish it"; do
+                   "autoblog-human-approved|0E8A16|A human reviewed this exact head — publish it" \
+                   "autoblog-review-failed-overridden|FBCA04|Session review failed; a human approved one head — later heads need it again"; do
             IFS='|' read -r NAME COLOR DESC <<<"$L"
             GH_TOKEN="$LABEL_TOKEN" gh label create "$NAME" --color "$COLOR" --description "$DESC" >/dev/null 2>&1 || true
           done
@@ -472,8 +473,12 @@ jobs:
             gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
             if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
               gh pr edit "$EXISTING_PR" --add-label autoblog-review-failed
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed-overridden || true
             else
+              # A fresh, passing handoff: no earlier failure (overridden or
+              # not) applies to it.
               gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed || true
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed-overridden || true
             fi
             if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
               gh pr edit "$EXISTING_PR" --add-label autoblog-link-repair-needed
