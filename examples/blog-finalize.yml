@@ -62,6 +62,7 @@ jobs:
         id: run
         env:
           SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           INBOX=data/blog-claude-inbox
@@ -83,9 +84,28 @@ jobs:
             blog/claude-*) TARGET="$SOURCE" ;;
             *)
               TARGET="blog/claude-${RUN_DATE}"
-              # Never write over another day's finalized branch.
               if git ls-remote --exit-code origin "refs/heads/$TARGET" >/dev/null 2>&1; then
-                TARGET="${TARGET}-$(TZ=America/Los_Angeles date +%H%M)"
+                # The date branch already exists. It is this day's own post
+                # when it has an open Claude PR (a revision or a retry) or when
+                # finalize wrote its tip and failed before opening one: reuse
+                # it, so the existing PR is updated rather than duplicated.
+                # Anything else (a merged post, a branch finalize never
+                # wrote) is not overwritten; this handoff gets its own target.
+                if ! PRS=$(gh pr list --head "$TARGET" --state all --json state,labels \
+                    --jq '[.[] | {state, claude: ([.labels[].name] | index("autoblog-claude-reviewed") != null)}]'); then
+                  echo "::error::Could not list PRs for $TARGET — refusing to guess whether to reuse it."
+                  exit 1
+                fi
+                OPEN_CLAUDE=$(jq '[.[] | select(.state == "OPEN" and .claude)] | length' <<<"$PRS")
+                ANY=$(jq 'length' <<<"$PRS")
+                TIP=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
+                OURS=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                  --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")] | length' || echo 0)
+                if [ "$OPEN_CLAUDE" -gt 0 ] || { [ "$ANY" -eq 0 ] && [ "$OURS" -gt 0 ]; }; then
+                  echo "Reusing $TARGET: it holds this day's Claude post."
+                else
+                  TARGET="${TARGET}-$(TZ=America/Los_Angeles date +%H%M)"
+                fi
               fi
               ;;
           esac
