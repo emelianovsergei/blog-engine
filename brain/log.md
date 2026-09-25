@@ -3,10 +3,14 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-09-24"
+timestamp: "2026-09-25"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-09-25] Claude writer: examples for the scheduled-session pipeline
+
+The consumer sites move writing to a scheduled Claude session. `examples/` gains `blog-brief.yml`, `blog-finalize.yml`, `AUTOBLOG_CLAUDE.md` and `scripts/autoblog/` (brief builder and session CLI, with Pulse's `site.ts` as the worked example). `autoblog-review.yml` gains a `claude-reviewed` job, so `autoblog-claude-reviewed` PRs skip the Grok review and auto-fix. Codex heal skips them too. CI heal and the watchdog count `blog/claude-*`. `generate-blog-post.yml` is `workflow_dispatch` only. The watchdog defaults to 7 posts per 7 days. Refresh and backfill text now names the `AUTOBLOG_MERGE_DELAY` window instead of a 24-hour one. In `autoblog-ci-heal.yml` the stale-run check was gated on its own output, so it never ran and the link repair after it never ran either; that is fixed. No package release: no `src/` change. Consumers: [pulse-website#401](https://github.com/emelianovsergei/pulse-website/pull/401), [promax-website#320](https://github.com/emelianovsergei/promax-website/pull/320). [[concepts/claude-writer]].
 
 ## [2026-09-24] Grok timeout fails over to Opus 5.5
 

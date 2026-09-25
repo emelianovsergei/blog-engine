@@ -73,6 +73,9 @@ jobs:
             echo "$labels" | grep -q 'autoblog-link-repair-needed' && return 1
             echo "$labels" | grep -q 'autoblog-codex-p1' && return 1
             echo "$labels" | grep -q 'autoblog-backfill' && return 1
+            # Claude-written posts get no Grok rewrite (AUTOBLOG_CLAUDE.md):
+            # an unresolved Codex P0/P1 on one holds for a human instead.
+            echo "$labels" | grep -q 'autoblog-claude-reviewed' && return 1
             case "$head" in
               blog/auto-*|blog/refresh-*|autoblog/*) return 0 ;;
               *) return 1 ;;

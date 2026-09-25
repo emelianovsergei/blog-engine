@@ -1,0 +1,577 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/blog-finalize.yml
+#
+# Finalize a post written by the scheduled Claude session (AUTOBLOG_CLAUDE.md).
+#
+# The session pushes data/blog-claude-inbox/{plan.json, body.md, meta.json,
+# review.md} to `blog/claude-<date>` — or, when its git proxy only lets it push
+# its own `claude/*` branch, to that branch. This workflow runs the tested
+# generator in external-plan mode (BLOG_EXTERNAL_PLAN / BLOG_EXTERNAL_BODY), so
+# topic selection, keyword research, planPost and writeArticle are skipped and
+# everything else is unchanged: the Grok Imagine image (Pexels fallback), the
+# link audit + unlink, frontmatter, checkBlogPostSource, the run report. Then
+# it opens a draft PR labelled `autoblog` + `autoblog-claude-reviewed`.
+#
+# PERSIST BEFORE GATE (CLAUDE.md): nothing here can discard the post. A failed
+# Claude review opens the PR with `autoblog-review-failed`; rule violations are
+# listed in the PR body; the inbox stays on the pushed branch until this job
+# has committed the finished post over it.
+name: Blog Finalize (Claude autoblog)
+
+on:
+  push:
+    branches:
+      - "blog/claude-*"
+      - "claude/**"
+    paths:
+      - "data/blog-claude-inbox/**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch that holds data/blog-claude-inbox/ (blog/claude-* or claude/*)"
+        required: true
+
+concurrency:
+  group: blog-finalize-${{ github.event.inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Finalize Claude post
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      # The `autoblog/finalized` status that binds the session verdict.
+      statuses: write
+      # Label provisioning is an Issues API call.
+      issues: write
+
+    steps:
+      # Trusted code only. package.json, the generator and every script run
+      # from main; the handoff branch contributes nothing but the four inbox
+      # data files (next step). Anything else on it never executes here and
+      # never reaches the PR: the finalized branch is main + one commit.
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # GITHUB_TOKEN pushes (contents: write). The PR is opened with
+          # AUTOBLOG_PAT below so CI and review fire on it.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Take the handoff data from the source branch
+        env:
+          SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "+refs/heads/${SOURCE}:refs/remotes/origin/${SOURCE}"
+          SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")
+          HANDOFF="$SOURCE_SHA"
+          # A direct handoff (blog/claude-*) is replaced by the finalized commit
+          # before the PR is opened. Finalize keeps the original under
+          # refs/autoblog-handoff/ until the run succeeds, so a retry after a
+          # late failure (status, PAT, PR) resumes from it instead of skipping.
+          if ! git cat-file -e "${SOURCE_SHA}:data/blog-claude-inbox/plan.json" 2>/dev/null \
+            && [[ "$SOURCE" == blog/claude-* ]] \
+            && git fetch -q origin "+refs/autoblog-handoff/${SOURCE#blog/}:refs/autoblog-handoff-resume" 2>/dev/null; then
+            HANDOFF=$(git rev-parse refs/autoblog-handoff-resume)
+            echo "::notice::Resuming the handoff kept at refs/autoblog-handoff/${SOURCE#blog/} (${HANDOFF:0:10})."
+          fi
+          { echo "SOURCE_SHA=$SOURCE_SHA"; echo "HANDOFF_SHA=$HANDOFF"; } >> "$GITHUB_ENV"
+          # Regenerate with the revision of main the session built and reviewed
+          # its preview on, not a newer one: generator, templates and site
+          # constants must match what the verdict covers. Only a commit on
+          # main qualifies, so this never runs branch code.
+          GEN=$(git show "${HANDOFF}:data/blog-claude-inbox/meta.json" 2>/dev/null | jq -r '.generatorSha // empty' || true)
+          if [ -n "$GEN" ] && git cat-file -e "${GEN}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$GEN" "origin/${{ github.event.repository.default_branch }}"; then
+            git checkout -q --detach "$GEN"
+            echo "GENERATOR_PIN=match" >> "$GITHUB_ENV"
+            echo "Generating with main@${GEN:0:10}, the revision the session reviewed."
+          else
+            echo "GENERATOR_PIN=mismatch" >> "$GITHUB_ENV"
+            echo "::warning::The handoff's generatorSha '${GEN:-none}' is not a commit on main; generating with main and treating the review as failed."
+          fi
+          rm -rf data/blog-claude-inbox
+          mkdir -p data/blog-claude-inbox
+          for F in plan.json body.md meta.json review.md; do
+            git show "${HANDOFF}:data/blog-claude-inbox/$F" > "data/blog-claude-inbox/$F" 2>/dev/null \
+              || rm -f "data/blog-claude-inbox/$F"
+          done
+
+      - name: Resolve run
+        id: run
+        env:
+          SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          INBOX=data/blog-claude-inbox
+          if [ ! -f "$INBOX/plan.json" ] || [ ! -f "$INBOX/body.md" ] || [ ! -f "$INBOX/meta.json" ]; then
+            # A claude/* branch that only removed the inbox, or a dev branch.
+            echo "::notice::No complete handoff in $INBOX on $SOURCE — nothing to finalize."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RUN_DATE=$(jq -r '.runDate // empty' "$INBOX/meta.json")
+          RUN_AT=$(jq -r '.runAt // empty' "$INBOX/meta.json")
+          if [ -z "$RUN_DATE" ]; then
+            RUN_DATE=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          fi
+          if [ -z "$RUN_AT" ]; then
+            RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
+          fi
+          case "$SOURCE" in
+            blog/claude-*) TARGET="$SOURCE"; LEASE="$SOURCE_SHA" ;;
+            *)
+              TARGET="blog/claude-${RUN_DATE}"
+              REUSE=false
+              if TIP=$(git ls-remote --exit-code origin "refs/heads/$TARGET" | cut -f1) && [ -n "$TIP" ]; then
+                if [ "$TIP" = "$SOURCE_SHA" ]; then
+                  # This handoff's own claim, left by an attempt that failed
+                  # before finalizing.
+                  REUSE=true
+                else
+                  # The date branch already exists. It is this day's own post
+                  # when it has an open Claude PR (a revision or a retry) or when
+                  # finalize wrote its tip and failed before opening one: reuse
+                  # it, so the existing PR is updated rather than duplicated.
+                  # Anything else (a merged post, a branch finalize never
+                  # wrote) is not overwritten; this handoff gets its own target.
+                  if ! PRS=$(gh pr list --head "$TARGET" --state all --json state,labels \
+                      --jq '[.[] | {state, claude: ([.labels[].name] | index("autoblog-claude-reviewed") != null)}]'); then
+                    echo "::error::Could not list PRs for $TARGET — refusing to guess whether to reuse it."
+                    exit 1
+                  fi
+                  OPEN_CLAUDE=$(jq '[.[] | select(.state == "OPEN" and .claude)] | length' <<<"$PRS")
+                  ANY=$(jq 'length' <<<"$PRS")
+                  # Provenance: the newest finalize on the date branch must have
+                  # come from this same source branch (a session revising its
+                  # own post pushes the same claude/* branch again). Its source
+                  # is in the autoblog/finalized status, which only this
+                  # workflow's GITHUB_TOKEN creates. A different session's
+                  # handoff for the same date never takes over the branch.
+                  git fetch -q origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
+                  FROM=""
+                  while read -r C; do
+                    [ -n "$C" ] || continue
+                    FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${C}/statuses" \
+                      --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
+                      | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
+                    [ -n "$FROM" ] && break
+                  done < <(git rev-list "origin/main..origin/${TARGET}")
+                  if [ "$FROM" = "$SOURCE" ] && { [ "$OPEN_CLAUDE" -gt 0 ] || [ "$ANY" -eq 0 ]; }; then
+                    REUSE=true
+                  fi
+                fi
+              fi
+              if [ "$REUSE" = true ]; then
+                echo "Reusing $TARGET: it holds this handoff's post."
+                LEASE="$TIP"
+              else
+                # Claim a fresh target atomically. Creating a ref fails when it
+                # exists, so two handoffs for one date can never both take it.
+                # The claim points at this handoff, so a retry knows its own.
+                claim() {
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                    -f ref="refs/heads/$1" -f sha="$SOURCE_SHA" >/dev/null 2>&1
+                }
+                LEASE="$SOURCE_SHA"
+                if ! claim "$TARGET"; then
+                  TARGET="blog/claude-${RUN_DATE}-${GITHUB_RUN_ID}"
+                  if ! claim "$TARGET"; then
+                    # A re-run keeps its run id, so this ref may already be
+                    # this handoff's own claim, or the post it finalized
+                    # before failing later. Reuse it then; anything else is
+                    # not ours to overwrite.
+                    TIP=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
+                    FROM=""
+                    if [ -n "$TIP" ]; then
+                      FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                        --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
+                        | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
+                    fi
+                    if [ -n "$TIP" ] && { [ "$TIP" = "$SOURCE_SHA" ] || [ "$FROM" = "$SOURCE" ]; }; then
+                      echo "Reusing $TARGET: this run's own earlier claim."
+                      LEASE="$TIP"
+                    else
+                      echo "::error::Could not claim $TARGET for this handoff."
+                      exit 1
+                    fi
+                  fi
+                fi
+              fi
+              ;;
+          esac
+          RUN_KEY="${TARGET#blog/}"
+          {
+            echo "skip=false"
+            echo "source=$SOURCE"
+            echo "target=$TARGET"
+            echo "lease=$LEASE"
+            echo "run_key=$RUN_KEY"
+            echo "run_date=$RUN_DATE"
+            echo "run_at=$RUN_AT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Finalizing $SOURCE → $TARGET (run key $RUN_KEY)"
+
+      - name: Set up Node.js
+        if: steps.run.outputs.skip != 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.run.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Install ImageMagick
+        if: steps.run.outputs.skip != 'true'
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 imagemagick
+
+      # Same as generate-blog-post.yml: an in-flight post lives only in an
+      # open PR. The generator refuses a slug that is pending there.
+      - name: Collect posts pending in open autoblog PRs
+        if: steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.run.outputs.target }}
+        run: |
+          set -uo pipefail
+          mkdir -p data/blog-pending
+          gh pr list --state open --limit 500 --json number,labels,headRefName --jq '.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | "\(.number) \(.headRefName)"' > pending-prs.txt || true
+          while read -r NUM REF; do
+            [ -n "$NUM" ] || continue
+            # This run's own PR (a re-run) is not "another pending post".
+            [ "$REF" = "$TARGET" ] && continue
+            gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate \
+              --jq '.[] | select(.status == "added") | .filename' 2>/dev/null \
+              | grep -E '^content/blog/.*\.mdx$' \
+              | while read -r FILE; do
+                  gh api "/repos/${{ github.repository }}/contents/${FILE}?ref=${REF}" \
+                    --jq '.content' 2>/dev/null | base64 -d > "data/blog-pending/$(basename "$FILE")" \
+                    && echo "pending: #$NUM $FILE" || rm -f "data/blog-pending/$(basename "$FILE")"
+                done
+          done < pending-prs.txt
+          rm -f pending-prs.txt
+
+      - name: Generate post from the Claude handoff
+        if: steps.run.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Keep the review text before the inbox is removed.
+          cp data/blog-claude-inbox/review.md "$RUNNER_TEMP/claude-review.md" 2>/dev/null || true
+          # The session's verdict covers exactly the plan and body it reviewed
+          # (scripts/autoblog/claude.ts contentDigest: plan, "\n--\n", body).
+          # Anything else handed off is unreviewed, whatever meta.json says.
+          ACTUAL=$( { cat data/blog-claude-inbox/plan.json; printf '\n--\n'; cat data/blog-claude-inbox/body.md; } \
+            | sha256sum | cut -d' ' -f1)
+          REVIEWED=$(jq -r '.claudeReview.digest // empty' data/blog-claude-inbox/meta.json)
+          if [ -n "$REVIEWED" ] && [ "$ACTUAL" = "$REVIEWED" ]; then
+            echo match > "$RUNNER_TEMP/review-digest"
+          else
+            echo "::warning::Handed-off plan/body digest ${ACTUAL:0:12} does not match the reviewed digest ${REVIEWED:-none} — treating the review as failed."
+            echo mismatch > "$RUNNER_TEMP/review-digest"
+          fi
+          # The rest of meta.json (run date, category, keyword research, ...)
+          # must be what the reviewed preview was built from. claude.ts carries
+          # its digest as .metaDigest: sha256 of JSON.stringify of everything
+          # but the verdict fields, in the order written. Same computation here.
+          META=$(node -e '
+            const crypto = require("crypto");
+            const m = JSON.parse(require("fs").readFileSync("data/blog-claude-inbox/meta.json", "utf8"));
+            const { claudeReview, generatorSha, metaDigest, ...base } = m;
+            const d = crypto.createHash("sha256").update(JSON.stringify(base)).digest("hex");
+            process.stdout.write(metaDigest && d === metaDigest ? "match" : "mismatch");
+          ' 2>/dev/null || echo mismatch)
+          if [ "$META" != "match" ]; then
+            echo "::warning::meta.json differs from the metadata the session reviewed (metaDigest) — treating the review as failed."
+            echo mismatch > "$RUNNER_TEMP/review-digest"
+          fi
+          npm run blog:generate
+        env:
+          # Images only: Grok Imagine, Pexels fallback. No text model is called.
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          BLOG_EXTERNAL_PLAN: data/blog-claude-inbox/plan.json
+          BLOG_EXTERNAL_BODY: data/blog-claude-inbox/body.md
+          BLOG_EXTERNAL_META: data/blog-claude-inbox/meta.json
+          BLOG_GENERATOR_DATE: ${{ steps.run.outputs.run_at }}
+          BLOG_RUN_KEY: ${{ steps.run.outputs.run_key }}
+          BLOG_PENDING_DIR: data/blog-pending
+
+      # Blog posts ingest in the same content PR (CLAUDE.md). A failed ingest
+      # never blocks the post, but it can write pages before a late validation
+      # throws, so brain/ goes back to main's state rather than being committed
+      # half-written.
+      - name: Ingest wiki
+        if: steps.run.outputs.skip != 'true'
+        run: |
+          if ! npm run wiki:ingest; then
+            echo "::warning::wiki:ingest failed; brain/ is left as on main for the next content PR."
+            git checkout -- brain
+            git clean -fdq -- brain
+          fi
+
+      - name: Commit, push and open the draft PR
+        if: steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE: ${{ steps.run.outputs.source }}
+          TARGET: ${{ steps.run.outputs.target }}
+          LEASE: ${{ steps.run.outputs.lease }}
+          RUN_KEY: ${{ steps.run.outputs.run_key }}
+          RUN_DATE: ${{ steps.run.outputs.run_date }}
+        run: |
+          set -euo pipefail
+          REPORT="data/blog-generation-runs/${RUN_KEY}.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::Expected report file not found: $REPORT" >&2
+            exit 1
+          fi
+
+          PLAN_TITLE=$(jq -r '.plan.title' "$REPORT")
+          SLUG=$(jq -r '.slug // ""' "$REPORT")
+          WRITER=$(jq -r '.writer // "Claude"' "$REPORT")
+          REVIEW_PASS=$(jq -r '.claudeReview.pass // false' "$REPORT")
+          FIX_ROUNDS=$(jq -r '.claudeReview.fixRounds // 0' "$REPORT")
+          OVERALL=$(jq -r '.claudeReview.result.overallScore // 0 | . * 10 | round / 10' "$REPORT")
+          TOPIC=$(jq -r '.topicSelection.topic // ""' "$REPORT")
+          RATIONALE=$(jq -r '.topicSelection.rationale // ""' "$REPORT")
+          IMAGE_URL=$(jq -r '.selectedImage.pageUrl // ""' "$REPORT")
+          IMAGE_BY=$(jq -r '.selectedImage.photographer // ""' "$REPORT")
+          IMAGE_ALT=$(jq -r '.selectedImage.featuredImageAlt // ""' "$REPORT")
+          LINKS_CHECKED=$(jq -r '.linkAudit.checked // 0' "$REPORT")
+          LINKS_REMOVED=$(jq -r '.linkAudit.removed // [] | if length == 0 then "- none" else .[] | "- ❌ `\(.url)` — \(.reason)" end' "$REPORT")
+          LINKS_UNVERIFIED=$(jq -r '.linkAudit.unverified // [] | if length == 0 then "- none" else .[] | "- ⚠️ `\(.url)` — \(.reason)" end' "$REPORT")
+          LINKS_UNRESOLVED=$(jq -r '.linkAudit.unresolved // [] | if length == 0 then "- none" else .[] | "- 🚫 `\(.url)` — \(.reason)" end' "$REPORT")
+          UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
+          RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
+          RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
+          if [ "${GENERATOR_PIN:-mismatch}" != "match" ]; then
+            REVIEW_PASS=false
+            RULES="$(printf '%s\n%s' "- review: the post was not regenerated with the revision of main the session reviewed (generatorSha)" "$RULES" | sed '/^- none$/d')"
+          fi
+          if [ "$(cat "$RUNNER_TEMP/review-digest" 2>/dev/null || echo mismatch)" != "match" ]; then
+            REVIEW_PASS=false
+            RULES="$(printf '%s\n%s' "- review: the handed-off plan/body are not the ones the session reviewed (digest mismatch)" "$RULES" | sed '/^- none$/d')"
+          fi
+          CANDIDATES=$(jq -r '.candidates // [] | .[] | "| \(.score // "") | \(.categoryId // "") | \(.topic // "") | \(.hintQuery // "") | \(.similarity // "") |"' "$REPORT")
+
+          PR_TITLE="Blog: ${RUN_DATE} Claude-written post"
+          BODY_FILE=$(mktemp)
+          {
+            echo "## Claude autoblog post"
+            echo
+            echo "- Title: $PLAN_TITLE"
+            echo "- Slug: \`$SLUG\`"
+            echo "- Writer: $WRITER"
+            if [ "$REVIEW_PASS" = "true" ]; then
+              echo "- Second-pass review: ✅ **passed** (${OVERALL}/10) after ${FIX_ROUNDS} fix round(s), by a subagent that did not write the post"
+            else
+              echo "- Second-pass review: ❌ **failed** after ${FIX_ROUNDS} fix round(s) — \`autoblog-review-failed\`, a human decides"
+            fi
+            echo "- Topic: $TOPIC"
+            echo "- Why: $RATIONALE"
+            echo
+            echo "### Candidates"
+            echo "| Score | Category | Topic | GSC query | Similarity |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "$CANDIDATES"
+            echo
+            echo "### Rule checks"
+            echo "$RULES"
+            echo
+            echo "### Selected Image"
+            echo "- Source: $IMAGE_URL ($IMAGE_BY)"
+            echo "- Alt text: $IMAGE_ALT"
+            echo
+            echo "### Outbound Link Audit"
+            echo "Every URL was checked against \`content/policy/link-constraints.json\` and fetched with a browser User-Agent before the file was written."
+            echo
+            echo "- URLs checked: \`$LINKS_CHECKED\`"
+            echo
+            echo "**Removed (proven dead):**"
+            echo "$LINKS_REMOVED"
+            echo
+            echo "**Kept but unverified:**"
+            echo "$LINKS_UNVERIFIED"
+            echo
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              echo "**🚫 Dead links STILL IN THIS POST — auto-merge is blocked:**"
+              echo "$LINKS_UNRESOLVED"
+              echo
+              echo "Rewrite the sentence, then remove the \`autoblog-link-repair-needed\` label."
+              echo
+            fi
+            echo "<details><summary>Claude review</summary>"
+            echo
+            if [ -s "$RUNNER_TEMP/claude-review.md" ]; then cat "$RUNNER_TEMP/claude-review.md"; else echo "(no review text in the handoff)"; fi
+            echo
+            echo "</details>"
+            echo
+            echo "The Grok review and auto-fix skip PRs labelled \`autoblog-claude-reviewed\`. The session review covers this finalized content only: an edit to the post after it needs a human to add \`autoblog-human-approved\` (it approves the exact head it is added to)."
+          } > "$BODY_FILE"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf data/blog-claude-inbox
+          git add data/blog-generation-runs/ content/blog/ public/images/blog/ brain/ 2>/dev/null || git add data/blog-generation-runs/ content/blog/ public/images/blog/
+          git commit -q -m "Add Claude-written blog post for ${RUN_KEY}"
+
+          # PERSIST FIRST, off any branch or PR head (see generate-blog-post.yml).
+          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}"; then
+            echo "::error::Could not persist the finalized commit to a recovery ref — aborting before anything else can fail and lose it."
+            exit 1
+          fi
+
+          # Mark this commit as the finalize boundary for the review job. Set
+          # with GITHUB_TOKEN (creator github-actions[bot]) as soon as the
+          # commit exists on the remote (the recovery ref above), before TARGET
+          # is touched: a re-run after any later failure then recognizes its
+          # own target by this status, and the review that the PR
+          # create/reopen triggers can already see it.
+          GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
+            -f state=success -f context=autoblog/finalized \
+            -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
+
+          # Checked before any branch or label changes: without the PAT the PR
+          # would get no CI or review, and nothing has been replaced yet, so a
+          # re-run after adding the secret starts from the same handoff.
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured. Nothing was changed; the finalized post is at refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}. Add the secret and re-run."
+            exit 1
+          fi
+
+          if ! EXISTING_PR=$(gh pr list --head "$TARGET" --state open --json number --jq '.[0].number'); then
+            echo "::error::Could not list PRs for $TARGET — refusing to guess whether one exists."
+            exit 1
+          fi
+
+          for L in "autoblog|0E8A16|Auto-generated blog post" \
+                   "autoblog-claude-reviewed|5319E7|Written and reviewed in the scheduled Claude session" \
+                   "autoblog-review-failed|B60205|AI review failed — needs a human" \
+                   "autoblog-link-repair-needed|B60205|Dead link still in the post — blocks auto-merge" \
+                   "autoblog-human-approved|0E8A16|A human reviewed this exact head — publish it" \
+                   "autoblog-review-failed-overridden|FBCA04|Session review failed; a human approved one head — later heads need it again"; do
+            IFS='|' read -r NAME COLOR DESC <<<"$L"
+            GH_TOKEN="$LABEL_TOKEN" gh label create "$NAME" --color "$COLOR" --description "$DESC" >/dev/null 2>&1 || true
+          done
+
+          # The gate labels must be on the PR before the new head is reviewable.
+          # A re-finalize also clears a blocker whose condition no longer holds:
+          # a revised post that now passes must not stay parked behind the
+          # previous finalize's labels. Removing an absent label is a no-op;
+          # the read-back below catches a removal that really failed.
+          if [ -n "$EXISTING_PR" ]; then
+            # Take the old head off the merge path BEFORE any blocker is
+            # cleared: otherwise a merge tick between here and the push below
+            # (or a failed push) could publish the old head. The review job
+            # re-applies the label to the new head if it earns it.
+            gh pr edit "$EXISTING_PR" --remove-label autoblog-approved-pending || true
+            if ! OLD_LABELS=$(gh pr view "$EXISTING_PR" --json labels --jq '[.labels[].name] | join(",")'); then
+              echo "::error::Could not read labels of #$EXISTING_PR — refusing to clear blockers on a head that may still be approved."
+              exit 1
+            fi
+            if grep -q 'autoblog-approved-pending' <<<"$OLD_LABELS"; then
+              echo "::error::Could not remove autoblog-approved-pending from #$EXISTING_PR; the post is safe at refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}."
+              exit 1
+            fi
+            gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
+            if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
+              gh pr edit "$EXISTING_PR" --add-label autoblog-review-failed
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed-overridden || true
+            else
+              # A fresh, passing handoff: no earlier failure (overridden or
+              # not) applies to it.
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed || true
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed-overridden || true
+            fi
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              gh pr edit "$EXISTING_PR" --add-label autoblog-link-repair-needed
+            else
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-link-repair-needed || true
+            fi
+          fi
+
+          # A direct handoff is about to be replaced on TARGET. Keep it until this
+          # run succeeds, so a retry after a later failure can resume from it.
+          if [ "$SOURCE" = "$TARGET" ]; then
+            git push --force origin "${HANDOFF_SHA}:refs/autoblog-handoff/${RUN_KEY}" \
+              || { echo "::error::Could not keep the handoff at refs/autoblog-handoff/${RUN_KEY}; leaving $TARGET untouched."; exit 1; }
+          fi
+
+          # The finalized branch is main + this commit, replacing whatever TARGET
+          # held when this run resolved it (the handoff, this run's claim, or
+          # the post being revised). Leased on that commit: anything pushed to
+          # TARGET since (a newer handoff, another run) is never overwritten.
+          git push --force-with-lease="refs/heads/${TARGET}:${LEASE}" origin "HEAD:refs/heads/$TARGET"
+
+
+
+          if [ -n "$EXISTING_PR" ]; then
+            PR_NUM="$EXISTING_PR"
+            gh pr edit "$PR_NUM" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            # A GITHUB_TOKEN push raises no pull_request event; re-raise one
+            # so CI and review see the new head (generate-blog-post.yml).
+            gh pr close "$PR_NUM" || { echo "::error::Could not close #$PR_NUM to re-raise its events."; exit 1; }
+            gh pr reopen "$PR_NUM" || { echo "::error::Closed #$PR_NUM but could not reopen it — reopen it by hand."; exit 1; }
+          else
+            CREATE_LABELS=(--label autoblog --label autoblog-claude-reviewed)
+            if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
+              CREATE_LABELS+=(--label autoblog-review-failed)
+            fi
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              CREATE_LABELS+=(--label autoblog-link-repair-needed)
+            fi
+            gh pr create --draft --base main --head "$TARGET" "${CREATE_LABELS[@]}" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            PR_NUM=$(gh pr list --head "$TARGET" --state open --json number --jq '.[0].number')
+          fi
+          if [ -z "$PR_NUM" ]; then
+            echo "::error::No PR number for $TARGET."
+            exit 1
+          fi
+
+          # Read the gate back: a missing failed/link label would let a post
+          # that failed review, or still has a dead link, auto-publish.
+          if ! PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")'); then
+            echo "::error::Could not read labels back from PR #$PR_NUM."
+            exit 1
+          fi
+          if { [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; } && ! grep -q 'autoblog-review-failed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM failed the Claude review or the rule checks but has no autoblog-review-failed label."
+            exit 1
+          fi
+          if [ "$UNRESOLVED_COUNT" -gt 0 ] && ! grep -q 'autoblog-link-repair-needed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM has dead links but no autoblog-link-repair-needed label."
+            exit 1
+          fi
+          if [ "$REVIEW_PASS" = "true" ] && [ "$RULE_COUNT" -eq 0 ] && grep -q 'autoblog-review-failed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM passed but still carries autoblog-review-failed — it would never merge."
+            exit 1
+          fi
+          if [ "$UNRESOLVED_COUNT" -eq 0 ] && grep -q 'autoblog-link-repair-needed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM has no dead links but still carries autoblog-link-repair-needed — it would never merge."
+            exit 1
+          fi
+          echo "Opened/updated PR #$PR_NUM for $TARGET."
+
+          # The session's transport branch is spent once the post is on TARGET.
+          if [ "$SOURCE" != "$TARGET" ]; then
+            # Leased: a revised handoff pushed to SOURCE during this run has its
+            # own run queued, and deleting the branch would lose it.
+            git push --force-with-lease="refs/heads/${SOURCE}:${SOURCE_SHA}" origin ":refs/heads/${SOURCE}" \
+              || echo "::warning::Left $SOURCE in place: it changed during this run (a newer handoff has its own run) or the delete failed."
+          fi
+          # Done: the kept direct handoff is no longer needed.
+          if [ "$SOURCE" = "$TARGET" ]; then
+            git push origin ":refs/autoblog-handoff/${RUN_KEY}" 2>/dev/null || true
+          fi

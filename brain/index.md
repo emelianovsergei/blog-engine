@@ -49,6 +49,7 @@ sources: []
 
 *   [[concepts/autofix-loop|Auto-Fix Loop (Review Failure Recovery)]]
 *   [[concepts/ci-heal|Red-CI Self-Heal]]
+*   [[concepts/claude-writer|Claude Writer (Scheduled Session)]]
 *   [[concepts/codex-heal|Codex P0/P1 Self-Heal]]
 *   [[concepts/delivery-guarantee|Delivery Guarantee (Consumer Workflow Set + Watchdog)]]
 *   [[concepts/demand-signal|Search-Demand Signal]]

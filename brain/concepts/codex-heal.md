@@ -3,7 +3,7 @@ type: "concept"
 title: "Codex P0/P1 Self-Heal"
 description: "Bounded rewrite loop that clears unresolved Codex P0/P1 comments on an otherwise approved autoblog PR so merge-pending can ship."
 tags: ["concepts", "ci", "automation", "codex", "review"]
-timestamp: "2026-09-21"
+timestamp: "2026-09-25"
 sources: []
 ---
 # Codex P0/P1 Self-Heal
@@ -65,3 +65,8 @@ Mapper: `examples/scripts/codex-comments-to-review.sh`. Consumers copy it to
 
 See [[concepts/delivery-guarantee]], [[concepts/autofix-loop]],
 [[concepts/unreachable-success-path]].
+
+PRs labelled `autoblog-claude-reviewed` are not eligible. Grok rewrites are
+off for Claude-written posts, so an unresolved P0/P1 on one holds for a human.
+The watchdog surfaces it after the merge delay plus 3h. See
+[[concepts/claude-writer]].

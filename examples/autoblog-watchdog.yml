@@ -54,7 +54,11 @@ jobs:
       CODEX_HOLD_GRACE_HOURS: 3
       AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
       AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
-      AUTOBLOG_EXPECTED_OVERRIDE: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '' }}
+      # Posts are written daily by the scheduled Claude session
+      # (AUTOBLOG_CLAUDE.md), not on AUTOBLOG_INTERVAL, so the weekly count is
+      # pinned here: 7 per 7 days. Set the repo variable to override it, or
+      # to 0 to fall back to the AUTOBLOG_INTERVAL-derived windows.
+      AUTOBLOG_EXPECTED_OVERRIDE: ${{ vars.AUTOBLOG_EXPECTED_POSTS_PER_WEEK || '7' }}
 
     steps:
       - name: Assess autoblog delivery
@@ -118,9 +122,17 @@ jobs:
             EXPECTED_POSTS_PER_WEEK=1
             DELIVERY_STALE_DAYS=$(( DAYS + 10 ))
           fi
-          if [ -n "$AUTOBLOG_EXPECTED_OVERRIDE" ]; then
-            EXPECTED_POSTS_PER_WEEK="$AUTOBLOG_EXPECTED_OVERRIDE"
-          fi
+          # A per-WEEK expectation is measured over a 7-day window, and a
+          # delivery is stale after two expected gaps (daily → 2 days).
+          case "$AUTOBLOG_EXPECTED_OVERRIDE" in
+            ''|0) ;;
+            *[!0-9]*) echo "::error::AUTOBLOG_EXPECTED_POSTS_PER_WEEK='$AUTOBLOG_EXPECTED_OVERRIDE' must be a whole number."; exit 1 ;;
+            *)
+              EXPECTED_POSTS_PER_WEEK="$AUTOBLOG_EXPECTED_OVERRIDE"
+              WINDOW_DAYS=7
+              DELIVERY_STALE_DAYS=$(( (14 + EXPECTED_POSTS_PER_WEEK - 1) / EXPECTED_POSTS_PER_WEEK ))
+              ;;
+          esac
           {
             echo "WINDOW_DAYS=$WINDOW_DAYS"
             echo "EXPECTED_POSTS_PER_WEEK=$EXPECTED_POSTS_PER_WEEK"
@@ -145,6 +157,8 @@ jobs:
           #     and the only condition autoblog-merge-pending.yml merges on
           #   - branch `autoblog/*` or `blog/auto-*` — autoblog-review.yml accepts
           #     a PR by head-ref alone, so a post can ship with neither label
+          #   - branch `blog/claude-*` — opened by blog-finalize.yml for posts the
+          #     scheduled Claude session wrote
           #
           # Merge dates are not returned in order, so take the max, not row one.
           LAST_ISO=$(gh pr list --state merged --limit 60 \
@@ -155,6 +169,7 @@ jobs:
                         ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
                         or (.headRefName | startswith("autoblog/"))
                         or (.headRefName | startswith("blog/auto-"))
+                        or (.headRefName | startswith("blog/claude-"))
                       )
                     | .mergedAt ]
                   | sort | last // empty')
@@ -204,7 +219,7 @@ jobs:
           fi
           RECENT_COUNT=$(jq -r --arg cutoff "$WINDOW_CUTOFF" '[ .[]
                     | select(.mergedAt != null and .mergedAt >= $cutoff)
-                    | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
+                    | select(.headRefName | startswith("blog/auto-") or startswith("blog/claude-") or startswith("autoblog/"))
                   ] | length' <<<"$MERGED_JSON")
           echo "recent_count=$RECENT_COUNT" >> "$GITHUB_OUTPUT"
           if [ "$RECENT_COUNT" -lt "$EXPECTED_POSTS_PER_WEEK" ]; then
@@ -253,6 +268,7 @@ jobs:
                   ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
                   or (.headRefName | startswith("autoblog/"))
                   or (.headRefName | startswith("blog/auto-"))
+                  or (.headRefName | startswith("blog/claude-"))
                 )
               | select(.createdAt < $cutoff)
               | select([.labels[].name] | index("autoblog-hold") == null) ]' <<<"$OPEN_JSON")
@@ -341,16 +357,41 @@ jobs:
                         ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
                         or (.headRefName | startswith("autoblog/"))
                         or (.headRefName | startswith("blog/auto-"))
+                        or (.headRefName | startswith("blog/claude-"))
                       )
                     | "- #\(.number) \(.title) — draft=\(.isDraft), labels=[\([.labels[].name] | join(", "))], head=\(.headRefName), opened \(.createdAt)"' \
               || echo "- (could not list PRs)"
             echo
-            echo "### Recent generate-blog-post.yml runs"
-            # Filter by file name, which survives display-name changes.
-            gh run list --workflow generate-blog-post.yml --limit 8 \
-              --json databaseId,conclusion,createdAt,event \
-              --jq '.[] | "- [\(.conclusion // "in_progress")] \(.createdAt) (\(.event)) — run \(.databaseId)"' \
-              || echo "- (could not list runs)"
+            # Daily posts: brief → Claude session → blog-finalize.yml. A missing
+            # finalize run with a fresh brief means the session did not push.
+            for WF in blog-brief.yml blog-finalize.yml generate-blog-post.yml; do
+              echo
+              echo "### Recent $WF runs"
+              # Filter by file name, which survives display-name changes.
+              gh run list --workflow "$WF" --limit 8 \
+                --json databaseId,conclusion,createdAt,event,headBranch \
+                --jq '.[] | "- [\(.conclusion // "in_progress")] \(.createdAt) (\(.event), \(.headBranch)) — run \(.databaseId)"' \
+                || echo "- (could not list runs)"
+            done
+            echo
+            echo "### Claude handoff branches without any PR"
+            # A blog/claude-* head that never had a PR means finalize failed
+            # after the session pushed; the post is on that branch. So does a
+            # claude/* fallback branch that still carries the handoff inbox
+            # (finalize deletes the transport branch once the post moves).
+            OPEN_HEADS=$(gh pr list --state all --limit 500 --json headRefName --jq '.[].headRefName' || true)
+            gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --paginate --jq '.[].name' 2>/dev/null \
+              | grep -E '^(blog/claude-|claude/)' \
+              | while read -r B; do
+                  case "$B" in
+                    claude/*)
+                      gh api "repos/${GITHUB_REPOSITORY}/contents/data/blog-claude-inbox/plan.json?ref=${B}" --silent 2>/dev/null \
+                        && echo "- \`$B\` (handoff not finalized: \`gh workflow run blog-finalize.yml -f ref=$B\`)" ;;
+                    *)
+                      grep -qxF "$B" <<<"$OPEN_HEADS" || echo "- \`$B\`" ;;
+                  esac
+                done \
+              || echo "- (could not list branches)"
           } > diagnosis.md
 
           cat diagnosis.md
@@ -399,7 +440,7 @@ jobs:
             echo "### Where to look"
             echo "1. **PR open but unmerged** — check its CI. \`autoblog-merge-pending\` refuses to merge a PR whose checks are not green, by design."
             echo "2. **PR labelled \`autoblog-review-failed\`** — the auto-fix loop hit its cap (\`AUTOBLOG_MAX_AUTOFIX\`) and wants a human."
-            echo "3. **No PR at all** — generation itself failed. Re-run \`generate-blog-post.yml\` via workflow_dispatch (\`gh workflow run generate-blog-post.yml\`); output is now committed before any gate, so a partial failure still leaves a PR."
+            echo "3. **No PR at all** — check the chain: \`blog-brief.yml\` ran, the scheduled Claude session pushed a \`blog/claude-*\` (or \`claude/*\`) branch, \`blog-finalize.yml\` opened the PR. A handoff branch without a PR is listed above; re-run finalize on it (\`gh workflow run blog-finalize.yml -f ref=<branch>\`). No branch at all: run the Claude routine by hand, or fall back to Grok (\`gh workflow run generate-blog-post.yml\`)."
             echo "4. **\`autoblog-hold\` label present** — publishing is paused on purpose."
           } > "$BODY_FILE"
 

@@ -7,7 +7,7 @@ name: Refresh Ranking Blog Post
 # Console impressions that has not been touched in a while gets its answer
 # box, FAQs, keyword, sources and (lightly) its body regenerated against the
 # queries it already ranks for, and an honest `updated:` date. The existing
-# review gate and the 24-hour merge window apply unchanged.
+# review gate and the AUTOBLOG_MERGE_DELAY merge window apply unchanged.
 #
 # Runs Monday 1 AM Pacific (DST pair + the same hour-based guard as
 # generate-blog-post.yml). Nothing to refresh — no Search Console access, no
@@ -176,7 +176,7 @@ jobs:
             echo "### What changed"
             if [ -f "$NOTES" ]; then cat "$NOTES"; else jq -r '.changeNotes // "(no notes)"' "$REPORT"; fi
             echo
-            echo "The existing AI review gate runs on this PR; it merges through the daily 24-hour window like a new post. The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
+            echo "The existing AI review gate runs on this PR; it merges through the same \`AUTOBLOG_MERGE_DELAY\` window as a new post. The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
           } > "$BODY_FILE"
 
           git config user.name "github-actions[bot]"

@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (nine since Codex heal), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-22"
+timestamp: "2026-09-25"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -17,13 +17,15 @@ every repo provisioned from it.
 
 | Workflow | Role |
 |---|---|
-| `generate-blog-post.yml` | Hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). Closed unmerged drafts count as that day's attempt; retry is `workflow_dispatch`. For `>=1d`, generate on the first tick **at or after** `AUTOBLOG_HOUR_PT` (exact `==` skipped Pulse 2026-09-17 when GitHub fired at 2:06 AM PT). If a late tick crosses Pacific midnight and calendar days already exceed the interval, catch up. `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
-| `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). |
+| `blog-brief.yml` | Daily, no LLM: `brief.json` on branch `autoblog-brief` for the Claude session ([[concepts/claude-writer]]). |
+| `blog-finalize.yml` | On a `blog/claude-*` (or `claude/*`) push carrying `data/blog-claude-inbox/`: the consumer generator in external-plan mode, then a draft PR labelled `autoblog` + `autoblog-claude-reviewed`. |
+| `generate-blog-post.yml` | Consumers now run it by `workflow_dispatch` only; the Claude session writes the daily post. With the schedule restored it is an hourly tick. Due-check reads `AUTOBLOG_INTERVAL` (`1h`/`1d`/`7d`/`30d`, default `1d`) and `AUTOBLOG_HOUR_PT` (default 1 AM Pacific). Skips when a `blog/auto-*` PR is already open, or the last new-post PR's **createdAt** is inside the interval (not mergedAt — merge lag would skip the next 1 AM slot). Closed unmerged drafts count as that day's attempt; retry is `workflow_dispatch`. For `>=1d`, generate on the first tick **at or after** `AUTOBLOG_HOUR_PT` (exact `==` skipped Pulse 2026-09-17 when GitHub fired at 2:06 AM PT). If a late tick crosses Pacific midnight and calendar days already exceed the interval, catch up. `RUN_KEY` keys branch, report, recovery ref and PR title. Downloads posts from open autoblog PRs into `data/blog-pending/` for dedup, seeds the planner from Search Console, opens a draft PR. |
+| `autoblog-review.yml` | AI review gate; on fail runs the bounded auto-fix loop ([[concepts/autofix-loop]]). `autoblog-claude-reviewed` PRs skip it; their `claude-reviewed` job applies `autoblog-approved-pending` unless the session review failed. |
 | `autoblog-codex-heal.yml` | Unresolved Codex P0/P1 on an approved autoblog PR: bounded rewrite ([[concepts/codex-heal]]), then wait for Codex to re-review the new head before resolving old threads. |
 | `autoblog-merge-pending.yml` | Hourly tick at :20 over `autoblog-approved-pending`. Age gate is `AUTOBLOG_MERGE_DELAY` (default `1h`). Unresolved Codex P0 always skips. Unresolved Codex P1 skips when `AUTOBLOG_HOLD_ON_CODEX_P1` is true. P2 nits ship. A CANCELLED check is ignored only when a later run of the same workflow and check name passed. A newer cancellation still fails. A FAILURE still fails. |
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |
-| `autoblog-watchdog.yml` | Daily proof that a post actually shipped. Window / expected count / stale days are derived from `AUTOBLOG_INTERVAL` (override with `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` if set). |
-| `autoblog-ci-heal.yml` | Reacts to red CI on `blog/auto-*`, `blog/refresh-*` and `blog/backfill-*` PRs so a failing check does not strand a finished post. |
+| `autoblog-watchdog.yml` | Daily proof that a post actually shipped. `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` defaults to 7: 7-day window, stale after `ceil(14/N)` days. Set it to `0` to derive the windows from `AUTOBLOG_INTERVAL`. `blog/claude-*` heads count. |
+| `autoblog-ci-heal.yml` | Reacts to red CI on `blog/auto-*`, `blog/claude-*`, `blog/refresh-*` and `blog/backfill-*` PRs so a failing check does not strand a finished post. |
 | `blog-refresh.yml` | Monday: `blog-engine-refresh --mode refresh` on the post with the most page-two Search Console impressions outside a 120-day cooldown ([[concepts/refresh-mode]]). Serialized with backfill via the `autoblog-mutate-existing` concurrency group. |
 | `autoblog-backfill.yml` | `workflow_dispatch`: brings up to N older posts onto the current template, one PR each, body kept, autofix skipped (label `autoblog-backfill`). |
 
@@ -63,10 +65,11 @@ merge from three days earlier, so one real miss looked like two. A one-day
 hourly window stays a rolling 24 hours, so yesterday's posts cannot hide a
 silent day.
 
-Window, expected count and stale days are **derived from `AUTOBLOG_INTERVAL`**
-in the assess step and exported via `GITHUB_ENV`, so the alert text cannot
-drift from the assessment. `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` remains an
-optional override.
+Window, expected count and stale days are computed in the assess step and
+exported via `GITHUB_ENV`, so the alert text cannot drift from the
+assessment. Since the Claude writer (2026-09-25) the template defaults
+`AUTOBLOG_EXPECTED_POSTS_PER_WEEK` to 7: a 7-day window, 7 expected merges,
+stale after 2 days. `0` falls back to the interval-derived table below.
 
 | Interval | Window | Expected `blog/auto-*` merges | Stale days |
 |---|---|---|---|
@@ -93,7 +96,7 @@ The Ahrefs link repair on 07-22 did exactly that while the last real post was
 permanent. Three markers are accepted, because the repo has two routes to
 publication and a watchdog that knows only one raises a false outage on the
 other: the `autoblog` label, the `autoblog-approved-pending` label, and an
-`autoblog/*` / `blog/auto-*` head ref (review accepts a PR by head-ref alone, so
+`autoblog/*` / `blog/auto-*` / `blog/claude-*` head ref (review accepts a PR by head-ref alone, so
 a post can ship with neither label). Merge dates are not returned in order —
 take the max, not row one.
 
