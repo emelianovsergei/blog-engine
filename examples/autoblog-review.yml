@@ -459,8 +459,10 @@ jobs:
   #
   # The verdict covers the content blog-finalize.yml committed, nothing after
   # it. The label persists across pushes, so approval is bound to that commit:
-  # afterwards only deterministic `[autoblog-cifix]` link repairs and merges
-  # from main may change blog content. Anything else waits for a human.
+  # afterwards blog content may change only through merges from main or
+  # CI-heal `[autoblog-cifix]` commits that provably remove nothing but links.
+  # Anything else waits for a human, who approves by adding
+  # `autoblog-human-approved` after the latest push.
   claude-reviewed:
     if: contains(github.event.pull_request.labels.*.name, 'autoblog-claude-reviewed')
     runs-on: ubuntu-latest
@@ -476,6 +478,25 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail
+          # A CI-heal repair may only unlink: the post's text with every link
+          # and URL stripped must be identical before and after the commit.
+          # The `[autoblog-cifix]` subject alone is forgeable; this is not.
+          cat > "$RUNNER_TEMP/linkonly.py" <<'PY'
+          import re, subprocess, sys
+          commit, path = sys.argv[1], sys.argv[2]
+          def show(rev):
+              r = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True)
+              return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+          old, new = show(f"{commit}^"), show(commit)
+          if old is None or new is None or path.startswith("public/"):
+              sys.exit(1)
+          def norm(t):
+              t = re.sub(r"\[([^\]]*)\]\(\s*https?://[^)\s]*\s*\)", r"\1", t)
+              t = re.sub(r"<?https?://[^\s)\]>\"']+>?", "", t)
+              kept = [l for l in t.split("\n") if not re.match(r"^\s*-?\s*(name|url)\s*:", l)]
+              return re.sub(r"\s+", " ", " ".join(kept)).strip()
+          sys.exit(0 if norm(old) == norm(new) else 1)
+          PY
           # Newest finalize commit on this branch (a re-finalize supersedes).
           FINALIZE=$(git log --format='%H%x09%s' "origin/${BASE}..HEAD" \
             | awk -F '\t' 'index($2, "Add Claude-written blog post for ") == 1 { print $1; exit }')
@@ -495,7 +516,7 @@ jobs:
           fi
           # Every blog or image path that differs from the reviewed commit
           # must either match main (it arrived with a merge from main) or have
-          # been touched only by CI-heal [autoblog-cifix] repairs. Anything
+          # been changed only by verified link-only CI-heal commits. Anything
           # else, including a second post added later, is unreviewed.
           CHANGED=""
           while IFS= read -r P; do
@@ -503,10 +524,13 @@ jobs:
             AT_HEAD=$(git rev-parse -q --verify "HEAD:$P" 2>/dev/null || echo none)
             ON_BASE=$(git rev-parse -q --verify "origin/${BASE}:$P" 2>/dev/null || echo none)
             [ "$AT_HEAD" = "$ON_BASE" ] && continue
-            BY=$(git log --format='%h %s' "${FINALIZE}..HEAD" -- "$P" | grep -vF '[autoblog-cifix]' || true)
-            if [ -n "$BY" ]; then
-              CHANGED+="${P}: ${BY//$'\n'/; }"$'\n'
-            fi
+            while IFS=$'\t' read -r C SUBJECT; do
+              [ -n "$C" ] || continue
+              if [[ "$SUBJECT" == *"[autoblog-cifix]"* ]] && python3 "$RUNNER_TEMP/linkonly.py" "$C" "$P"; then
+                continue
+              fi
+              CHANGED+="${P}: ${C:0:10} ${SUBJECT}"$'\n'
+            done < <(git log --format='%H%x09%s' "${FINALIZE}..HEAD" -- "$P")
           done < <(git diff --name-only "$FINALIZE" HEAD -- content/blog public/images/blog)
           if [ -n "$CHANGED" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
@@ -521,22 +545,66 @@ jobs:
           echo "bound=true" >> "$GITHUB_OUTPUT"
           echo "Session verdict covers ${FINALIZE:0:10} (${FILES[*]}); no unreviewed blog change since."
 
+      # The human override approves exactly the head it was applied to. The
+      # `labeled` event records that head in this job's sticky comment; any
+      # later run on a different head drops the stale label.
+      - name: Check for a current human approval
+        id: human
+        if: contains(github.event.pull_request.labels.*.name, 'autoblog-human-approved')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "autoblog-human-approved" ]; then
+            APPROVED_SHA="$HEAD_SHA"
+          else
+            APPROVED_SHA=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
+              | grep -oE 'autoblog-human-approved-sha: [0-9a-f]{40}' | tail -n 1 | awk '{print $2}' || true)
+          fi
+          if [ "$APPROVED_SHA" = "$HEAD_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+            echo "Human approval covers ${HEAD_SHA:0:10}."
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Human approval covered ${APPROVED_SHA:-nothing}, not ${HEAD_SHA:0:10}; removing the stale label."
+            gh pr edit "$PR" --remove-label autoblog-human-approved || true
+          fi
+
       - name: Summarize the session review
         id: verdict
         env:
           FAILED: ${{ contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed') }}
           BOUND: ${{ steps.bound.outputs.bound }}
           REASON: ${{ steps.bound.outputs.reason }}
+          HUMAN: ${{ steps.human.outputs.current }}
+          HUMAN_SHA: ${{ steps.human.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ "$FAILED" = "true" ]; then
+          HOW="Review the post, then add \`autoblog-human-approved\` to publish exactly the current head (a later push needs it again), or push a new handoff to re-finalize."
+          if [ "$HUMAN" = "true" ]; then
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+            echo "human=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Autoblog AI Review — Claude session"
+              echo
+              echo "✅ Approved by a human (\`autoblog-human-approved\`) for this head."
+              echo
+              echo "<!-- autoblog-human-approved-sha: ${HUMAN_SHA} -->"
+            } > review-summary.md
+          elif [ "$FAILED" = "true" ]; then
             echo "pass=false" >> "$GITHUB_OUTPUT"
             {
               echo "## Autoblog AI Review — Claude session"
               echo
               echo "❌ This post failed the second-pass Claude review in the writing session, or its rule checks (details in the PR body). Grok review and auto-fix are skipped for Claude-written posts."
               echo
-              echo "Human needed: fix the post, then approve it yourself by adding \`autoblog-approved-pending\` (and removing \`autoblog-review-failed\`). A human edit is not covered by the session review. Or push a new handoff to the branch to re-finalize."
+              echo "Human needed. $HOW"
             } > review-summary.md
           elif [ "$BOUND" != "true" ]; then
             echo "pass=false" >> "$GITHUB_OUTPUT"
@@ -545,7 +613,7 @@ jobs:
               echo
               echo "⏸️ Not auto-approved: $REASON"
               echo
-              echo "The session review covers only the content \`blog-finalize.yml\` committed. Review the change yourself and add \`autoblog-approved-pending\` to publish, or push a new handoff to re-finalize."
+              echo "The session review covers only the content \`blog-finalize.yml\` committed. $HOW"
             } > review-summary.md
           else
             echo "pass=true" >> "$GITHUB_OUTPUT"
@@ -572,6 +640,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAT: ${{ secrets.AUTOBLOG_PAT }}
           PR: ${{ github.event.pull_request.number }}
+          HUMAN: ${{ steps.verdict.outputs.human }}
           AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
         run: |
           set -uo pipefail
@@ -585,12 +654,18 @@ jobs:
               }' -f id="$PR_ID" \
               || echo "::warning::Could not mark PR ready (merge-pending will retry with the PAT before merge)."
           fi
+          WHO="Claude session review passed"
+          if [ "$HUMAN" = "true" ]; then
+            WHO="Human approval (autoblog-human-approved)"
+            # The human's call overrides the session verdict.
+            gh pr edit "$PR" --remove-label autoblog-review-failed || true
+          fi
           gh pr review "$PR" --approve \
-            --body "Claude session review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a ${AUTOBLOG_MERGE_DELAY} human-override window." \
+            --body "${WHO}. Adding \`autoblog-approved-pending\` — will auto-merge after a ${AUTOBLOG_MERGE_DELAY} human-override window." \
             || true
           gh pr edit "$PR" --add-label autoblog-approved-pending
 
-      - name: Keep a failed post off the merge path
+      - name: Keep an unapproved post off the merge path
         if: steps.verdict.outputs.pass != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

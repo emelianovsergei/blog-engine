@@ -376,11 +376,21 @@ jobs:
             echo
             echo "### Claude handoff branches without any PR"
             # A blog/claude-* head that never had a PR means finalize failed
-            # after the session pushed; the post is on that branch.
+            # after the session pushed; the post is on that branch. So does a
+            # claude/* fallback branch that still carries the handoff inbox
+            # (finalize deletes the transport branch once the post moves).
             OPEN_HEADS=$(gh pr list --state all --limit 500 --json headRefName --jq '.[].headRefName' || true)
             gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --paginate --jq '.[].name' 2>/dev/null \
-              | grep -E '^blog/claude-' \
-              | while read -r B; do grep -qxF "$B" <<<"$OPEN_HEADS" || echo "- \`$B\`"; done \
+              | grep -E '^(blog/claude-|claude/)' \
+              | while read -r B; do
+                  case "$B" in
+                    claude/*)
+                      gh api "repos/${GITHUB_REPOSITORY}/contents/data/blog-claude-inbox/plan.json?ref=${B}" --silent 2>/dev/null \
+                        && echo "- \`$B\` (handoff not finalized: \`gh workflow run blog-finalize.yml -f ref=$B\`)" ;;
+                    *)
+                      grep -qxF "$B" <<<"$OPEN_HEADS" || echo "- \`$B\`" ;;
+                  esac
+                done \
               || echo "- (could not list branches)"
           } > diagnosis.md
 

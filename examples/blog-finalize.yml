@@ -270,7 +270,7 @@ jobs:
             echo
             echo "</details>"
             echo
-            echo "The Grok review and auto-fix skip PRs labelled \`autoblog-claude-reviewed\`. The session review covers this finalized content only: an edit to the post after it needs a human to add \`autoblog-approved-pending\`."
+            echo "The Grok review and auto-fix skip PRs labelled \`autoblog-claude-reviewed\`. The session review covers this finalized content only: an edit to the post after it needs a human to add \`autoblog-human-approved\` (it approves the exact head it is added to)."
           } > "$BODY_FILE"
 
           git config user.name "github-actions[bot]"
