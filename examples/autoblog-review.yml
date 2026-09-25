@@ -33,7 +33,8 @@
 #   - Repo variable (optional): AUTOBLOG_MAX_AUTOFIX = max automatic fix
 #       attempts per branch generation (default 2).
 #   - Labels (create once): autoblog, autoblog-approved-pending,
-#       autoblog-review-failed, autoblog-hold
+#       autoblog-review-failed, autoblog-hold, autoblog-human-approved
+#       (blog-finalize.yml also creates the ones Claude posts need)
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
 # the markdown path globs for your site's layout.
@@ -480,9 +481,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # A CI-heal repair may only unlink: the post's text with every link
-          # and URL stripped must be identical before and after the commit.
-          # The `[autoblog-cifix]` subject alone is forgeable; this is not.
+          # A CI-heal repair may only unlink. Checked on content, not on the
+          # forgeable `[autoblog-cifix]` subject: the new file must be the old
+          # one with characters deleted, and only from link syntax (a link's
+          # brackets and destination, a whole image, a URL alone in parens).
+          # Citations may only lose whole entries. Anything else is an edit.
           cat > "$RUNNER_TEMP/linkonly.py" <<'PY'
           import re, subprocess, sys
           commit, path = sys.argv[1], sys.argv[2]
@@ -492,18 +495,101 @@ jobs:
           old, new = show(f"{commit}^"), show(commit)
           if old is None or new is None or path.startswith("public/"):
               sys.exit(1)
-          def norm(t):
-              t = re.sub(r"\[([^\]]*)\]\(\s*https?://[^)\s]*\s*\)", r"\1", t)
-              t = re.sub(r"<?https?://[^\s)\]>\"']+>?", "", t)
-              kept = [l for l in t.split("\n") if not re.match(r"^\s*-?\s*(name|url)\s*:", l)]
-              return re.sub(r"\s+", " ", " ".join(kept)).strip()
-          # One-directional: no URL or link may appear, only disappear.
-          # Comparing stripped text alone would accept a commit that adds or
-          # swaps a link, since both sides strip to the same prose.
+          FM = re.compile(r"\A---\r?\n(.*?\r?\n)---\r?\n", re.S)
+          def split(t):
+              m = FM.match(t)
+              return (m.group(1), t[m.end():]) if m else ("", t)
+          def ws(s):
+              return re.sub(r"\s+", " ", s).strip()
+          def citations(fm):
+              # (frontmatter without the citations block, [entries]). An entry is one
+              # `- name/url` item, kept whole so its name and url stay together.
+              lines = fm.splitlines(keepends=True)
+              rest, entries, inside = [], [], False
+              for l in lines:
+                  if re.match(r"^citations:\s*$", l):
+                      inside = True
+                      continue
+                  if inside and l.strip() and not l[0].isspace() and not l.startswith("-"):
+                      inside = False
+                  if not inside:
+                      rest.append(l)
+                  elif re.match(r"^\s*-\s", l):
+                      entries.append(l)
+                  elif entries:
+                      entries[-1] += l
+                  elif l.strip():
+                      sys.exit(1)
+              return ws("".join(rest)), [ws(e) for e in entries]
+          def subsequence(small, big):
+              it = iter(big)
+              return all(any(x == y for y in it) for x in small)
+          old_fm, old_body = split(old)
+          new_fm, new_body = split(new)
+          # Frontmatter: identical except whole citation entries dropped. Renaming a
+          # citation, or pointing it at another URL, is an edit and fails here.
+          old_rest, old_cites = citations(old_fm)
+          new_rest, new_cites = citations(new_fm)
+          if old_rest != new_rest or not subsequence(new_cites, old_cites):
+              sys.exit(1)
+          # Body: the new text must be the old text with characters DELETED, and only
+          # from link syntax: a link's brackets and destination (its anchor text stays),
+          # a whole image, a URL alone in parentheses, plus the emphasis and horizontal
+          # whitespace right next to those, and a line left holding nothing else.
+          DEST = r"\((?:[^()\n]|\([^()\n]*\))*\)"
+          IMG = r"!\[[^\]\n]*\]" + DEST
+          dele = [False] * len(old_body)
+          def mark(a, b):
+              for i in range(max(a, 0), min(b, len(old_body))):
+                  dele[i] = True
+          spans = []
+          for m in re.finditer(r"\[" + IMG + r"\]" + DEST + "|" + IMG, old_body):
+              spans.append((m.start(), m.end()))
+              mark(m.start(), m.end())
+          for m in re.finditer(r"(?<!!)\[([^\]\n]*)\]" + DEST, old_body):
+              if dele[m.start()]:
+                  continue
+              mark(m.start(), m.start() + 1)
+              mark(m.end(1), m.end())
+          for m in re.finditer(r"(?<!\])\(\s*<?https?://[^\s()<>]+>?\s*\)", old_body):
+              spans.append((m.start(), m.end()))
+              mark(m.start(), m.end())
+          for a, b in spans:
+              i = a - 1
+              while i >= 0 and old_body[i] in " \t*_":
+                  dele[i] = True
+                  i -= 1
+              i = b
+              while i < len(old_body) and old_body[i] in " \t*_":
+                  dele[i] = True
+                  i += 1
+          pos = 0
+          for line in old_body.splitlines(keepends=True):
+              end = pos + len(line)
+              core = "".join(c for c, d in zip(line, dele[pos:end]) if not d)
+              if any(dele[pos:end]) and re.fullmatch(r"\s*(?:[-*+]|\d+\.|>|#{1,6})?\s*", core):
+                  mark(pos, end)
+              pos = end
+          D = len(old_body) - len(new_body)
+          if D < 0:
+              sys.exit(1)
+          reach = {0}
+          for i, ch in enumerate(old_body):
+              nxt = set()
+              for k in reach:
+                  j = i - k
+                  if j < len(new_body) and new_body[j] == ch:
+                      nxt.add(k)
+                  if dele[i] and k < D:
+                      nxt.add(k + 1)
+              if not nxt:
+                  sys.exit(1)
+              reach = nxt
+          if D not in reach:
+              sys.exit(1)
+          # Belt and braces: no URL may appear that was not already in the file.
           url = re.compile(r"https?://[^\s)\]>\"']+")
-          added = set(url.findall(new)) - set(url.findall(old))
-          more_links = new.count("](") > old.count("](")
-          sys.exit(0 if norm(old) == norm(new) and not added and not more_links else 1)
+          sys.exit(0 if set(url.findall(new)) <= set(url.findall(old)) else 1)
           PY
           # Newest finalize commit on this branch (a re-finalize supersedes),
           # identified by the `autoblog/finalized` status blog-finalize.yml

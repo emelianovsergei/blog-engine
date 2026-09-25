@@ -320,7 +320,8 @@ jobs:
           for L in "autoblog|0E8A16|Auto-generated blog post" \
                    "autoblog-claude-reviewed|5319E7|Written and reviewed in the scheduled Claude session" \
                    "autoblog-review-failed|B60205|AI review failed — needs a human" \
-                   "autoblog-link-repair-needed|B60205|Dead link still in the post — blocks auto-merge"; do
+                   "autoblog-link-repair-needed|B60205|Dead link still in the post — blocks auto-merge" \
+                   "autoblog-human-approved|0E8A16|A human reviewed this exact head — publish it"; do
             IFS='|' read -r NAME COLOR DESC <<<"$L"
             GH_TOKEN="$LABEL_TOKEN" gh label create "$NAME" --color "$COLOR" --description "$DESC" >/dev/null 2>&1 || true
           done
