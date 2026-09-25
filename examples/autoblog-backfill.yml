@@ -7,7 +7,7 @@ name: Backfill Blog Posts to the Template
 # summary, citations, reviewedBy, FAQs, targetKeyword, category — body kept
 # verbatim. Opens ONE PR PER POST (autoblog-review.yml reviews only the first
 # changed blog file in a PR), up to `count` per dispatch, each through the
-# normal review gate and the daily 24-hour merge window. The autofix loop is
+# normal review gate and the AUTOBLOG_MERGE_DELAY merge window. The autofix loop is
 # skipped on these PRs (label autoblog-backfill): a failed review here wants
 # a human edit, not an AI rewrite of an old body.
 #
@@ -126,7 +126,7 @@ jobs:
               echo "- Body: unchanged (frontmatter only); \`updated:\` set to ${RUN_DATE}"
               echo "- Remaining posts needing backfill after this one: ${REMAINING}"
               echo
-              echo "Reviewed by the normal AI gate; the autofix loop is skipped on backfill PRs — a failed review here needs a human edit of the frontmatter. Merges through the daily 24-hour window."
+              echo "Reviewed by the normal AI gate; the autofix loop is skipped on backfill PRs — a failed review here needs a human edit of the frontmatter. Merges through the \`AUTOBLOG_MERGE_DELAY\` window."
             } > "$BODY_FILE"
 
             git checkout -q -B "$BRANCH"

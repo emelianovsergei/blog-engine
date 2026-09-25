@@ -3,7 +3,7 @@ type: "concept"
 title: "Auto-Fix Loop (Review Failure Recovery)"
 description: "Bounded CI loop that rewrites a failed-review post with Claude Sonnet and re-reviews it, capped by marker commits."
 tags: ["concepts", "review", "rewrite", "ci", "workflows"]
-timestamp: "2026-07-05"
+timestamp: "2026-09-25"
 sources: []
 ---
 # Auto-Fix Loop (Review Failure Recovery)
@@ -15,7 +15,7 @@ auto-fix loop before handing off to a human.
 ## State machine
 
 ```
-review exit 0 (pass) ──► ready + approve + `autoblog-approved-pending` ──► daily merge cron
+review exit 0 (pass) ──► ready + approve + `autoblog-approved-pending` ──► merge-pending (hourly :20 tick, after `AUTOBLOG_MERGE_DELAY`, default 1h)
 review exit 1 (error) ─► `autoblog-review-failed` only (transient — no auto-fix)
 review exit 2 (fail) ──► `autoblog-review-failed` + eligibility gate:
     no ReviewResult JSON / pass!=false ─► skip (exit-1-like anomaly)
@@ -71,3 +71,7 @@ Codex P0/P1 on a **passing** review is a different loop: [[concepts/codex-heal]]
 This file stays the AI-review-fail path.
 
 See [[concepts/quality-gates]], [[modules/review]], [[modules/rewrite]].
+
+Posts written by the scheduled Claude session (label `autoblog-claude-reviewed`)
+skip this loop. They were already graded in the session by a separate Claude
+subagent, with up to 2 fix rounds. See [[concepts/claude-writer]].

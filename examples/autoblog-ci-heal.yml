@@ -45,6 +45,7 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       (startsWith(github.event.workflow_run.head_branch, 'blog/auto-') ||
+       startsWith(github.event.workflow_run.head_branch, 'blog/claude-') ||
        startsWith(github.event.workflow_run.head_branch, 'blog/refresh-') ||
        startsWith(github.event.workflow_run.head_branch, 'blog/backfill-'))
     runs-on: ubuntu-latest
@@ -123,7 +124,9 @@ jobs:
       # run and stops here.
       - name: Confirm the PR head is still the SHA that failed
         id: fresh
-        if: steps.classify.outputs.class == 'link' && steps.fresh.outputs.stale == 'false'
+        # Not gated on its own output: that is empty until this step runs, so
+        # the step (and every repair step after it) was always skipped.
+        if: steps.classify.outputs.class == 'link'
         env:
           GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

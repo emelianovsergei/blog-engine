@@ -1,0 +1,360 @@
+# Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
+# Place at: .github/workflows/blog-finalize.yml
+#
+# Finalize a post written by the scheduled Claude session (AUTOBLOG_CLAUDE.md).
+#
+# The session pushes data/blog-claude-inbox/{plan.json, body.md, meta.json,
+# review.md} to `blog/claude-<date>` — or, when its git proxy only lets it push
+# its own `claude/*` branch, to that branch. This workflow runs the tested
+# generator in external-plan mode (BLOG_EXTERNAL_PLAN / BLOG_EXTERNAL_BODY), so
+# topic selection, keyword research, planPost and writeArticle are skipped and
+# everything else is unchanged: the Grok Imagine image (Pexels fallback), the
+# link audit + unlink, frontmatter, checkBlogPostSource, the run report. Then
+# it opens a draft PR labelled `autoblog` + `autoblog-claude-reviewed`.
+#
+# PERSIST BEFORE GATE (CLAUDE.md): nothing here can discard the post. A failed
+# Claude review opens the PR with `autoblog-review-failed`; rule violations are
+# listed in the PR body; the inbox stays on the pushed branch until this job
+# has committed the finished post over it.
+name: Blog Finalize (Claude autoblog)
+
+on:
+  push:
+    branches:
+      - "blog/claude-*"
+      - "claude/**"
+    paths:
+      - "data/blog-claude-inbox/**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch that holds data/blog-claude-inbox/ (blog/claude-* or claude/*)"
+        required: true
+
+concurrency:
+  group: blog-finalize-${{ github.event.inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Finalize Claude post
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      # Label provisioning is an Issues API call.
+      issues: write
+
+    steps:
+      - name: Checkout the handoff branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
+          fetch-depth: 0
+          # GITHUB_TOKEN pushes (contents: write). The PR is opened with
+          # AUTOBLOG_PAT below so CI and review fire on it.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve run
+        id: run
+        env:
+          SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          INBOX=data/blog-claude-inbox
+          if [ ! -f "$INBOX/plan.json" ] || [ ! -f "$INBOX/body.md" ] || [ ! -f "$INBOX/meta.json" ]; then
+            # A claude/* branch that only removed the inbox, or a dev branch.
+            echo "::notice::No complete handoff in $INBOX on $SOURCE — nothing to finalize."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RUN_DATE=$(jq -r '.runDate // empty' "$INBOX/meta.json")
+          RUN_AT=$(jq -r '.runAt // empty' "$INBOX/meta.json")
+          if [ -z "$RUN_DATE" ]; then
+            RUN_DATE=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          fi
+          if [ -z "$RUN_AT" ]; then
+            RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
+          fi
+          case "$SOURCE" in
+            blog/claude-*) TARGET="$SOURCE" ;;
+            *)
+              TARGET="blog/claude-${RUN_DATE}"
+              # Never write over another day's finalized branch.
+              if git ls-remote --exit-code origin "refs/heads/$TARGET" >/dev/null 2>&1; then
+                TARGET="${TARGET}-$(TZ=America/Los_Angeles date +%H%M)"
+              fi
+              ;;
+          esac
+          RUN_KEY="${TARGET#blog/}"
+          {
+            echo "skip=false"
+            echo "source=$SOURCE"
+            echo "target=$TARGET"
+            echo "run_key=$RUN_KEY"
+            echo "run_date=$RUN_DATE"
+            echo "run_at=$RUN_AT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Finalizing $SOURCE → $TARGET (run key $RUN_KEY)"
+
+      - name: Set up Node.js
+        if: steps.run.outputs.skip != 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.run.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Install ImageMagick
+        if: steps.run.outputs.skip != 'true'
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 imagemagick
+
+      # Same as generate-blog-post.yml: an in-flight post lives only in an
+      # open PR. The generator refuses a slug that is pending there.
+      - name: Collect posts pending in open autoblog PRs
+        if: steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.run.outputs.target }}
+        run: |
+          set -uo pipefail
+          mkdir -p data/blog-pending
+          gh pr list --state open --limit 500 --json number,labels,headRefName --jq '.[] | select((.labels | map(.name) | index("autoblog")) or (.headRefName | startswith("autoblog/"))) | "\(.number) \(.headRefName)"' > pending-prs.txt || true
+          while read -r NUM REF; do
+            [ -n "$NUM" ] || continue
+            # This run's own PR (a re-run) is not "another pending post".
+            [ "$REF" = "$TARGET" ] && continue
+            gh api "/repos/${{ github.repository }}/pulls/${NUM}/files" --paginate \
+              --jq '.[] | select(.status == "added") | .filename' 2>/dev/null \
+              | grep -E '^content/blog/.*\.mdx$' \
+              | while read -r FILE; do
+                  gh api "/repos/${{ github.repository }}/contents/${FILE}?ref=${REF}" \
+                    --jq '.content' 2>/dev/null | base64 -d > "data/blog-pending/$(basename "$FILE")" \
+                    && echo "pending: #$NUM $FILE" || rm -f "data/blog-pending/$(basename "$FILE")"
+                done
+          done < pending-prs.txt
+          rm -f pending-prs.txt
+
+      - name: Generate post from the Claude handoff
+        if: steps.run.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Keep the review text before the inbox is removed.
+          cp data/blog-claude-inbox/review.md "$RUNNER_TEMP/claude-review.md" 2>/dev/null || true
+          # A revised handoff pushed onto an already-finalized branch replaces
+          # that branch's own post. A post that is on main is never touched:
+          # the generator refuses its slug instead.
+          SLUG=$(jq -r '.slug // empty' data/blog-claude-inbox/plan.json)
+          if [ -n "$SLUG" ] && [ -f "content/blog/${SLUG}.mdx" ] \
+            && ! git cat-file -e "origin/main:content/blog/${SLUG}.mdx" 2>/dev/null; then
+            echo "Replacing this branch's earlier finalize of ${SLUG}."
+            rm -f "content/blog/${SLUG}.mdx" "public/images/blog/${SLUG}.jpg"
+          fi
+          npm run blog:generate
+        env:
+          # Images only: Grok Imagine, Pexels fallback. No text model is called.
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          BLOG_EXTERNAL_PLAN: data/blog-claude-inbox/plan.json
+          BLOG_EXTERNAL_BODY: data/blog-claude-inbox/body.md
+          BLOG_EXTERNAL_META: data/blog-claude-inbox/meta.json
+          BLOG_GENERATOR_DATE: ${{ steps.run.outputs.run_at }}
+          BLOG_RUN_KEY: ${{ steps.run.outputs.run_key }}
+          BLOG_PENDING_DIR: data/blog-pending
+
+      # Blog posts ingest in the same content PR (CLAUDE.md). Deterministic and
+      # offline; a failure leaves brain/ for the next content PR, never the post.
+      - name: Ingest wiki
+        if: steps.run.outputs.skip != 'true'
+        continue-on-error: true
+        run: npm run wiki:ingest
+
+      - name: Commit, push and open the draft PR
+        if: steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
+          LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE: ${{ steps.run.outputs.source }}
+          TARGET: ${{ steps.run.outputs.target }}
+          RUN_KEY: ${{ steps.run.outputs.run_key }}
+          RUN_DATE: ${{ steps.run.outputs.run_date }}
+        run: |
+          set -euo pipefail
+          REPORT="data/blog-generation-runs/${RUN_KEY}.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::Expected report file not found: $REPORT" >&2
+            exit 1
+          fi
+
+          PLAN_TITLE=$(jq -r '.plan.title' "$REPORT")
+          SLUG=$(jq -r '.slug // ""' "$REPORT")
+          WRITER=$(jq -r '.writer // "Claude"' "$REPORT")
+          REVIEW_PASS=$(jq -r '.claudeReview.pass // false' "$REPORT")
+          FIX_ROUNDS=$(jq -r '.claudeReview.fixRounds // 0' "$REPORT")
+          OVERALL=$(jq -r '.claudeReview.result.overallScore // 0 | . * 10 | round / 10' "$REPORT")
+          TOPIC=$(jq -r '.topicSelection.topic // ""' "$REPORT")
+          RATIONALE=$(jq -r '.topicSelection.rationale // ""' "$REPORT")
+          IMAGE_URL=$(jq -r '.selectedImage.pageUrl // ""' "$REPORT")
+          IMAGE_BY=$(jq -r '.selectedImage.photographer // ""' "$REPORT")
+          IMAGE_ALT=$(jq -r '.selectedImage.featuredImageAlt // ""' "$REPORT")
+          LINKS_CHECKED=$(jq -r '.linkAudit.checked // 0' "$REPORT")
+          LINKS_REMOVED=$(jq -r '.linkAudit.removed // [] | if length == 0 then "- none" else .[] | "- ❌ `\(.url)` — \(.reason)" end' "$REPORT")
+          LINKS_UNVERIFIED=$(jq -r '.linkAudit.unverified // [] | if length == 0 then "- none" else .[] | "- ⚠️ `\(.url)` — \(.reason)" end' "$REPORT")
+          LINKS_UNRESOLVED=$(jq -r '.linkAudit.unresolved // [] | if length == 0 then "- none" else .[] | "- 🚫 `\(.url)` — \(.reason)" end' "$REPORT")
+          UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
+          RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
+          RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
+          CANDIDATES=$(jq -r '.candidates // [] | .[] | "| \(.score // "") | \(.categoryId // "") | \(.topic // "") | \(.hintQuery // "") | \(.similarity // "") |"' "$REPORT")
+
+          PR_TITLE="Blog: ${RUN_DATE} Claude-written post"
+          BODY_FILE=$(mktemp)
+          {
+            echo "## Claude autoblog post"
+            echo
+            echo "- Title: $PLAN_TITLE"
+            echo "- Slug: \`$SLUG\`"
+            echo "- Writer: $WRITER"
+            if [ "$REVIEW_PASS" = "true" ]; then
+              echo "- Second-pass review: ✅ **passed** (${OVERALL}/10) after ${FIX_ROUNDS} fix round(s), by a subagent that did not write the post"
+            else
+              echo "- Second-pass review: ❌ **failed** after ${FIX_ROUNDS} fix round(s) — \`autoblog-review-failed\`, a human decides"
+            fi
+            echo "- Topic: $TOPIC"
+            echo "- Why: $RATIONALE"
+            echo
+            echo "### Candidates"
+            echo "| Score | Category | Topic | GSC query | Similarity |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "$CANDIDATES"
+            echo
+            echo "### Rule checks"
+            echo "$RULES"
+            echo
+            echo "### Selected Image"
+            echo "- Source: $IMAGE_URL ($IMAGE_BY)"
+            echo "- Alt text: $IMAGE_ALT"
+            echo
+            echo "### Outbound Link Audit"
+            echo "Every URL was checked against \`content/policy/link-constraints.json\` and fetched with a browser User-Agent before the file was written."
+            echo
+            echo "- URLs checked: \`$LINKS_CHECKED\`"
+            echo
+            echo "**Removed (proven dead):**"
+            echo "$LINKS_REMOVED"
+            echo
+            echo "**Kept but unverified:**"
+            echo "$LINKS_UNVERIFIED"
+            echo
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              echo "**🚫 Dead links STILL IN THIS POST — auto-merge is blocked:**"
+              echo "$LINKS_UNRESOLVED"
+              echo
+              echo "Rewrite the sentence, then remove the \`autoblog-link-repair-needed\` label."
+              echo
+            fi
+            echo "<details><summary>Claude review</summary>"
+            echo
+            if [ -s "$RUNNER_TEMP/claude-review.md" ]; then cat "$RUNNER_TEMP/claude-review.md"; else echo "(no review text in the handoff)"; fi
+            echo
+            echo "</details>"
+            echo
+            echo "The Grok review and auto-fix skip PRs labelled \`autoblog-claude-reviewed\`. Remove that label to send this post through the Grok review instead."
+          } > "$BODY_FILE"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git rm -rq data/blog-claude-inbox
+          git add data/blog-generation-runs/ content/blog/ public/images/blog/ brain/ 2>/dev/null || git add data/blog-generation-runs/ content/blog/ public/images/blog/
+          git commit -q -m "Add Claude-written blog post for ${RUN_KEY}"
+
+          # PERSIST FIRST, off any branch or PR head (see generate-blog-post.yml).
+          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_KEY}"; then
+            echo "::error::Could not persist the finalized commit to a recovery ref — aborting before anything else can fail and lose it."
+            exit 1
+          fi
+
+          if ! EXISTING_PR=$(gh pr list --head "$TARGET" --state open --json number --jq '.[0].number'); then
+            echo "::error::Could not list PRs for $TARGET — refusing to guess whether one exists."
+            exit 1
+          fi
+
+          for L in "autoblog|0E8A16|Auto-generated blog post" \
+                   "autoblog-claude-reviewed|5319E7|Written and reviewed in the scheduled Claude session" \
+                   "autoblog-review-failed|B60205|AI review failed — needs a human" \
+                   "autoblog-link-repair-needed|B60205|Dead link still in the post — blocks auto-merge"; do
+            IFS='|' read -r NAME COLOR DESC <<<"$L"
+            GH_TOKEN="$LABEL_TOKEN" gh label create "$NAME" --color "$COLOR" --description "$DESC" >/dev/null 2>&1 || true
+          done
+
+          # The gate labels must be on the PR before the new head is reviewable.
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
+            if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
+              gh pr edit "$EXISTING_PR" --add-label autoblog-review-failed
+            fi
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              gh pr edit "$EXISTING_PR" --add-label autoblog-link-repair-needed
+            fi
+          fi
+
+          if [ "$SOURCE" = "$TARGET" ]; then
+            git push origin "HEAD:refs/heads/$TARGET"
+          else
+            git push --force origin "HEAD:refs/heads/$TARGET"
+          fi
+
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured. The post is safe on $TARGET, but a PR opened with GITHUB_TOKEN would never receive CI or review. Add the secret and re-run, or open the PR by hand."
+            exit 1
+          fi
+
+          if [ -n "$EXISTING_PR" ]; then
+            PR_NUM="$EXISTING_PR"
+            gh pr edit "$PR_NUM" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            # A GITHUB_TOKEN push raises no pull_request event; re-raise one
+            # so CI and review see the new head (generate-blog-post.yml).
+            gh pr close "$PR_NUM" || { echo "::error::Could not close #$PR_NUM to re-raise its events."; exit 1; }
+            gh pr reopen "$PR_NUM" || { echo "::error::Closed #$PR_NUM but could not reopen it — reopen it by hand."; exit 1; }
+          else
+            CREATE_LABELS=(--label autoblog --label autoblog-claude-reviewed)
+            if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
+              CREATE_LABELS+=(--label autoblog-review-failed)
+            fi
+            if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
+              CREATE_LABELS+=(--label autoblog-link-repair-needed)
+            fi
+            gh pr create --draft --base main --head "$TARGET" "${CREATE_LABELS[@]}" --title "$PR_TITLE" --body-file "$BODY_FILE"
+            PR_NUM=$(gh pr list --head "$TARGET" --state open --json number --jq '.[0].number')
+          fi
+          if [ -z "$PR_NUM" ]; then
+            echo "::error::No PR number for $TARGET."
+            exit 1
+          fi
+
+          # Read the gate back: a missing failed/link label would let a post
+          # that failed review, or still has a dead link, auto-publish.
+          if ! PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")'); then
+            echo "::error::Could not read labels back from PR #$PR_NUM."
+            exit 1
+          fi
+          if { [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; } && ! grep -q 'autoblog-review-failed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM failed the Claude review or the rule checks but has no autoblog-review-failed label."
+            exit 1
+          fi
+          if [ "$UNRESOLVED_COUNT" -gt 0 ] && ! grep -q 'autoblog-link-repair-needed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM has dead links but no autoblog-link-repair-needed label."
+            exit 1
+          fi
+          echo "Opened/updated PR #$PR_NUM for $TARGET."
+
+          # The session's transport branch is spent once the post is on TARGET.
+          if [ "$SOURCE" != "$TARGET" ]; then
+            GH_TOKEN="$LABEL_TOKEN" git push origin --delete "$SOURCE" || echo "::warning::Could not delete $SOURCE; delete it by hand."
+          fi

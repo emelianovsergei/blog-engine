@@ -1,16 +1,22 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/generate-blog-post.yml
 #
-# Pace is a repo variable, not this cron. The cron is an hourly tick; the
-# due-check below decides whether to generate. Change speed with:
+# MANUAL FALLBACK ONLY. Daily posts are written by a scheduled Claude session
+# (AUTOBLOG_CLAUDE.md → blog-finalize.yml). This Grok writer keeps
+# workflow_dispatch for a day the Claude session cannot run:
+#   gh workflow run generate-blog-post.yml
+# The due-check below still applies its in-flight lock; the interval and hour
+# gates only ever applied to the schedule, which is gone.
+#
+# A site without the Claude writer restores the tick and paces it with repo
+# variables (see [[concepts/delivery-guarantee]] in the blog-engine wiki):
+#   on: schedule: - cron: "0 * * * *"
 #   gh variable set AUTOBLOG_INTERVAL --body 1d|7d|30d|1h
-#   gh variable set AUTOBLOG_HOUR_PT --body 1          # Pacific hour, ignored for 1h
+#   gh variable set AUTOBLOG_HOUR_PT --body 1
 #
 name: Generate Blog Post
 
 on:
-  schedule:
-    - cron: "0 * * * *"   # hourly tick; due-check decides
   workflow_dispatch:
 
 # Every artifact is keyed on RUN_KEY (Pacific date, plus hour for 1h
@@ -146,10 +152,11 @@ jobs:
           # New-post heads only. Refresh (`blog/refresh-*`) and backfill
           # (`blog/backfill-*`) also carry `autoblog` so the review gate
           # admits them; matching that label here would skip a daily slot
-          # for the whole day while a maintenance PR sat open.
+          # for the whole day while a maintenance PR sat open. A Claude post
+          # (`blog/claude-*`) is a new post: do not stack a Grok one on it.
           OPEN_NUM=$(jq -r '
             [.[]
-              | select(.headRefName | startswith("blog/auto-") or startswith("autoblog/"))
+              | select(.headRefName | startswith("blog/auto-") or startswith("blog/claude-") or startswith("autoblog/"))
               | .number] | .[0] // empty' <<<"$OPEN_JSON")
           if [ -n "$OPEN_NUM" ]; then
             echo "::notice::not due — open autoblog PR #$OPEN_NUM (in-flight lock). Close or merge it before dispatching."

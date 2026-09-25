@@ -37,6 +37,16 @@
 #
 # Adjust the --site / --business / --service-areas flags per repo. Adjust
 # the markdown path globs for your site's layout.
+#
+# Claude-written posts (label `autoblog-claude-reviewed`, opened by
+# blog-finalize.yml) were already graded in the writing session by a separate
+# Claude subagent against the same rubric and gate (AUTOBLOG_CLAUDE.md). The
+# Grok `review` job and its auto-fix skip them; the `claude-reviewed` job below
+# applies `autoblog-approved-pending` unless the session's review failed
+# (`autoblog-review-failed`), which waits for a human. Deterministic CI heal
+# (autoblog-ci-heal.yml) still applies. Remove `autoblog-claude-reviewed` to
+# send a post through the Grok review instead. Keep --business and
+# --service-areas in sync with scripts/autoblog/site.ts.
 
 name: Autoblog AI Review
 
@@ -68,8 +78,9 @@ permissions:
 jobs:
   review:
     if: >-
-      contains(github.event.pull_request.labels.*.name, 'autoblog')
-      || startsWith(github.head_ref, 'autoblog/')
+      (contains(github.event.pull_request.labels.*.name, 'autoblog')
+      || startsWith(github.head_ref, 'autoblog/'))
+      && !contains(github.event.pull_request.labels.*.name, 'autoblog-claude-reviewed')
     runs-on: ubuntu-latest
     steps:
       # Persist AUTOBLOG_PAT as the push credential for the auto-fix step;
@@ -440,3 +451,76 @@ jobs:
             echo "Push rejected — branch moved during this run; the newer tip gets its own review."
             exit 0
           fi
+
+  # Posts written by the scheduled Claude session. No model call here: the
+  # second-pass review already ran in the session and its verdict is on the PR
+  # (body + labels). A pass earns the same approval and merge-gate label as a
+  # Grok pass; a failed review waits for a human, with no Grok auto-fix.
+  claude-reviewed:
+    if: contains(github.event.pull_request.labels.*.name, 'autoblog-claude-reviewed')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize the session review
+        id: verdict
+        env:
+          FAILED: ${{ contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed') }}
+        run: |
+          set -euo pipefail
+          if [ "$FAILED" = "true" ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Autoblog AI Review — Claude session"
+              echo
+              echo "❌ This post failed the second-pass Claude review in the writing session, or its rule checks (details in the PR body). Grok review and auto-fix are skipped for Claude-written posts."
+              echo
+              echo "Human needed: fix the post, remove \`autoblog-review-failed\`, then remove and re-add \`autoblog-claude-reviewed\` so a fresh \`labeled\` event approves it. (A re-run reuses the old labels.) Or remove \`autoblog-claude-reviewed\` and push, to send it through the Grok review and auto-fix instead."
+            } > review-summary.md
+          else
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Autoblog AI Review — Claude session"
+              echo
+              echo "✅ Passed the second-pass review in the writing session: a Claude subagent that did not write the post graded it against \`reviewerRubric\` with the engine's gate (every dimension ≥ 6.0, no blockers, overall ≥ 7.0; \`humanVoice\` advisory). Scores and issues are in the PR body. The Grok review is skipped."
+            } > review-summary.md
+          fi
+
+      - name: Post sticky review comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: review-summary.md
+          header: autoblog-review
+
+      - name: Approve PR on pass
+        if: >-
+          steps.verdict.outputs.pass == 'true'
+          && (vars.AUTOBLOG_AUTOMERGE == 'true' || vars.AUTOBLOG_AUTOMERGE == '')
+        env:
+          # Same split as the Grok path: approve as github-actions[bot], mark
+          # ready with the PAT, merge-gate label last and unguarded.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT: ${{ secrets.AUTOBLOG_PAT }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
+        run: |
+          set -uo pipefail
+          PR_ID=$(gh pr view "$PR" --json id -q .id) || PR_ID=""
+          if [ -n "$PR_ID" ]; then
+            GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='
+              mutation($id: ID!) {
+                markPullRequestReadyForReview(input: {pullRequestId: $id}) {
+                  pullRequest { isDraft }
+                }
+              }' -f id="$PR_ID" \
+              || echo "::warning::Could not mark PR ready (merge-pending will retry with the PAT before merge)."
+          fi
+          gh pr review "$PR" --approve \
+            --body "Claude session review passed. Adding \`autoblog-approved-pending\` — will auto-merge after a ${AUTOBLOG_MERGE_DELAY} human-override window." \
+            || true
+          gh pr edit "$PR" --add-label autoblog-approved-pending
+
+      - name: Keep a failed post off the merge path
+        if: steps.verdict.outputs.pass != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR" --remove-label autoblog-approved-pending || true
