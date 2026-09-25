@@ -459,8 +459,8 @@ jobs:
   #
   # The verdict covers the content blog-finalize.yml committed, nothing after
   # it. The label persists across pushes, so approval is bound to that commit:
-  # only deterministic `[autoblog-cifix]` link repairs may touch the post's
-  # files afterwards. Any other change to the post waits for a human.
+  # afterwards only deterministic `[autoblog-cifix]` link repairs and merges
+  # from main may change blog content. Anything else waits for a human.
   claude-reviewed:
     if: contains(github.event.pull_request.labels.*.name, 'autoblog-claude-reviewed')
     runs-on: ubuntu-latest
@@ -484,29 +484,42 @@ jobs:
             echo "reason=no finalize commit on this branch" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # The post's own files, as finalize added them.
-          mapfile -t FILES < <(git diff-tree --no-commit-id --name-only -r --diff-filter=A "$FINALIZE" \
+          # The post as finalize wrote it: added, or modified by a same-slug
+          # re-finalize.
+          mapfile -t FILES < <(git diff-tree --no-commit-id --name-only -r --diff-filter=AM "$FINALIZE" \
             -- content/blog public/images/blog)
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
-            echo "reason=finalize commit ${FINALIZE:0:10} added no post" >> "$GITHUB_OUTPUT"
+            echo "reason=finalize commit ${FINALIZE:0:10} wrote no post" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Later commits that touched those files, other than CI-heal repairs.
-          CHANGED=$(git log --format='%h %s' "${FINALIZE}..HEAD" -- "${FILES[@]}" \
-            | grep -vF '[autoblog-cifix]' || true)
+          # Every blog or image path that differs from the reviewed commit
+          # must either match main (it arrived with a merge from main) or have
+          # been touched only by CI-heal [autoblog-cifix] repairs. Anything
+          # else, including a second post added later, is unreviewed.
+          CHANGED=""
+          while IFS= read -r P; do
+            [ -n "$P" ] || continue
+            AT_HEAD=$(git rev-parse -q --verify "HEAD:$P" 2>/dev/null || echo none)
+            ON_BASE=$(git rev-parse -q --verify "origin/${BASE}:$P" 2>/dev/null || echo none)
+            [ "$AT_HEAD" = "$ON_BASE" ] && continue
+            BY=$(git log --format='%h %s' "${FINALIZE}..HEAD" -- "$P" | grep -vF '[autoblog-cifix]' || true)
+            if [ -n "$BY" ]; then
+              CHANGED+="${P}: ${BY//$'\n'/; }"$'\n'
+            fi
+          done < <(git diff --name-only "$FINALIZE" HEAD -- content/blog public/images/blog)
           if [ -n "$CHANGED" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
             {
               echo "reason<<EOF_REASON"
-              echo "the post changed after the reviewed commit ${FINALIZE:0:10}:"
-              echo "$CHANGED"
+              echo "blog content changed after the reviewed commit ${FINALIZE:0:10}:"
+              printf '%s' "$CHANGED"
               echo "EOF_REASON"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "bound=true" >> "$GITHUB_OUTPUT"
-          echo "Session verdict covers ${FINALIZE:0:10}; no unreviewed change to ${FILES[*]}."
+          echo "Session verdict covers ${FINALIZE:0:10} (${FILES[*]}); no unreviewed blog change since."
 
       - name: Summarize the session review
         id: verdict
