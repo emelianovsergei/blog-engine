@@ -43,6 +43,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # The `autoblog/finalized` status that binds the session verdict.
+      statuses: write
       # Label provisioning is an Issues API call.
       issues: write
 
@@ -228,6 +230,15 @@ jobs:
           UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
           RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
           RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
+          # The verdict covers the new post only. A branch that also edits or
+          # deletes a post or image already on main (e.g. inside the handoff
+          # commit) carries unreviewed content.
+          MB=$(git merge-base origin/main HEAD)
+          TOUCHED=$(git diff --name-only --diff-filter=MDR "$MB" -- content/blog public/images/blog || true)
+          if [ -n "$TOUCHED" ]; then
+            REVIEW_PASS=false
+            RULES="$(printf '%s\n%s' "- review: this branch also changes published files: $(echo "$TOUCHED" | tr '\n' ' ')" "$RULES" | sed '/^- none$/d')"
+          fi
           if [ "$(cat "$RUNNER_TEMP/review-digest" 2>/dev/null || echo mismatch)" != "match" ]; then
             REVIEW_PASS=false
             RULES="$(printf '%s\n%s' "- review: the handed-off plan/body are not the ones the session reviewed (digest mismatch)" "$RULES" | sed '/^- none$/d')"
@@ -351,6 +362,13 @@ jobs:
           else
             git push --force origin "HEAD:refs/heads/$TARGET"
           fi
+
+          # Mark this commit as the finalize boundary for the review job. Set
+          # with GITHUB_TOKEN (creator github-actions[bot]), before any PR
+          # event, so the review that the PR create/reopen triggers can see it.
+          GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
+            -f state=success -f context=autoblog/finalized \
+            -f description="Finalized from the Claude session handoff (${RUN_KEY})" >/dev/null
 
           if [ "${HAS_PAT}" != "true" ]; then
             echo "::error::AUTOBLOG_PAT is not configured. The post is safe on $TARGET, but a PR opened with GITHUB_TOKEN would never receive CI or review. Add the secret and re-run, or open the PR by hand."

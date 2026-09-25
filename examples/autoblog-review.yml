@@ -44,8 +44,8 @@
 # Grok `review` job and its auto-fix skip them; the `claude-reviewed` job below
 # applies `autoblog-approved-pending` unless the session's review failed
 # (`autoblog-review-failed`), which waits for a human. Deterministic CI heal
-# (autoblog-ci-heal.yml) still applies. Remove `autoblog-claude-reviewed` to
-# send a post through the Grok review instead. Keep --business and
+# (autoblog-ci-heal.yml) still applies. A human approves anything else with
+# `autoblog-human-approved`. Keep --business and
 # --service-areas in sync with scripts/autoblog/site.ts.
 
 name: Autoblog AI Review
@@ -53,11 +53,10 @@ name: Autoblog AI Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'content/blog/**/*.md'
-      - 'content/blog/**/*.mdx'
-      - 'src/content/blog/**/*.md'
-      - 'src/content/blog/**/*.mdx'
+    # No `paths:` filter. Deleting a Claude post removes every blog path from
+    # the diff, and a path filter would then skip the run that must pull its
+    # approval. Both jobs are label-gated and the Grok job skips PRs with no
+    # blog markdown, so an unrelated PR costs nothing.
 
 # A new draft PR fires both `opened` and `labeled`; two parallel review
 # passes could disagree PASS/FAIL. Keep only the latest run per PR. The
@@ -74,6 +73,8 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  # claude-reviewed reads the `autoblog/finalized` commit status.
+  statuses: read
 
 jobs:
   review:
@@ -476,6 +477,7 @@ jobs:
         id: bound
         env:
           BASE: ${{ github.base_ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # A CI-heal repair may only unlink: the post's text with every link
@@ -495,14 +497,31 @@ jobs:
               t = re.sub(r"<?https?://[^\s)\]>\"']+>?", "", t)
               kept = [l for l in t.split("\n") if not re.match(r"^\s*-?\s*(name|url)\s*:", l)]
               return re.sub(r"\s+", " ", " ".join(kept)).strip()
-          sys.exit(0 if norm(old) == norm(new) else 1)
+          # One-directional: no URL or link may appear, only disappear.
+          # Comparing stripped text alone would accept a commit that adds or
+          # swaps a link, since both sides strip to the same prose.
+          url = re.compile(r"https?://[^\s)\]>\"']+")
+          added = set(url.findall(new)) - set(url.findall(old))
+          more_links = new.count("](") > old.count("](")
+          sys.exit(0 if norm(old) == norm(new) and not added and not more_links else 1)
           PY
-          # Newest finalize commit on this branch (a re-finalize supersedes).
-          FINALIZE=$(git log --format='%H%x09%s' "origin/${BASE}..HEAD" \
-            | awk -F '\t' 'index($2, "Add Claude-written blog post for ") == 1 { print $1; exit }')
+          # Newest finalize commit on this branch (a re-finalize supersedes),
+          # identified by the `autoblog/finalized` status blog-finalize.yml
+          # sets with GITHUB_TOKEN. A commit subject is forgeable; a status
+          # created by github-actions[bot] is not.
+          FINALIZE=""
+          while read -r C; do
+            [ -n "$C" ] || continue
+            if gh api "repos/${GITHUB_REPOSITORY}/commits/${C}/statuses" \
+                --jq '.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]") | .id' \
+                | grep -q .; then
+              FINALIZE="$C"
+              break
+            fi
+          done < <(git rev-list "origin/${BASE}..HEAD")
           if [ -z "$FINALIZE" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
-            echo "reason=no finalize commit on this branch" >> "$GITHUB_OUTPUT"
+            echo "reason=no commit on this branch carries the autoblog/finalized status" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The PR may change nothing but finalize's own outputs. A handoff
