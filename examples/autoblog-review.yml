@@ -485,7 +485,11 @@ jobs:
           # forgeable `[autoblog-cifix]` subject: the new file must be the old
           # one with characters deleted, and only from link syntax (a link's
           # brackets and destination, a whole image, a URL alone in parens).
-          # Citations may only lose whole entries. Anything else is an edit.
+          # Citations may only lose whole entries (compared as parsed YAML).
+          # Anything else is an edit. Without PyYAML the check fails closed.
+          python3 -c 'import yaml' 2>/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml; } \
+            || echo "::warning::PyYAML unavailable; CI-fix commits will be held for a human."
           cat > "$RUNNER_TEMP/linkonly.py" <<'PY'
           import re, subprocess, sys
           commit, path = sys.argv[1], sys.argv[2]
@@ -499,37 +503,32 @@ jobs:
           def split(t):
               m = FM.match(t)
               return (m.group(1), t[m.end():]) if m else ("", t)
-          def ws(s):
-              return re.sub(r"\s+", " ", s).strip()
-          def citations(fm):
-              # (frontmatter without the citations block, [entries]). An entry is one
-              # `- name/url` item, kept whole so its name and url stay together.
-              lines = fm.splitlines(keepends=True)
-              rest, entries, inside = [], [], False
-              for l in lines:
-                  if re.match(r"^citations:\s*$", l):
-                      inside = True
-                      continue
-                  if inside and l.strip() and not l[0].isspace() and not l.startswith("-"):
-                      inside = False
-                  if not inside:
-                      rest.append(l)
-                  elif re.match(r"^\s*-\s", l):
-                      entries.append(l)
-                  elif entries:
-                      entries[-1] += l
-                  elif l.strip():
-                      sys.exit(1)
-              return ws("".join(rest)), [ws(e) for e in entries]
+          def data(fm):
+              # Parsed, not textual: YAML indentation is structure, and the engine's
+              # repair re-serializes the frontmatter (refolding long strings), so the
+              # comparison has to be on what the YAML means.
+              try:
+                  import yaml
+                  d = yaml.safe_load(fm) if fm.strip() else {}
+              except Exception:
+                  sys.exit(1)
+              if not isinstance(d, dict):
+                  sys.exit(1)
+              c = d.pop("citations", None)
+              if c is None:
+                  c = []
+              if not isinstance(c, list):
+                  sys.exit(1)
+              return d, c
           def subsequence(small, big):
               it = iter(big)
               return all(any(x == y for y in it) for x in small)
           old_fm, old_body = split(old)
           new_fm, new_body = split(new)
-          # Frontmatter: identical except whole citation entries dropped. Renaming a
-          # citation, or pointing it at another URL, is an edit and fails here.
-          old_rest, old_cites = citations(old_fm)
-          new_rest, new_cites = citations(new_fm)
+          # Frontmatter: the same data except whole citation entries dropped. Renaming
+          # a citation, pointing it at another URL, or moving any key fails here.
+          old_rest, old_cites = data(old_fm)
+          new_rest, new_cites = data(new_fm)
           if old_rest != new_rest or not subsequence(new_cites, old_cites):
               sys.exit(1)
           # Body: the new text must be the old text with characters DELETED, and only
@@ -587,9 +586,11 @@ jobs:
               reach = nxt
           if D not in reach:
               sys.exit(1)
-          # Belt and braces: no URL may appear that was not already in the file.
+          # Deleting part of a destination can still leave a different URL behind, so
+          # no URL may appear in the body that was not already there. (The frontmatter
+          # was compared as data above; its folded long URLs are not text to scan.)
           url = re.compile(r"https?://[^\s)\]>\"']+")
-          sys.exit(0 if set(url.findall(new)) <= set(url.findall(old)) else 1)
+          sys.exit(0 if set(url.findall(new_body)) <= set(url.findall(old_body)) else 1)
           PY
           # Newest finalize commit on this branch (a re-finalize supersedes),
           # identified by the `autoblog/finalized` status blog-finalize.yml

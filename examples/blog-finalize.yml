@@ -99,43 +99,65 @@ jobs:
             RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
           fi
           case "$SOURCE" in
-            blog/claude-*) TARGET="$SOURCE" ;;
+            blog/claude-*) TARGET="$SOURCE"; LEASE="$SOURCE_SHA" ;;
             *)
               TARGET="blog/claude-${RUN_DATE}"
-              if git ls-remote --exit-code origin "refs/heads/$TARGET" >/dev/null 2>&1; then
-                # The date branch already exists. It is this day's own post
-                # when it has an open Claude PR (a revision or a retry) or when
-                # finalize wrote its tip and failed before opening one: reuse
-                # it, so the existing PR is updated rather than duplicated.
-                # Anything else (a merged post, a branch finalize never
-                # wrote) is not overwritten; this handoff gets its own target.
-                if ! PRS=$(gh pr list --head "$TARGET" --state all --json state,labels \
-                    --jq '[.[] | {state, claude: ([.labels[].name] | index("autoblog-claude-reviewed") != null)}]'); then
-                  echo "::error::Could not list PRs for $TARGET — refusing to guess whether to reuse it."
-                  exit 1
-                fi
-                OPEN_CLAUDE=$(jq '[.[] | select(.state == "OPEN" and .claude)] | length' <<<"$PRS")
-                ANY=$(jq 'length' <<<"$PRS")
-                # Provenance: the newest finalize on the date branch must have
-                # come from this same source branch (a session revising its
-                # own post pushes the same claude/* branch again). Its source
-                # is in the autoblog/finalized status, which only this
-                # workflow's GITHUB_TOKEN creates. A different session's
-                # handoff for the same date never takes over the branch.
-                git fetch -q origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
-                FROM=""
-                while read -r C; do
-                  [ -n "$C" ] || continue
-                  FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${C}/statuses" \
-                    --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
-                    | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
-                  [ -n "$FROM" ] && break
-                done < <(git rev-list "origin/main..origin/${TARGET}")
-                if [ "$FROM" = "$SOURCE" ] && { [ "$OPEN_CLAUDE" -gt 0 ] || [ "$ANY" -eq 0 ]; }; then
-                  echo "Reusing $TARGET: it holds this day's Claude post."
+              REUSE=false
+              if TIP=$(git ls-remote --exit-code origin "refs/heads/$TARGET" | cut -f1) && [ -n "$TIP" ]; then
+                if [ "$TIP" = "$SOURCE_SHA" ]; then
+                  # This handoff's own claim, left by an attempt that failed
+                  # before finalizing.
+                  REUSE=true
                 else
-                  TARGET="${TARGET}-$(TZ=America/Los_Angeles date +%H%M)"
+                  # The date branch already exists. It is this day's own post
+                  # when it has an open Claude PR (a revision or a retry) or when
+                  # finalize wrote its tip and failed before opening one: reuse
+                  # it, so the existing PR is updated rather than duplicated.
+                  # Anything else (a merged post, a branch finalize never
+                  # wrote) is not overwritten; this handoff gets its own target.
+                  if ! PRS=$(gh pr list --head "$TARGET" --state all --json state,labels \
+                      --jq '[.[] | {state, claude: ([.labels[].name] | index("autoblog-claude-reviewed") != null)}]'); then
+                    echo "::error::Could not list PRs for $TARGET — refusing to guess whether to reuse it."
+                    exit 1
+                  fi
+                  OPEN_CLAUDE=$(jq '[.[] | select(.state == "OPEN" and .claude)] | length' <<<"$PRS")
+                  ANY=$(jq 'length' <<<"$PRS")
+                  # Provenance: the newest finalize on the date branch must have
+                  # come from this same source branch (a session revising its
+                  # own post pushes the same claude/* branch again). Its source
+                  # is in the autoblog/finalized status, which only this
+                  # workflow's GITHUB_TOKEN creates. A different session's
+                  # handoff for the same date never takes over the branch.
+                  git fetch -q origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
+                  FROM=""
+                  while read -r C; do
+                    [ -n "$C" ] || continue
+                    FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${C}/statuses" \
+                      --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
+                      | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
+                    [ -n "$FROM" ] && break
+                  done < <(git rev-list "origin/main..origin/${TARGET}")
+                  if [ "$FROM" = "$SOURCE" ] && { [ "$OPEN_CLAUDE" -gt 0 ] || [ "$ANY" -eq 0 ]; }; then
+                    REUSE=true
+                  fi
                 fi
+              fi
+              if [ "$REUSE" = true ]; then
+                echo "Reusing $TARGET: it holds this handoff's post."
+                LEASE="$TIP"
+              else
+                # Claim a fresh target atomically. Creating a ref fails when it
+                # exists, so two handoffs for one date can never both take it.
+                # The claim points at this handoff, so a retry knows its own.
+                claim() {
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                    -f ref="refs/heads/$1" -f sha="$SOURCE_SHA" >/dev/null 2>&1
+                }
+                if ! claim "$TARGET"; then
+                  TARGET="blog/claude-${RUN_DATE}-${GITHUB_RUN_ID}"
+                  claim "$TARGET" || { echo "::error::Could not claim $TARGET for this handoff."; exit 1; }
+                fi
+                LEASE="$SOURCE_SHA"
               fi
               ;;
           esac
@@ -144,6 +166,7 @@ jobs:
             echo "skip=false"
             echo "source=$SOURCE"
             echo "target=$TARGET"
+            echo "lease=$LEASE"
             echo "run_key=$RUN_KEY"
             echo "run_date=$RUN_DATE"
             echo "run_at=$RUN_AT"
@@ -238,6 +261,7 @@ jobs:
           LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE: ${{ steps.run.outputs.source }}
           TARGET: ${{ steps.run.outputs.target }}
+          LEASE: ${{ steps.run.outputs.lease }}
           RUN_KEY: ${{ steps.run.outputs.run_key }}
           RUN_DATE: ${{ steps.run.outputs.run_date }}
         run: |
@@ -385,15 +409,11 @@ jobs:
             fi
           fi
 
-          # The finalized branch is main + this commit, replacing the handoff.
-          # When the session pushed straight to TARGET, replace it only while
-          # it still holds the handoff finalized here: a newer handoff pushed
-          # meanwhile has its own run queued and must not be overwritten.
-          if [ "$SOURCE" = "$TARGET" ]; then
-            git push --force-with-lease="refs/heads/${TARGET}:${SOURCE_SHA}" origin "HEAD:refs/heads/$TARGET"
-          else
-            git push --force origin "HEAD:refs/heads/$TARGET"
-          fi
+          # The finalized branch is main + this commit, replacing whatever TARGET
+          # held when this run resolved it (the handoff, this run's claim, or
+          # the post being revised). Leased on that commit: anything pushed to
+          # TARGET since (a newer handoff, another run) is never overwritten.
+          git push --force-with-lease="refs/heads/${TARGET}:${LEASE}" origin "HEAD:refs/heads/$TARGET"
 
           # Mark this commit as the finalize boundary for the review job. Set
           # with GITHUB_TOKEN (creator github-actions[bot]), before any PR

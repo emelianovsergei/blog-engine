@@ -85,6 +85,15 @@ function contentDigest(planPath: string, bodyPath: string): string {
     .digest("hex");
 }
 
+/**
+ * Digest of the preview MDX itself. The reviewer grades that file, so a
+ * verdict counts only while it is byte-for-byte what `check` generated from
+ * the plan and body above.
+ */
+function fileDigest(file: string): string {
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
 // ─── io ─────────────────────────────────────────────────────────────────────
 
 function flag(name: string): string | undefined {
@@ -683,7 +692,11 @@ function cmdCheck(): void {
     process.exit(1);
   }
   const slug = checked.plan.slug;
-  writeJson(work("preview.json"), { slug, digest: contentDigest(work("plan.json"), work("body.md")) });
+  writeJson(work("preview.json"), {
+    slug,
+    digest: contentDigest(work("plan.json"), work("body.md")),
+    previewDigest: fileDigest(previewPaths(slug).mdx),
+  });
   const structural = spawnSync("npx", ["tsx", "scripts/check-blog-post.ts", previewPaths(slug).mdx, "--strict"], {
     cwd: ROOT,
     encoding: "utf-8",
@@ -748,11 +761,18 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
 async function cmdReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(work("preview.json"), "run `check` first — the reviewer grades the preview MDX");
-  const { slug, digest } = readJson<{ slug: string; digest?: string }>(work("preview.json"));
+  const { slug, digest, previewDigest } = readJson<{ slug: string; digest?: string; previewDigest?: string }>(
+    work("preview.json"),
+  );
   if (digest !== contentDigest(work("plan.json"), work("body.md"))) {
     throw new Error("plan.json or body.md changed after `check`; run `check` again so the reviewer grades what you will hand off");
   }
   const file = previewPaths(slug).mdx;
+  // The reviewer reads the preview, not plan.json/body.md: it must still be
+  // exactly what `check` generated from them.
+  if (!fs.existsSync(file) || previewDigest !== fileDigest(file)) {
+    throw new Error("the preview MDX changed after `check`; run `check` again so the reviewer grades what finalize will publish");
+  }
   const { frontmatter, body } = parseDocument(fs.readFileSync(file, "utf-8"));
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
