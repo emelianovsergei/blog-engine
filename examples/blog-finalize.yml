@@ -68,11 +68,23 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q origin "+refs/heads/${SOURCE}:refs/remotes/origin/${SOURCE}"
-          echo "SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")" >> "$GITHUB_ENV"
+          SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")
+          HANDOFF="$SOURCE_SHA"
+          # A direct handoff (blog/claude-*) is replaced by the finalized commit
+          # before the PR is opened. Finalize keeps the original under
+          # refs/autoblog-handoff/ until the run succeeds, so a retry after a
+          # late failure (status, PAT, PR) resumes from it instead of skipping.
+          if ! git cat-file -e "${SOURCE_SHA}:data/blog-claude-inbox/plan.json" 2>/dev/null \
+            && [[ "$SOURCE" == blog/claude-* ]] \
+            && git fetch -q origin "+refs/autoblog-handoff/${SOURCE#blog/}:refs/autoblog-handoff-resume" 2>/dev/null; then
+            HANDOFF=$(git rev-parse refs/autoblog-handoff-resume)
+            echo "::notice::Resuming the handoff kept at refs/autoblog-handoff/${SOURCE#blog/} (${HANDOFF:0:10})."
+          fi
+          { echo "SOURCE_SHA=$SOURCE_SHA"; echo "HANDOFF_SHA=$HANDOFF"; } >> "$GITHUB_ENV"
           rm -rf data/blog-claude-inbox
           mkdir -p data/blog-claude-inbox
           for F in plan.json body.md meta.json review.md; do
-            git show "origin/${SOURCE}:data/blog-claude-inbox/$F" > "data/blog-claude-inbox/$F" 2>/dev/null \
+            git show "${HANDOFF}:data/blog-claude-inbox/$F" > "data/blog-claude-inbox/$F" 2>/dev/null \
               || rm -f "data/blog-claude-inbox/$F"
           done
 
@@ -265,12 +277,18 @@ jobs:
           BLOG_RUN_KEY: ${{ steps.run.outputs.run_key }}
           BLOG_PENDING_DIR: data/blog-pending
 
-      # Blog posts ingest in the same content PR (CLAUDE.md). Deterministic and
-      # offline; a failure leaves brain/ for the next content PR, never the post.
+      # Blog posts ingest in the same content PR (CLAUDE.md). A failed ingest
+      # never blocks the post, but it can write pages before a late validation
+      # throws, so brain/ goes back to main's state rather than being committed
+      # half-written.
       - name: Ingest wiki
         if: steps.run.outputs.skip != 'true'
-        continue-on-error: true
-        run: npm run wiki:ingest
+        run: |
+          if ! npm run wiki:ingest; then
+            echo "::warning::wiki:ingest failed; brain/ is left as on main for the next content PR."
+            git checkout -- brain
+            git clean -fdq -- brain
+          fi
 
       - name: Commit, push and open the draft PR
         if: steps.run.outputs.skip != 'true'
@@ -428,6 +446,13 @@ jobs:
             fi
           fi
 
+          # A direct handoff is about to be replaced on TARGET. Keep it until this
+          # run succeeds, so a retry after a later failure can resume from it.
+          if [ "$SOURCE" = "$TARGET" ]; then
+            git push --force origin "${HANDOFF_SHA}:refs/autoblog-handoff/${RUN_KEY}" \
+              || { echo "::error::Could not keep the handoff at refs/autoblog-handoff/${RUN_KEY}; leaving $TARGET untouched."; exit 1; }
+          fi
+
           # The finalized branch is main + this commit, replacing whatever TARGET
           # held when this run resolved it (the handoff, this run's claim, or
           # the post being revised). Leased on that commit: anything pushed to
@@ -499,4 +524,8 @@ jobs:
             # own run queued, and deleting the branch would lose it.
             git push --force-with-lease="refs/heads/${SOURCE}:${SOURCE_SHA}" origin ":refs/heads/${SOURCE}" \
               || echo "::warning::Left $SOURCE in place: it changed during this run (a newer handoff has its own run) or the delete failed."
+          fi
+          # Done: the kept direct handoff is no longer needed.
+          if [ "$SOURCE" = "$TARGET" ]; then
+            git push origin ":refs/autoblog-handoff/${RUN_KEY}" 2>/dev/null || true
           fi
