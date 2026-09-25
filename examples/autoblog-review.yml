@@ -484,7 +484,8 @@ jobs:
           # A CI-heal repair may only unlink. Checked on content, not on the
           # forgeable `[autoblog-cifix]` subject: the new file must be the old
           # one with characters deleted, and only from link syntax (a link's
-          # brackets and destination, a whole image, a URL alone in parens).
+          # brackets and destination; a whole image or a URL alone in parens,
+          # never part of one).
           # Citations may only lose whole entries (compared as parsed YAML).
           # Anything else is an edit. Without PyYAML the check fails closed.
           python3 -c 'import yaml' 2>/dev/null \
@@ -531,60 +532,89 @@ jobs:
           new_rest, new_cites = data(new_fm)
           if old_rest != new_rest or not subsequence(new_cites, old_cites):
               sys.exit(1)
-          # Body: the new text must be the old text with characters DELETED, and only
-          # from link syntax: a link's brackets and destination (its anchor text stays),
-          # a whole image, a URL alone in parentheses, plus the emphasis and horizontal
-          # whitespace right next to those, and a line left holding nothing else.
+          # Body: the new text must be the old text with characters DELETED, only from
+          # link syntax. Two kinds of deletion exist:
+          #  - atomic spans, removed whole or not at all: an image, a linked image, a
+          #    URL alone in parentheses, a line left holding nothing but one of those.
+          #    Deleting part of one could rewrite its alt text into new prose.
+          #  - single characters: a link's brackets and destination (its anchor text
+          #    stays), and the emphasis and horizontal whitespace next to an atomic span.
           DEST = r"\((?:[^()\n]|\([^()\n]*\))*\)"
           IMG = r"!\[[^\]\n]*\]" + DEST
-          dele = [False] * len(old_body)
+          n = len(old_body)
+          single = [False] * n
+          atoms = {}
+          def atom(a, b):
+              atoms.setdefault(a, set()).add(b)
           def mark(a, b):
-              for i in range(max(a, 0), min(b, len(old_body))):
-                  dele[i] = True
+              for i in range(max(a, 0), min(b, n)):
+                  single[i] = True
           spans = []
-          for m in re.finditer(r"\[" + IMG + r"\]" + DEST + "|" + IMG, old_body):
+          for m in re.finditer(r"\[(" + IMG + r")\]" + DEST, old_body):
+              atom(m.start(), m.end())                    # linked image: all of it
+              atom(m.start(1), m.end(1))                  # or just its image
+              mark(m.start(), m.start() + 1)              # or just the wrapper
+              mark(m.end(1), m.end())
               spans.append((m.start(), m.end()))
-              mark(m.start(), m.end())
+          for m in re.finditer(r"(?<!\[)" + IMG, old_body):
+              atom(m.start(), m.end())
+              spans.append((m.start(), m.end()))
+          inside = [False] * n
+          for a, ends in atoms.items():
+              for i in range(a, max(ends)):
+                  inside[i] = True
           for m in re.finditer(r"(?<!!)\[([^\]\n]*)\]" + DEST, old_body):
-              if dele[m.start()]:
+              if inside[m.start()]:
                   continue
               mark(m.start(), m.start() + 1)
               mark(m.end(1), m.end())
           for m in re.finditer(r"(?<!\])\(\s*<?https?://[^\s()<>]+>?\s*\)", old_body):
+              atom(m.start(), m.end())
               spans.append((m.start(), m.end()))
-              mark(m.start(), m.end())
           for a, b in spans:
               i = a - 1
               while i >= 0 and old_body[i] in " \t*_":
-                  dele[i] = True
+                  single[i] = True
                   i -= 1
               i = b
-              while i < len(old_body) and old_body[i] in " \t*_":
-                  dele[i] = True
+              while i < n and old_body[i] in " \t*_":
+                  single[i] = True
                   i += 1
           pos = 0
           for line in old_body.splitlines(keepends=True):
               end = pos + len(line)
-              core = "".join(c for c, d in zip(line, dele[pos:end]) if not d)
-              if any(dele[pos:end]) and re.fullmatch(r"\s*(?:[-*+]|\d+\.|>|#{1,6})?\s*", core):
-                  mark(pos, end)
+              rest, i = [], pos
+              while i < end:
+                  b = max((x for x in atoms.get(i, ()) if x <= end), default=None)
+                  if b is not None:
+                      i = b
+                      continue
+                  rest.append(old_body[i])
+                  i += 1
+              if len(rest) < len(line) and re.fullmatch(r"\s*(?:[-*+]|\d+\.|>|#{1,6})?\s*[*_]*\s*", "".join(rest)):
+                  atom(pos, end)
               pos = end
           D = len(old_body) - len(new_body)
           if D < 0:
               sys.exit(1)
-          reach = {0}
-          for i, ch in enumerate(old_body):
-              nxt = set()
-              for k in reach:
+          reach = [set() for _ in range(n + 1)]
+          reach[0].add(0)
+          for i in range(n):
+              here = reach[i]
+              if not here:
+                  continue
+              ch = old_body[i]
+              for k in here:
                   j = i - k
                   if j < len(new_body) and new_body[j] == ch:
-                      nxt.add(k)
-                  if dele[i] and k < D:
-                      nxt.add(k + 1)
-              if not nxt:
-                  sys.exit(1)
-              reach = nxt
-          if D not in reach:
+                      reach[i + 1].add(k)
+                  if single[i] and k < D:
+                      reach[i + 1].add(k + 1)
+                  for b in atoms.get(i, ()):
+                      if k + (b - i) <= D:
+                          reach[b].add(k + (b - i))
+              reach[i] = None
+          if D not in reach[n]:
               sys.exit(1)
           # Deleting part of a destination can still leave a different URL behind, so
           # no URL may appear in the body that was not already there. (The frontmatter

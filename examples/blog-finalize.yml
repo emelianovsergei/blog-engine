@@ -476,5 +476,8 @@ jobs:
 
           # The session's transport branch is spent once the post is on TARGET.
           if [ "$SOURCE" != "$TARGET" ]; then
-            GH_TOKEN="$LABEL_TOKEN" git push origin --delete "$SOURCE" || echo "::warning::Could not delete $SOURCE; delete it by hand."
+            # Leased: a revised handoff pushed to SOURCE during this run has its
+            # own run queued, and deleting the branch would lose it.
+            git push --force-with-lease="refs/heads/${SOURCE}:${SOURCE_SHA}" origin ":refs/heads/${SOURCE}" \
+              || echo "::warning::Left $SOURCE in place: it changed during this run (a newer handoff has its own run) or the delete failed."
           fi
