@@ -99,6 +99,16 @@ function fileDigest(file: string): string {
  * the post with this exact revision of main (never a newer one), so the
  * reviewed preview and the published MDX come from the same generator.
  */
+/**
+ * Digest of the handoff metadata minus the verdict fields. It is carried in
+ * meta.json as `metaDigest`, and blog-finalize.yml recomputes it the same
+ * way (sha256 of JSON.stringify, key order as written), so the run date,
+ * category and the rest must be exactly what the reviewed preview used.
+ */
+function metaDigestOf(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
 function gitHead(): string {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf-8" }).trim();
 }
@@ -708,7 +718,7 @@ function cmdCheck(): void {
     slug,
     digest: contentDigest(work("plan.json"), work("body.md")),
     previewDigest: fileDigest(previewPaths(slug).mdx),
-    metaDigest: fileDigest(work("meta.preview.json")),
+    metaDigest: metaDigestOf(readJson(work("meta.preview.json"))),
     generatorSha: gitHead(),
   });
   const structural = spawnSync("npx", ["tsx", "scripts/check-blog-post.ts", previewPaths(slug).mdx, "--strict"], {
@@ -792,7 +802,7 @@ async function cmdReview(): Promise<void> {
     !fs.existsSync(file) ||
     previewDigest !== fileDigest(file) ||
     !fs.existsSync(work("meta.preview.json")) ||
-    metaDigest !== fileDigest(work("meta.preview.json"))
+    metaDigest !== metaDigestOf(readJson(work("meta.preview.json")))
   ) {
     throw new Error("the preview MDX changed after `check`; run `check` again so the reviewer grades what finalize will publish");
   }
@@ -864,7 +874,7 @@ function cmdHandoff(): void {
     );
   }
   // The metadata the reviewed preview was built from, byte for byte.
-  if (!fs.existsSync(work("meta.preview.json")) || review.metaDigest !== fileDigest(work("meta.preview.json"))) {
+  if (!fs.existsSync(work("meta.preview.json")) || review.metaDigest !== metaDigestOf(readJson(work("meta.preview.json")))) {
     throw new Error("the preview metadata changed after the review; run `check` and `review` again before handing off");
   }
   const meta = {
@@ -876,6 +886,7 @@ function cmdHandoff(): void {
       digest,
     },
     generatorSha: review.generatorSha,
+    metaDigest: review.metaDigest,
   };
   removePreview();
   fs.rmSync(INBOX, { recursive: true, force: true });

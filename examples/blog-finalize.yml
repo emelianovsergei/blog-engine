@@ -279,6 +279,21 @@ jobs:
             echo "::warning::Handed-off plan/body digest ${ACTUAL:0:12} does not match the reviewed digest ${REVIEWED:-none} — treating the review as failed."
             echo mismatch > "$RUNNER_TEMP/review-digest"
           fi
+          # The rest of meta.json (run date, category, keyword research, ...)
+          # must be what the reviewed preview was built from. claude.ts carries
+          # its digest as .metaDigest: sha256 of JSON.stringify of everything
+          # but the verdict fields, in the order written. Same computation here.
+          META=$(node -e '
+            const crypto = require("crypto");
+            const m = JSON.parse(require("fs").readFileSync("data/blog-claude-inbox/meta.json", "utf8"));
+            const { claudeReview, generatorSha, metaDigest, ...base } = m;
+            const d = crypto.createHash("sha256").update(JSON.stringify(base)).digest("hex");
+            process.stdout.write(metaDigest && d === metaDigest ? "match" : "mismatch");
+          ' 2>/dev/null || echo mismatch)
+          if [ "$META" != "match" ]; then
+            echo "::warning::meta.json differs from the metadata the session reviewed (metaDigest) — treating the review as failed."
+            echo mismatch > "$RUNNER_TEMP/review-digest"
+          fi
           npm run blog:generate
         env:
           # Images only: Grok Imagine, Pexels fallback. No text model is called.
