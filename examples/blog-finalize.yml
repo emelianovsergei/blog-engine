@@ -98,10 +98,22 @@ jobs:
                 fi
                 OPEN_CLAUDE=$(jq '[.[] | select(.state == "OPEN" and .claude)] | length' <<<"$PRS")
                 ANY=$(jq 'length' <<<"$PRS")
-                TIP=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
-                OURS=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
-                  --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")] | length' || echo 0)
-                if [ "$OPEN_CLAUDE" -gt 0 ] || { [ "$ANY" -eq 0 ] && [ "$OURS" -gt 0 ]; }; then
+                # Provenance: the newest finalize on the date branch must have
+                # come from this same source branch (a session revising its
+                # own post pushes the same claude/* branch again). Its source
+                # is in the autoblog/finalized status, which only this
+                # workflow's GITHUB_TOKEN creates. A different session's
+                # handoff for the same date never takes over the branch.
+                git fetch -q origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
+                FROM=""
+                while read -r C; do
+                  [ -n "$C" ] || continue
+                  FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${C}/statuses" \
+                    --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
+                    | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
+                  [ -n "$FROM" ] && break
+                done < <(git rev-list "origin/main..origin/${TARGET}")
+                if [ "$FROM" = "$SOURCE" ] && { [ "$OPEN_CLAUDE" -gt 0 ] || [ "$ANY" -eq 0 ]; }; then
                   echo "Reusing $TARGET: it holds this day's Claude post."
                 else
                   TARGET="${TARGET}-$(TZ=America/Los_Angeles date +%H%M)"
@@ -327,7 +339,7 @@ jobs:
           git commit -q -m "Add Claude-written blog post for ${RUN_KEY}"
 
           # PERSIST FIRST, off any branch or PR head (see generate-blog-post.yml).
-          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_KEY}"; then
+          if ! git push --force origin "HEAD:refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}"; then
             echo "::error::Could not persist the finalized commit to a recovery ref — aborting before anything else can fail and lose it."
             exit 1
           fi
@@ -362,7 +374,7 @@ jobs:
               exit 1
             fi
             if grep -q 'autoblog-approved-pending' <<<"$OLD_LABELS"; then
-              echo "::error::Could not remove autoblog-approved-pending from #$EXISTING_PR; the post is safe at refs/autoblog-recovery/${RUN_KEY}."
+              echo "::error::Could not remove autoblog-approved-pending from #$EXISTING_PR; the post is safe at refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}."
               exit 1
             fi
             gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
@@ -389,7 +401,7 @@ jobs:
           # event, so the review that the PR create/reopen triggers can see it.
           GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
             -f state=success -f context=autoblog/finalized \
-            -f description="Finalized from the Claude session handoff (${RUN_KEY})" >/dev/null
+            -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
 
           if [ "${HAS_PAT}" != "true" ]; then
             echo "::error::AUTOBLOG_PAT is not configured. The post is safe on $TARGET, but a PR opened with GITHUB_TOKEN would never receive CI or review. Add the secret and re-run, or open the PR by hand."

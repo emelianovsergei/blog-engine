@@ -656,6 +656,24 @@ jobs:
               CHANGED+="${P}: ${C:0:10} ${SUBJECT}"$'\n'
             done < <(git log --format='%H%x09%s' "${FINALIZE}..HEAD" -- "$P")
           done < <(git diff --name-only "$FINALIZE" HEAD -- content/blog public/images/blog)
+          # Finalize's other outputs (wiki pages, the run report) inherit the
+          # verdict only as finalize wrote them. A later commit on this branch
+          # that edits one is unreviewed, unless it is a verified link-only
+          # repair. Commits that arrived from main, and the merges bringing
+          # them in, are main's content, not this branch's edits.
+          while IFS= read -r P; do
+            [ -n "$P" ] || continue
+            AT_HEAD=$(git rev-parse -q --verify "HEAD:$P" 2>/dev/null || echo none)
+            ON_BASE=$(git rev-parse -q --verify "origin/${BASE}:$P" 2>/dev/null || echo none)
+            [ "$ON_BASE" != none ] && [ "$AT_HEAD" = "$ON_BASE" ] && continue
+            while IFS=$'\t' read -r C SUBJECT; do
+              [ -n "$C" ] || continue
+              if [[ "$SUBJECT" == *"[autoblog-cifix]"* ]] && python3 "$RUNNER_TEMP/linkonly.py" "$C" "$P"; then
+                continue
+              fi
+              CHANGED+="${P}: ${C:0:10} ${SUBJECT}"$'\n'
+            done < <(git log --no-merges --format='%H%x09%s' "${FINALIZE}..HEAD" "^origin/${BASE}" -- "$P")
+          done < <(git diff --name-only "$FINALIZE" HEAD -- brain data/blog-generation-runs)
           if [ -n "$CHANGED" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
             {
