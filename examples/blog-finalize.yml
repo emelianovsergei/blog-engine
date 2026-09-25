@@ -418,6 +418,16 @@ jobs:
             exit 1
           fi
 
+          # Mark this commit as the finalize boundary for the review job. Set
+          # with GITHUB_TOKEN (creator github-actions[bot]) as soon as the
+          # commit exists on the remote (the recovery ref above), before TARGET
+          # is touched: a re-run after any later failure then recognizes its
+          # own target by this status, and the review that the PR
+          # create/reopen triggers can already see it.
+          GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
+            -f state=success -f context=autoblog/finalized \
+            -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
+
           # Checked before any branch or label changes: without the PAT the PR
           # would get no CI or review, and nothing has been replaced yet, so a
           # re-run after adding the secret starts from the same handoff.
@@ -485,12 +495,6 @@ jobs:
           # TARGET since (a newer handoff, another run) is never overwritten.
           git push --force-with-lease="refs/heads/${TARGET}:${LEASE}" origin "HEAD:refs/heads/$TARGET"
 
-          # Mark this commit as the finalize boundary for the review job. Set
-          # with GITHUB_TOKEN (creator github-actions[bot]), before any PR
-          # event, so the review that the PR create/reopen triggers can see it.
-          GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
-            -f state=success -f context=autoblog/finalized \
-            -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
 
 
           if [ -n "$EXISTING_PR" ]; then
