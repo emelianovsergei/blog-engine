@@ -153,11 +153,30 @@ jobs:
                   gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
                     -f ref="refs/heads/$1" -f sha="$SOURCE_SHA" >/dev/null 2>&1
                 }
+                LEASE="$SOURCE_SHA"
                 if ! claim "$TARGET"; then
                   TARGET="blog/claude-${RUN_DATE}-${GITHUB_RUN_ID}"
-                  claim "$TARGET" || { echo "::error::Could not claim $TARGET for this handoff."; exit 1; }
+                  if ! claim "$TARGET"; then
+                    # A re-run keeps its run id, so this ref may already be
+                    # this handoff's own claim, or the post it finalized
+                    # before failing later. Reuse it then; anything else is
+                    # not ours to overwrite.
+                    TIP=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
+                    FROM=""
+                    if [ -n "$TIP" ]; then
+                      FROM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                        --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' \
+                        | sed -n 's/.*source=\([^ )]*\).*/\1/p' || true)
+                    fi
+                    if [ -n "$TIP" ] && { [ "$TIP" = "$SOURCE_SHA" ] || [ "$FROM" = "$SOURCE" ]; }; then
+                      echo "Reusing $TARGET: this run's own earlier claim."
+                      LEASE="$TIP"
+                    else
+                      echo "::error::Could not claim $TARGET for this handoff."
+                      exit 1
+                    fi
+                  fi
                 fi
-                LEASE="$SOURCE_SHA"
               fi
               ;;
           esac
