@@ -680,8 +680,11 @@ function cmdCheck(): void {
   // Offline preview: the real generator in external mode, stock image, no
   // network. Produces the MDX CI and the reviewer will see.
   removePreview();
-  const meta: ExternalMeta = { writer: WRITER };
-  writeJson(work("meta.preview.json"), meta);
+  // The same metadata handoff will ship (category from the selection, run
+  // date, keyword research), so the reviewed preview is what finalize builds.
+  // handoff reuses this exact file; it is never rebuilt after the review.
+  need(work("selection.json"), "run `rank` first — the preview carries the selected topic's metadata");
+  writeJson(work("meta.preview.json"), handoffMeta(ctx));
   const env = {
     ...process.env,
     BLOG_EXTERNAL_PLAN: work("plan.json"),
@@ -705,6 +708,7 @@ function cmdCheck(): void {
     slug,
     digest: contentDigest(work("plan.json"), work("body.md")),
     previewDigest: fileDigest(previewPaths(slug).mdx),
+    metaDigest: fileDigest(work("meta.preview.json")),
     generatorSha: gitHead(),
   });
   const structural = spawnSync("npx", ["tsx", "scripts/check-blog-post.ts", previewPaths(slug).mdx, "--strict"], {
@@ -771,10 +775,11 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
 async function cmdReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(work("preview.json"), "run `check` first — the reviewer grades the preview MDX");
-  const { slug, digest, previewDigest, generatorSha } = readJson<{
+  const { slug, digest, previewDigest, metaDigest, generatorSha } = readJson<{
     slug: string;
     digest?: string;
     previewDigest?: string;
+    metaDigest?: string;
     generatorSha?: string;
   }>(work("preview.json"));
   if (digest !== contentDigest(work("plan.json"), work("body.md"))) {
@@ -783,7 +788,12 @@ async function cmdReview(): Promise<void> {
   const file = previewPaths(slug).mdx;
   // The reviewer reads the preview, not plan.json/body.md: it must still be
   // exactly what `check` generated from them.
-  if (!fs.existsSync(file) || previewDigest !== fileDigest(file)) {
+  if (
+    !fs.existsSync(file) ||
+    previewDigest !== fileDigest(file) ||
+    !fs.existsSync(work("meta.preview.json")) ||
+    metaDigest !== fileDigest(work("meta.preview.json"))
+  ) {
     throw new Error("the preview MDX changed after `check`; run `check` again so the reviewer grades what finalize will publish");
   }
   const { frontmatter, body } = parseDocument(fs.readFileSync(file, "utf-8"));
@@ -811,20 +821,37 @@ async function cmdReview(): Promise<void> {
   }
   writeJson(work(`review-${round}.json`), result);
   fs.writeFileSync(work(`review-${round}.md`), renderReviewMarkdown(result));
-  writeJson(work("review.json"), { round, result, digest, generatorSha });
+  writeJson(work("review.json"), { round, result, digest, metaDigest, generatorSha });
   console.log(renderReviewMarkdown(result));
   process.exit(result.pass ? 0 : 2);
 }
 
 // ─── handoff ────────────────────────────────────────────────────────────────
 
-function cmdHandoff(): void {
-  const ctx = loadContext();
-  for (const f of ["plan.json", "body.md", "selection.json", "review.json"]) need(work(f), "finish the earlier steps first");
+/** Everything the handoff's meta.json carries except the review verdict. */
+function handoffMeta(ctx: ReturnType<typeof loadContext>) {
   const sel = readJson<{ selection: NonNullable<ExternalMeta["topicSelection"]>; ranked: unknown[] }>(work("selection.json"));
-  const review = readJson<{ round: number; result: ReviewResult; digest?: string; generatorSha?: string }>(
-    work("review.json"),
-  );
+  return {
+    writer: WRITER,
+    runDate: ctx.runDate,
+    runAt: ctx.runAt,
+    briefDate: ctx.briefDate,
+    autocompleteLive: ctx.autocompleteLive,
+    topicSelection: sel.selection,
+    ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
+    candidates: sel.ranked,
+  } satisfies ExternalMeta & Record<string, unknown>;
+}
+
+function cmdHandoff(): void {
+  for (const f of ["plan.json", "body.md", "selection.json", "review.json"]) need(work(f), "finish the earlier steps first");
+  const review = readJson<{
+    round: number;
+    result: ReviewResult;
+    digest?: string;
+    metaDigest?: string;
+    generatorSha?: string;
+  }>(work("review.json"));
   const digest = contentDigest(work("plan.json"), work("body.md"));
   if (review.digest !== digest) {
     throw new Error(
@@ -836,21 +863,12 @@ function cmdHandoff(): void {
       "the checkout moved since `check` (or the review predates this check); run `check` and `review` again on the current HEAD",
     );
   }
-  const meta: ExternalMeta & {
-    runDate: string;
-    runAt: string;
-    briefDate: string;
-    autocompleteLive: boolean;
-    generatorSha: string;
-  } = {
-    writer: WRITER,
-    runDate: ctx.runDate,
-    runAt: ctx.runAt,
-    briefDate: ctx.briefDate,
-    autocompleteLive: ctx.autocompleteLive,
-    topicSelection: sel.selection,
-    ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
-    candidates: sel.ranked,
+  // The metadata the reviewed preview was built from, byte for byte.
+  if (!fs.existsSync(work("meta.preview.json")) || review.metaDigest !== fileDigest(work("meta.preview.json"))) {
+    throw new Error("the preview metadata changed after the review; run `check` and `review` again before handing off");
+  }
+  const meta = {
+    ...readJson<ReturnType<typeof handoffMeta>>(work("meta.preview.json")),
     claudeReview: {
       pass: review.result.pass,
       fixRounds: Math.max(0, review.round - 1),
