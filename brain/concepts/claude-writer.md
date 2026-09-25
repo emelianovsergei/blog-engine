@@ -28,7 +28,7 @@ supplies the judgment: topics, prose, and the review verdict.
 | Second-pass review | a separate subagent | [[modules/review]] `reviewBlogPost` through the relay client. The subagent answers the exact prompt, and the engine parses the answer and applies `computeGate()`: every gating dimension ≥ 6.0, no blockers, overall ≥ 7.0, `humanVoice` advisory ([[concepts/quality-gates]]). Up to 2 fix rounds. A post that still fails is never discarded. |
 | Handoff | session | Pushes `data/blog-claude-inbox/{plan.json, body.md, meta.json, review.md}` to `blog/claude-<date>`. If its git proxy allows only the session's own `claude/*` branch, it pushes there. |
 | Finalize | `blog-finalize.yml` | The generator in external-plan mode. Image, [[modules/link-audit]] and unlink, frontmatter, `checkBlogPostSource` and the run report are unchanged. Opens a draft PR labelled `autoblog` and `autoblog-claude-reviewed`, plus `autoblog-review-failed` when the review or the rule checks failed. |
-| Review gate | `autoblog-review.yml` | The `claude-reviewed` job applies `autoblog-approved-pending` on a pass. The Grok review and [[concepts/autofix-loop]] skip these PRs, and so does [[concepts/codex-heal]]. [[concepts/ci-heal]] still applies. |
+| Review gate | `autoblog-review.yml` | The `claude-reviewed` job applies `autoblog-approved-pending` on a pass, but only while the post's files are unchanged since the finalize commit, except for `[autoblog-cifix]` repairs. Any other edit waits for a human to add the label. The Grok review and [[concepts/autofix-loop]] skip these PRs, and so does [[concepts/codex-heal]]. [[concepts/ci-heal]] still applies. |
 
 ## Consumer contract
 

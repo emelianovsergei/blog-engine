@@ -456,14 +456,64 @@ jobs:
   # second-pass review already ran in the session and its verdict is on the PR
   # (body + labels). A pass earns the same approval and merge-gate label as a
   # Grok pass; a failed review waits for a human, with no Grok auto-fix.
+  #
+  # The verdict covers the content blog-finalize.yml committed, nothing after
+  # it. The label persists across pushes, so approval is bound to that commit:
+  # only deterministic `[autoblog-cifix]` link repairs may touch the post's
+  # files afterwards. Any other change to the post waits for a human.
   claude-reviewed:
     if: contains(github.event.pull_request.labels.*.name, 'autoblog-claude-reviewed')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Bind the session verdict to the reviewed commit
+        id: bound
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # Newest finalize commit on this branch (a re-finalize supersedes).
+          FINALIZE=$(git log --format='%H%x09%s' "origin/${BASE}..HEAD" \
+            | awk -F '\t' 'index($2, "Add Claude-written blog post for ") == 1 { print $1; exit }')
+          if [ -z "$FINALIZE" ]; then
+            echo "bound=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no finalize commit on this branch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The post's own files, as finalize added them.
+          mapfile -t FILES < <(git diff-tree --no-commit-id --name-only -r --diff-filter=A "$FINALIZE" \
+            -- content/blog public/images/blog)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "bound=false" >> "$GITHUB_OUTPUT"
+            echo "reason=finalize commit ${FINALIZE:0:10} added no post" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Later commits that touched those files, other than CI-heal repairs.
+          CHANGED=$(git log --format='%h %s' "${FINALIZE}..HEAD" -- "${FILES[@]}" \
+            | grep -vF '[autoblog-cifix]' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "bound=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "reason<<EOF_REASON"
+              echo "the post changed after the reviewed commit ${FINALIZE:0:10}:"
+              echo "$CHANGED"
+              echo "EOF_REASON"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "bound=true" >> "$GITHUB_OUTPUT"
+          echo "Session verdict covers ${FINALIZE:0:10}; no unreviewed change to ${FILES[*]}."
+
       - name: Summarize the session review
         id: verdict
         env:
           FAILED: ${{ contains(github.event.pull_request.labels.*.name, 'autoblog-review-failed') }}
+          BOUND: ${{ steps.bound.outputs.bound }}
+          REASON: ${{ steps.bound.outputs.reason }}
         run: |
           set -euo pipefail
           if [ "$FAILED" = "true" ]; then
@@ -473,7 +523,16 @@ jobs:
               echo
               echo "❌ This post failed the second-pass Claude review in the writing session, or its rule checks (details in the PR body). Grok review and auto-fix are skipped for Claude-written posts."
               echo
-              echo "Human needed: fix the post, remove \`autoblog-review-failed\`, then remove and re-add \`autoblog-claude-reviewed\` so a fresh \`labeled\` event approves it. (A re-run reuses the old labels.) Or remove \`autoblog-claude-reviewed\` and push, to send it through the Grok review and auto-fix instead."
+              echo "Human needed: fix the post, then approve it yourself by adding \`autoblog-approved-pending\` (and removing \`autoblog-review-failed\`). A human edit is not covered by the session review. Or push a new handoff to the branch to re-finalize."
+            } > review-summary.md
+          elif [ "$BOUND" != "true" ]; then
+            echo "pass=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Autoblog AI Review — Claude session"
+              echo
+              echo "⏸️ Not auto-approved: $REASON"
+              echo
+              echo "The session review covers only the content \`blog-finalize.yml\` committed. Review the change yourself and add \`autoblog-approved-pending\` to publish, or push a new handoff to re-finalize."
             } > review-summary.md
           else
             echo "pass=true" >> "$GITHUB_OUTPUT"
