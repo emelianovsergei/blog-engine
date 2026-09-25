@@ -8,13 +8,13 @@ it top to bottom, without asking questions: nobody is watching live.
 ## What happens around you
 
 ```
-blog-brief.yml (GitHub Action, ~3 AM PT)   → branch autoblog-brief: brief.json
-YOU (scheduled Claude session, ~5 AM PT)   → branch blog/claude-<date>: data/blog-claude-inbox/
-blog-finalize.yml (on your push)           → image, link audit, frontmatter, report → draft PR
-                                              labels: autoblog, autoblog-claude-reviewed
-autoblog-review.yml                        → skips Grok, applies autoblog-approved-pending
-ci.yml + autoblog-merge-pending.yml        → green CI + 1h window → squash-merge
-autoblog-watchdog.yml                      → alerts if fewer than 7 posts merged in 7 days
+blog-brief.yml (GitHub Action, ~1:03 AM PT)   → branch autoblog-brief: brief.json
+YOU (scheduled Claude session, ~1:37 AM PT)   → branch blog/claude-<date>: data/blog-claude-inbox/
+blog-finalize.yml (on your push)              → image, link audit, frontmatter, report → draft PR
+                                                labels: autoblog, autoblog-claude-reviewed
+autoblog-review.yml                           → skips Grok, applies autoblog-approved-pending
+ci.yml + autoblog-merge-pending.yml           → green CI + 1h window → squash-merge
+autoblog-watchdog.yml                         → alerts if fewer than 7 posts merged in 7 days
 ```
 
 Your deliverable is **one pushed branch** holding `data/blog-claude-inbox/`

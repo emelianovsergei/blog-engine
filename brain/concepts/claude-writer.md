@@ -9,8 +9,9 @@ sources: ["examples/blog-brief.yml", "examples/blog-finalize.yml", "examples/AUT
 # Claude Writer (Scheduled Session)
 
 From 2026-09-25 the consumer sites stop asking Grok to write. A scheduled
-Claude session (Opus 5.5) writes one post a day per site. Pulse runs at about
-5 AM PT and PRO MAX an hour later. Images stay on Grok Imagine (one call per
+Claude session (Opus 5.5) writes one post a day per site. Pulse runs at 1:37
+AM PT, after the subscription's usage limits reset, and PRO MAX half an hour
+later. Images stay on Grok Imagine (one call per
 post, Pexels fallback). Grok generate stays as a `workflow_dispatch` fallback.
 
 The engine's own code still does every deterministic step. The session only
