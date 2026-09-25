@@ -39,6 +39,7 @@ The consumer generator (`scripts/generate-blog-post.ts`) must provide:
 - Plan and body rule failures are reported in the run report (`planViolations`, `bodyViolations`), never thrown. An unsafe or already-taken slug still throws.
 - exports `buildPlannerPrompt`, `buildWriterPrompt`, `checkExternalPlan`, `bodyViolations`, `loadLinkPolicy`, `RUBRIC` and `postPlanSchema`, behind a `require.main` guard so an import does not generate.
 - `BLOG_PENDING_DIR` support for posts in open autoblog PRs.
+- The handoff's `meta.json` carries `generatorSha`, the commit of `main` the preview was built on. Finalize checks out exactly that commit (only if it is on `main`); anything else fails the review.
 
 `examples/scripts/autoblog/` carries the session CLI and brief builder, with
 Pulse's `site.ts` as the worked example. `examples/AUTOBLOG_CLAUDE.md` is the

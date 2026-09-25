@@ -94,6 +94,15 @@ function fileDigest(file: string): string {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+/**
+ * The commit the preview was generated from. blog-finalize.yml regenerates
+ * the post with this exact revision of main (never a newer one), so the
+ * reviewed preview and the published MDX come from the same generator.
+ */
+function gitHead(): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf-8" }).trim();
+}
+
 // ─── io ─────────────────────────────────────────────────────────────────────
 
 function flag(name: string): string | undefined {
@@ -696,6 +705,7 @@ function cmdCheck(): void {
     slug,
     digest: contentDigest(work("plan.json"), work("body.md")),
     previewDigest: fileDigest(previewPaths(slug).mdx),
+    generatorSha: gitHead(),
   });
   const structural = spawnSync("npx", ["tsx", "scripts/check-blog-post.ts", previewPaths(slug).mdx, "--strict"], {
     cwd: ROOT,
@@ -761,9 +771,12 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
 async function cmdReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(work("preview.json"), "run `check` first — the reviewer grades the preview MDX");
-  const { slug, digest, previewDigest } = readJson<{ slug: string; digest?: string; previewDigest?: string }>(
-    work("preview.json"),
-  );
+  const { slug, digest, previewDigest, generatorSha } = readJson<{
+    slug: string;
+    digest?: string;
+    previewDigest?: string;
+    generatorSha?: string;
+  }>(work("preview.json"));
   if (digest !== contentDigest(work("plan.json"), work("body.md"))) {
     throw new Error("plan.json or body.md changed after `check`; run `check` again so the reviewer grades what you will hand off");
   }
@@ -798,7 +811,7 @@ async function cmdReview(): Promise<void> {
   }
   writeJson(work(`review-${round}.json`), result);
   fs.writeFileSync(work(`review-${round}.md`), renderReviewMarkdown(result));
-  writeJson(work("review.json"), { round, result, digest });
+  writeJson(work("review.json"), { round, result, digest, generatorSha });
   console.log(renderReviewMarkdown(result));
   process.exit(result.pass ? 0 : 2);
 }
@@ -809,14 +822,27 @@ function cmdHandoff(): void {
   const ctx = loadContext();
   for (const f of ["plan.json", "body.md", "selection.json", "review.json"]) need(work(f), "finish the earlier steps first");
   const sel = readJson<{ selection: NonNullable<ExternalMeta["topicSelection"]>; ranked: unknown[] }>(work("selection.json"));
-  const review = readJson<{ round: number; result: ReviewResult; digest?: string }>(work("review.json"));
+  const review = readJson<{ round: number; result: ReviewResult; digest?: string; generatorSha?: string }>(
+    work("review.json"),
+  );
   const digest = contentDigest(work("plan.json"), work("body.md"));
   if (review.digest !== digest) {
     throw new Error(
       "plan.json or body.md changed after the last review; run `check` and `review` again (a new round) before handing off",
     );
   }
-  const meta: ExternalMeta & { runDate: string; runAt: string; briefDate: string; autocompleteLive: boolean } = {
+  if (!review.generatorSha || review.generatorSha !== gitHead()) {
+    throw new Error(
+      "the checkout moved since `check` (or the review predates this check); run `check` and `review` again on the current HEAD",
+    );
+  }
+  const meta: ExternalMeta & {
+    runDate: string;
+    runAt: string;
+    briefDate: string;
+    autocompleteLive: boolean;
+    generatorSha: string;
+  } = {
     writer: WRITER,
     runDate: ctx.runDate,
     runAt: ctx.runAt,
@@ -831,6 +857,7 @@ function cmdHandoff(): void {
       result: review.result,
       digest,
     },
+    generatorSha: review.generatorSha,
   };
   removePreview();
   fs.rmSync(INBOX, { recursive: true, force: true });

@@ -81,6 +81,20 @@ jobs:
             echo "::notice::Resuming the handoff kept at refs/autoblog-handoff/${SOURCE#blog/} (${HANDOFF:0:10})."
           fi
           { echo "SOURCE_SHA=$SOURCE_SHA"; echo "HANDOFF_SHA=$HANDOFF"; } >> "$GITHUB_ENV"
+          # Regenerate with the revision of main the session built and reviewed
+          # its preview on, not a newer one: generator, templates and site
+          # constants must match what the verdict covers. Only a commit on
+          # main qualifies, so this never runs branch code.
+          GEN=$(git show "${HANDOFF}:data/blog-claude-inbox/meta.json" 2>/dev/null | jq -r '.generatorSha // empty' || true)
+          if [ -n "$GEN" ] && git cat-file -e "${GEN}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$GEN" "origin/${{ github.event.repository.default_branch }}"; then
+            git checkout -q --detach "$GEN"
+            echo "GENERATOR_PIN=match" >> "$GITHUB_ENV"
+            echo "Generating with main@${GEN:0:10}, the revision the session reviewed."
+          else
+            echo "GENERATOR_PIN=mismatch" >> "$GITHUB_ENV"
+            echo "::warning::The handoff's generatorSha '${GEN:-none}' is not a commit on main; generating with main and treating the review as failed."
+          fi
           rm -rf data/blog-claude-inbox
           mkdir -p data/blog-claude-inbox
           for F in plan.json body.md meta.json review.md; do
@@ -327,6 +341,10 @@ jobs:
           UNRESOLVED_COUNT=$(jq -r '.linkAudit.unresolved // [] | length' "$REPORT")
           RULES=$(jq -r '[(.planViolations // [])[] | "- plan: \(.)"] + [(.bodyViolations // [])[] | "- body: \(.)"] + [(.structuralViolations // [])[] | "- structure: [\(.rule)] \(.message)"] | if length == 0 then "- none" else .[] end' "$REPORT")
           RULE_COUNT=$(jq -r '((.planViolations // []) + (.bodyViolations // []) + (.structuralViolations // [])) | length' "$REPORT")
+          if [ "${GENERATOR_PIN:-mismatch}" != "match" ]; then
+            REVIEW_PASS=false
+            RULES="$(printf '%s\n%s' "- review: the post was not regenerated with the revision of main the session reviewed (generatorSha)" "$RULES" | sed '/^- none$/d')"
+          fi
           if [ "$(cat "$RUNNER_TEMP/review-digest" 2>/dev/null || echo mismatch)" != "match" ]; then
             REVIEW_PASS=false
             RULES="$(printf '%s\n%s' "- review: the handed-off plan/body are not the ones the session reviewed (digest mismatch)" "$RULES" | sed '/^- none$/d')"
@@ -400,6 +418,14 @@ jobs:
             exit 1
           fi
 
+          # Checked before any branch or label changes: without the PAT the PR
+          # would get no CI or review, and nothing has been replaced yet, so a
+          # re-run after adding the secret starts from the same handoff.
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured. Nothing was changed; the finalized post is at refs/autoblog-recovery/${RUN_KEY}-${GITHUB_RUN_ID}. Add the secret and re-run."
+            exit 1
+          fi
+
           if ! EXISTING_PR=$(gh pr list --head "$TARGET" --state open --json number --jq '.[0].number'); then
             echo "::error::Could not list PRs for $TARGET — refusing to guess whether one exists."
             exit 1
@@ -466,10 +492,6 @@ jobs:
             -f state=success -f context=autoblog/finalized \
             -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
 
-          if [ "${HAS_PAT}" != "true" ]; then
-            echo "::error::AUTOBLOG_PAT is not configured. The post is safe on $TARGET, but a PR opened with GITHUB_TOKEN would never receive CI or review. Add the secret and re-run, or open the PR by hand."
-            exit 1
-          fi
 
           if [ -n "$EXISTING_PR" ]; then
             PR_NUM="$EXISTING_PR"

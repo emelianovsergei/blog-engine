@@ -201,7 +201,9 @@ round 3, hand off whatever the result.
 
 `handoff` refuses a plan or body that changed after the last review, and
 finalize re-checks the same digest. If you touch either file after the
-verdict, run `check` and a new `review` round first.
+verdict, run `check` and a new `review` round first. `handoff` also refuses if
+HEAD moved since `check`: finalize regenerates the post with that exact commit
+of `main`, so do not pull or switch commits between `check` and `handoff`.
 
 ```bash
 npm run autoblog:claude -- handoff

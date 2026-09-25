@@ -484,8 +484,8 @@ jobs:
           # A CI-heal repair may only unlink. Checked on content, not on the
           # forgeable `[autoblog-cifix]` subject: the new file must be the old
           # one with characters deleted, and only from link syntax (a link's
-          # brackets and destination; a whole image or a URL alone in parens,
-          # never part of one).
+          # opening bracket; its whole "](destination)", a whole image or a URL
+          # alone in parens, never part of one).
           # Citations may only lose whole entries (compared as parsed YAML).
           # Anything else is an edit. Without PyYAML the check fails closed.
           python3 -c 'import yaml' 2>/dev/null \
@@ -537,8 +537,10 @@ jobs:
           #  - atomic spans, removed whole or not at all: an image, a linked image, a
           #    URL alone in parentheses, a line left holding nothing but one of those.
           #    Deleting part of one could rewrite its alt text into new prose.
-          #  - single characters: a link's brackets and destination (its anchor text
-          #    stays), and the emphasis and horizontal whitespace next to an atomic span.
+          #    A link's "](destination)" is atomic too: shortening a destination could
+          #    retarget the link at another URL that happens to be in the post.
+          #  - single characters: a link's opening bracket (its anchor text stays), and
+          #    the emphasis and horizontal whitespace next to an atomic span.
           DEST = r"\((?:[^()\n]|\([^()\n]*\))*\)"
           IMG = r"!\[[^\]\n]*\]" + DEST
           n = len(old_body)
@@ -553,8 +555,8 @@ jobs:
           for m in re.finditer(r"\[(" + IMG + r")\]" + DEST, old_body):
               atom(m.start(), m.end())                    # linked image: all of it
               atom(m.start(1), m.end(1))                  # or just its image
-              mark(m.start(), m.start() + 1)              # or just the wrapper
-              mark(m.end(1), m.end())
+              mark(m.start(), m.start() + 1)              # or just the wrapper,
+              atom(m.end(1), m.end())                     # its destination whole
               spans.append((m.start(), m.end()))
           for m in re.finditer(r"(?<!\[)" + IMG, old_body):
               atom(m.start(), m.end())
@@ -567,7 +569,7 @@ jobs:
               if inside[m.start()]:
                   continue
               mark(m.start(), m.start() + 1)
-              mark(m.end(1), m.end())
+              atom(m.end(1), m.end())                     # "](destination)" whole
           for m in re.finditer(r"(?<!\])\(\s*<?https?://[^\s()<>]+>?\s*\)", old_body):
               atom(m.start(), m.end())
               spans.append((m.start(), m.end()))
