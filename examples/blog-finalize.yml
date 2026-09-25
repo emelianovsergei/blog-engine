@@ -299,13 +299,21 @@ jobs:
           done
 
           # The gate labels must be on the PR before the new head is reviewable.
+          # A re-finalize also clears a blocker whose condition no longer holds:
+          # a revised post that now passes must not stay parked behind the
+          # previous finalize's labels. Removing an absent label is a no-op;
+          # the read-back below catches a removal that really failed.
           if [ -n "$EXISTING_PR" ]; then
             gh pr edit "$EXISTING_PR" --add-label autoblog --add-label autoblog-claude-reviewed
             if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
               gh pr edit "$EXISTING_PR" --add-label autoblog-review-failed
+            else
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed || true
             fi
             if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
               gh pr edit "$EXISTING_PR" --add-label autoblog-link-repair-needed
+            else
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-link-repair-needed || true
             fi
           fi
 
@@ -355,6 +363,14 @@ jobs:
           fi
           if [ "$UNRESOLVED_COUNT" -gt 0 ] && ! grep -q 'autoblog-link-repair-needed' <<<"$PR_LABELS"; then
             echo "::error::PR #$PR_NUM has dead links but no autoblog-link-repair-needed label."
+            exit 1
+          fi
+          if [ "$REVIEW_PASS" = "true" ] && [ "$RULE_COUNT" -eq 0 ] && grep -q 'autoblog-review-failed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM passed but still carries autoblog-review-failed — it would never merge."
+            exit 1
+          fi
+          if [ "$UNRESOLVED_COUNT" -eq 0 ] && grep -q 'autoblog-link-repair-needed' <<<"$PR_LABELS"; then
+            echo "::error::PR #$PR_NUM has no dead links but still carries autoblog-link-repair-needed — it would never merge."
             exit 1
           fi
           echo "Opened/updated PR #$PR_NUM for $TARGET."
