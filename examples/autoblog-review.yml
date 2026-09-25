@@ -829,9 +829,19 @@ jobs:
           PAT: ${{ secrets.AUTOBLOG_PAT }}
           PR: ${{ github.event.pull_request.number }}
           HUMAN: ${{ steps.verdict.outputs.human }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
         run: |
           set -uo pipefail
+          # `gh pr review` approves whatever the head is now. Everything above
+          # judged HEAD_SHA, so a push since then must not inherit the verdict;
+          # its own synchronize run decides.
+          CURRENT=$(gh pr view "$PR" --json headRefOid -q .headRefOid) || CURRENT=""
+          if [ "$CURRENT" != "$HEAD_SHA" ]; then
+            echo "::notice::PR head moved from ${HEAD_SHA:0:10} to ${CURRENT:-unknown}; not approving. The new head's run decides."
+            gh pr edit "$PR" --remove-label autoblog-approved-pending || true
+            exit 0
+          fi
           PR_ID=$(gh pr view "$PR" --json id -q .id) || PR_ID=""
           if [ -n "$PR_ID" ]; then
             GH_TOKEN="${PAT:-$GH_TOKEN}" gh api graphql -f query='

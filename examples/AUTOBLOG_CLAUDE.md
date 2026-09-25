@@ -48,6 +48,10 @@ is `scripts/autoblog/claude.ts`; its scratch space is `.autoblog/` (ignored).
 
 ```bash
 npm ci
+# ImageMagick makes the preview image like finalize does. Optional: without it
+# `check` uses a committed 1200x675 hero as-is (finalize makes the real image).
+command -v convert >/dev/null || { apt-get update -qq && apt-get install -y -qq imagemagick; } \
+  || { sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick; } || true
 TODAY=$(TZ=America/Los_Angeles date +%F)
 git fetch origin main autoblog-brief
 git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → stop

@@ -35,7 +35,7 @@ supplies the judgment: topics, prose, and the review verdict.
 The consumer generator (`scripts/generate-blog-post.ts`) must provide:
 
 - env `BLOG_EXTERNAL_PLAN`, `BLOG_EXTERNAL_BODY` and `BLOG_EXTERNAL_META`. These skip `selectWeeklyTopic`, `researchKeywords`, `planPost` and `writeArticle`.
-- env `BLOG_EXTERNAL_OFFLINE=1`: stock image, no link fetch, no IndexNow.
+- env `BLOG_EXTERNAL_OFFLINE=1`: stock image, no link fetch, no IndexNow. It must work without ImageMagick (the session container may not have it): fall back to a committed 1200x675 hero as-is.
 - Plan and body rule failures are reported in the run report (`planViolations`, `bodyViolations`), never thrown. An unsafe or already-taken slug still throws.
 - exports `buildPlannerPrompt`, `buildWriterPrompt`, `checkExternalPlan`, `bodyViolations`, `loadLinkPolicy`, `RUBRIC` and `postPlanSchema`, behind a `require.main` guard so an import does not generate.
 - `BLOG_PENDING_DIR` support for posts in open autoblog PRs.
