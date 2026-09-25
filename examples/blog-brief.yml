@@ -13,15 +13,17 @@
 # The brief is committed to the side branch `autoblog-brief` as a single
 # force-pushed commit (brief.json). Never to main.
 #
-# Timing: the Pulse session runs at ~5 AM PT. This runs at 10:17 UTC, which is
-# 3:17 AM PDT / 2:17 AM PST, so an hour of GitHub cron lag still lands first.
+# Timing: the Pulse session runs at 1:37 AM PT, after the subscription's usage
+# limits reset. This runs at 08:03 UTC, which is 1:03 AM PDT / 12:03 AM PST:
+# after Pacific midnight in both seasons, so the brief carries today's date,
+# with half an hour of cron lag to spare before the session.
 # A late or missing brief is not fatal: the session warns and refreshes the
 # post lists from git itself.
 name: Blog Brief (Claude autoblog)
 
 on:
   schedule:
-    - cron: "17 10 * * *"
+    - cron: "3 8 * * *"
   workflow_dispatch:
 
 concurrency:
