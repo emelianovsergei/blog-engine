@@ -1115,7 +1115,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
  * threads early would clear the only thing holding it, and merge-pending could
  * publish the unfixed post if finalize is slow or fails.
  */
-async function finalizedHead(pr: number, before: string, source: string, handoff: string, minutes: number): Promise<string | undefined> {
+async function finalizedHead(pr: number, before: string, handoff: string, minutes: number): Promise<string | undefined> {
   const { owner, name } = repoSlug();
   const deadline = Date.now() + minutes * 60_000;
   for (;;) {
@@ -1128,14 +1128,14 @@ async function finalizedHead(pr: number, before: string, source: string, handoff
           description?: string | null;
           creator?: { login?: string } | null;
         }>;
-        // Finalized from THIS handoff: blog-finalize.yml writes handoff=<sha> and
-        // source=<branch> into the status. The branch alone is not enough: every
-        // attempt for a post pushes the same autoblog-revise/<key>, so a late
-        // finalize of an earlier attempt would otherwise pass for this one.
+        // Finalized from THIS handoff: blog-finalize.yml writes handoff=<sha> into
+        // the status (and source=<branch> when it fits in 140 characters). The
+        // handoff commit names one attempt; a late finalize of an earlier one
+        // never passes for this one.
+        const mark = new RegExp(`handoff=${handoff.slice(0, 12)}[ )]`);
         if (statuses.some((s) =>
           s.context === "autoblog/finalized" && s.state === "success" &&
-          s.creator?.login === "github-actions[bot]" &&
-          (s.description ?? "").includes(`handoff=${handoff.slice(0, 12)} source=${source})`))) {
+          s.creator?.login === "github-actions[bot]" && mark.test(s.description ?? ""))) {
           return head;
         }
       }
@@ -1160,7 +1160,7 @@ async function cmdReviseResolve(): Promise<void> {
   // One transport branch per handoff: a branch a failed attempt left behind never blocks the push.
   const source = flag("source") ?? `autoblog-revise/${rev.branch.replace(/^blog\//, "")}-${handoff.slice(0, 8)}`;
   console.log(`Waiting up to ${minutes} min for finalize (source ${source} at ${handoff.slice(0, 12)}) to replace the head of #${rev.pr}…`);
-  const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, source, handoff, minutes) : undefined;
+  const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, handoff, minutes) : undefined;
   if (!head) {
     // The attempt still counts toward the cap, so a post finalize keeps
     // failing on is not revised forever; its threads stay open and hold it.

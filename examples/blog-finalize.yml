@@ -186,6 +186,27 @@ jobs:
               exit 1
             fi
             TIP=$(git ls-remote origin "refs/heads/$REVISION_OF" | cut -f1)
+            # Whether the PR head is this handoff's own finalized commit (a
+            # re-run after a later step failed). The handoff sha names one
+            # handoff; the source branch is left out of the match because a
+            # long one is dropped from the status to fit GitHub's 140 chars.
+            OURS=false
+            if [ -n "$TIP" ]; then
+              DONE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' || true)
+              [[ "$DONE" =~ handoff=${HANDOFF_SHA:0:12}[\ \)] ]] && OURS=true
+            fi
+            # That run may have closed the PR to re-raise its events and then
+            # failed to reopen it: reopen the closed, unmerged Claude PR that
+            # sits on this handoff's commit, then carry on as usual.
+            if [ "${OPEN_CLAUDE:-0}" -eq 0 ] && [ "$OURS" = true ]; then
+              CLOSED=$(gh pr list --head "$REVISION_OF" --state closed --json number,mergedAt,headRefOid,labels \
+                --jq "[.[] | select(.mergedAt == null and .headRefOid == \"$TIP\") | select([.labels[].name] | index(\"autoblog-claude-reviewed\"))][0].number // empty" || true)
+              if [ -n "$CLOSED" ] && gh pr reopen "$CLOSED"; then
+                echo "::notice::Reopened #$CLOSED, which an earlier run of this handoff closed and did not reopen."
+                OPEN_CLAUDE=1
+              fi
+            fi
             if [ "${OPEN_CLAUDE:-0}" -eq 0 ] || [ -z "$TIP" ]; then
               # The handoff stays on $SOURCE: nothing is deleted on this path.
               echo "::error::$REVISION_OF has no open Claude PR to revise; the handoff is left on $SOURCE."
@@ -204,13 +225,9 @@ jobs:
               # later step failed: PR edit, reopen, comment) finds the PR on
               # the commit it finalized, not on revisionBase. That head is
               # this handoff's own output, so resume from it.
-              if [ -n "$REVISION_BASE" ] && [ "$TIP" != "$REVISION_BASE" ]; then
-                DONE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
-                  --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' || true)
-                if [[ "$DONE" == *"handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"* ]]; then
-                  echo "::notice::$REVISION_OF is already on this handoff's finalized commit (${TIP:0:10}); resuming."
-                  REVISION_BASE="$TIP"
-                fi
+              if [ -n "$REVISION_BASE" ] && [ "$TIP" != "$REVISION_BASE" ] && [ "$OURS" = true ]; then
+                echo "::notice::$REVISION_OF is already on this handoff's finalized commit (${TIP:0:10}); resuming."
+                REVISION_BASE="$TIP"
               fi
               if [ -z "$REVISION_BASE" ] || [ "$TIP" != "$REVISION_BASE" ]; then
                 echo "::error::$REVISION_OF is at ${TIP:0:10}, not the head this revision was built from (${REVISION_BASE:-none}); the handoff is left on $SOURCE."
@@ -538,11 +555,11 @@ jobs:
           # is touched: a re-run after any later failure then recognizes its
           # own target by this status, and the review that the PR
           # create/reopen triggers can already see it.
-          # handoff= and source= are what re-runs and `revise --resolve` match
-          # on; GitHub rejects a description over 140 characters (a collision
-          # run key repeated in a revise branch name gets close).
+          # handoff= is what re-runs and `revise --resolve` match on; source=
+          # lets a re-run recognize its own claim branch. GitHub rejects a
+          # description over 140 characters, so a long source is left out.
           DESC="Finalized from Claude handoff (handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"
-          [ "${#DESC}" -le 140 ] || DESC="(handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"
+          [ "${#DESC}" -le 140 ] || DESC="Finalized from Claude handoff (handoff=${HANDOFF_SHA:0:12})"
           GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
             -f state=success -f context=autoblog/finalized \
             -f description="$DESC" >/dev/null
