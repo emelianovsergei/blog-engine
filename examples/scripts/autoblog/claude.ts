@@ -1105,7 +1105,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
  * threads early would clear the only thing holding it, and merge-pending could
  * publish the unfixed post if finalize is slow or fails.
  */
-async function finalizedHead(pr: number, before: string, source: string, minutes: number): Promise<string | undefined> {
+async function finalizedHead(pr: number, before: string, source: string, handoff: string, minutes: number): Promise<string | undefined> {
   const { owner, name } = repoSlug();
   const deadline = Date.now() + minutes * 60_000;
   for (;;) {
@@ -1118,10 +1118,14 @@ async function finalizedHead(pr: number, before: string, source: string, minutes
           description?: string | null;
           creator?: { login?: string } | null;
         }>;
-        // Finalized from THIS handoff: blog-finalize.yml writes source=<branch> into the status.
+        // Finalized from THIS handoff: blog-finalize.yml writes handoff=<sha> and
+        // source=<branch> into the status. The branch alone is not enough: every
+        // attempt for a post pushes the same autoblog-revise/<key>, so a late
+        // finalize of an earlier attempt would otherwise pass for this one.
         if (statuses.some((s) =>
           s.context === "autoblog/finalized" && s.state === "success" &&
-          s.creator?.login === "github-actions[bot]" && (s.description ?? "").includes(`source=${source})`))) {
+          s.creator?.login === "github-actions[bot]" &&
+          (s.description ?? "").includes(`handoff=${handoff.slice(0, 12)} source=${source})`))) {
           return head;
         }
       }
@@ -1142,8 +1146,10 @@ async function cmdReviseResolve(): Promise<void> {
   // The branch the handoff was pushed to (runbook step 0b): autoblog-revise/<key>,
   // or the session's own claude/* branch when that is all it may push.
   const source = flag("source") ?? `autoblog-revise/${rev.branch.replace(/^blog\//, "")}`;
-  console.log(`Waiting up to ${minutes} min for finalize (source ${source}) to replace the head of #${rev.pr}…`);
-  const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, source, minutes) : undefined;
+  // The handoff commit this session just pushed (HEAD after the runbook's commit + push).
+  const handoff = flag("handoff") ?? gitHead();
+  console.log(`Waiting up to ${minutes} min for finalize (source ${source} at ${handoff.slice(0, 12)}) to replace the head of #${rev.pr}…`);
+  const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, source, handoff, minutes) : undefined;
   if (!head) {
     // The attempt still counts toward the cap, so a post finalize keeps
     // failing on is not revised forever; its threads stay open and hold it.

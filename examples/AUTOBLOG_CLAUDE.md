@@ -101,7 +101,8 @@ a finalized commit (Codex reviews whatever the head is). If the push is refused
 because this session may only push its own branch, push the same commit to
 that `claude/...` branch instead; `revisionOf` still points finalize at the PR.
 Then run `revise --resolve --source <that branch>`: it only accepts a head that
-finalize built from the branch you pushed. It resolves only the blocking
+finalize built from the commit you pushed (your `HEAD`; pass `--handoff <sha>`
+if you moved off it), so a late finalize of an earlier attempt never counts. It resolves only the blocking
 (P0/P1) Codex threads; a P2 you left alone stays open.
 
 `revise --list` skips a PR a human paused (`autoblog-hold`) or approved
