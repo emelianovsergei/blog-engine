@@ -90,8 +90,9 @@ npm run autoblog:claude -- revise --resolve     # waits for finalize to replace 
 git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
 ```
 
-`revise --resolve` waits up to 20 minutes for finalize to put its finalized
-commit on the PR, and only then replies to and resolves the Codex threads:
+`revise --resolve` waits up to 45 minutes (finalize may queue behind another
+run, then take up to 30) for finalize to put its finalized commit on the PR,
+and only then replies to and resolves the Codex threads:
 until then the old head is still approved, and a resolved thread would let
 merge-pending publish the unfixed post. Exit 3 means finalize did not land in
 time: the threads stay open (the post stays held); name it in the report.
