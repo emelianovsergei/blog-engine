@@ -219,6 +219,13 @@ asks: markdown body only, no frontmatter, no FAQ section, the required
 heading, the CTA. Write like the company's senior tech talking to a neighbor:
 specific, local, plain.
 
+The prompt asks for a concrete, lived-in scenario. Never present an invented
+job as one the company did: no dated call, named neighborhood customer or
+meter reading told as fact ("last October we found..."), unless it comes from
+`content/our-work/`. Frame it as the pattern it is ("a typical first-cold-morning
+call: the house is a 1970s ranch, the trap is full of algae..."). Codex holds
+a post that states a made-up job as fact (P1, 2026-09-26).
+
 ## 7. Check and build
 
 ```bash
