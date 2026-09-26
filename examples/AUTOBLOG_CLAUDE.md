@@ -54,7 +54,53 @@ command -v convert >/dev/null || { apt-get update -qq && apt-get install -y -qq 
   || { sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick; } || true
 TODAY=$(TZ=America/Los_Angeles date +%F)
 git fetch origin main autoblog-brief
-git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → stop
+```
+
+## 0b. Fix posts held on their PRs (before today's post)
+
+A finished post can sit on its PR and never merge: a Codex P0/P1 comment, a
+failed session review (`autoblog-review-failed`), or a dead link finalize
+could not unlink (`autoblog-link-repair-needed`). Nothing else fixes those,
+so do it first.
+
+```bash
+npm run -s autoblog:claude -- revise --list     # last line: REVISE: <PR numbers>
+```
+
+For each number on the `REVISE:` line (at most two per run):
+
+```bash
+git checkout -q -f --detach origin/main        # check/handoff pin the generator to HEAD
+npm run autoblog:claude -- revise --pr <N>     # rebuilds .autoblog/ from the PR; prints .autoblog/findings.md
+```
+
+Fix every P0/P1, blocker and major finding in `.autoblog/plan.json` (the
+frontmatter: FAQs, HowTo steps, summary, citations) and/or `.autoblog/body.md`;
+fix a P2 when it is cheap and plainly right. Change nothing else: same topic,
+same slug, same date. Then steps 7 and 8 exactly as for a new post (`check`,
+build, `review` with a **new** subagent, the fix loop). Then:
+
+```bash
+npm run autoblog:claude -- handoff
+BR=$(node -p 'require("./.autoblog/revise.json").branch')
+git fetch -q origin "$BR" && git checkout -q -B "$BR" "origin/$BR"   # the inbox stays in the working tree
+git add data/blog-claude-inbox
+git commit -qm "autoblog: revise $BR for held findings"
+git push origin "$BR"                           # finalize rebuilds the post and updates the same PR
+npm run autoblog:claude -- revise --resolve     # replies to and resolves the Codex threads, records the revision
+git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
+```
+
+`revise --list` skips a PR a human paused (`autoblog-hold`) or approved
+(`autoblog-human-approved`), and one already revised twice: those need a
+human, so name them in your report. A revision whose review still fails is
+handed off anyway, like a new post.
+
+Then today's post:
+
+```bash
+git checkout -q -f --detach origin/main
+git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → report and stop
 ```
 
 ## 1. Read the brief
@@ -248,7 +294,9 @@ Retry a network failure up to 4 times (2s, 4s, 8s, 16s).
 
 End with a short summary: title, slug, category, the GSC query it targets (if
 any), review verdict and score, fix rounds used, branch pushed, and anything
-degraded (stale brief, no autocomplete, build blocked by a host). Stop there.
+degraded (stale brief, no autocomplete, build blocked by a host). Add each
+held post you revised (PR, findings fixed, review verdict) and each one
+`revise --list` skipped. Stop there.
 
 ## When something goes wrong
 
@@ -259,4 +307,5 @@ degraded (stale brief, no autocomplete, build blocked by a host). Stop there.
 | `check` keeps failing | Fix what it names. A slug clash means a new slug (or a new topic if the post exists). |
 | Build fails because of the post | Fix it. Never hand off a post you know breaks the build. |
 | Review fails 3 times | Hand off anyway. Finalize labels `autoblog-review-failed`. |
+| `revise --list` cannot reach GitHub | It prints an empty `REVISE:` line. Skip revisions, write today's post, say so in the report. |
 | Push refused twice after retries | Report the exact git error. The post is lost only if you skip this: paste `plan.json` and `body.md` into the report. |
