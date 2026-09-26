@@ -10,6 +10,7 @@ import {
   classifyPr,
   codexSeverity,
   reportFindings,
+  revisionCount,
   codexTitle,
   revisionPlan,
   withoutAutoLinks,
@@ -90,7 +91,7 @@ assert.match(
   classifyPr(pr(["autoblog-review-failed-overridden"]), [thread(1)], [codex(1, "P1")], [])?.blocked ?? "",
   /human approved/,
 );
-const marks = Array.from({ length: MAX_REVISIONS }, () => ({ body: `${REVISION_MARKER}\nrevised` }));
+const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({ body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**` }));
 held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks);
 assert.equal(held?.revisions, MAX_REVISIONS);
 assert.match(held?.blocked ?? "", /needs a human/, "capped after MAX_REVISIONS");
@@ -180,7 +181,12 @@ const failedReport = {
     result: {
       pass: false,
       overallScore: 6.4,
-      scores: { contentQuality: 5.5, seoMetadata: 7, brandVoiceFit: 6.5, humanVoice: 4 },
+      scores: [
+        { dimension: "contentQuality", score: 5.5, reasoning: "thin" },
+        { dimension: "seoMetadata", score: 7, reasoning: "ok" },
+        { dimension: "brandVoiceFit", score: 6.5, reasoning: "ok" },
+        { dimension: "humanVoice", score: 4, reasoning: "advisory" },
+      ],
       thresholdReasoning: "contentQuality under the floor",
       issues: [
         { severity: "minor", message: "nit" },
@@ -202,6 +208,11 @@ rf = reportFindings(
   ["session review failed"],
 );
 assert.deepEqual(rf.map((f) => f.kind), ["gate"], "a score-only failure still yields a finding");
+assert.match(
+  reportFindings({ claudeReview: { result: { pass: false, scores: { contentQuality: 5 }, issues: [] } } }, ["session review failed"])[0].text,
+  /contentQuality 5/,
+  "a keyed scores object is read too",
+);
 assert.deepEqual(reportFindings(failedReport, ["dead link"]).map((f) => f.kind), ["link"], "dead link reason: links only");
 assert.deepEqual(reportFindings(failedReport, ["Codex P1"]), [], "a Codex-only hold adds nothing from the report");
 assert.deepEqual(
@@ -209,5 +220,18 @@ assert.deepEqual(
   ["review"],
   "a passing review adds no gate finding",
 );
+
+// ── revisionCount ───────────────────────────────────────────────────────────
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2 did not land.**` },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
+    { body: "unrelated" },
+  ]),
+  1,
+  "a timeout note, the landed revision and a retry are one revision",
+);
+assert.equal(revisionCount([{ body: `${REVISION_MARKER} revision 1 of 2` }, { body: `${REVISION_MARKER} revision 2 of 2` }]), 2);
 
 console.log("✔ revise helper tests passed");

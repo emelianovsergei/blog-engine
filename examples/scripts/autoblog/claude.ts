@@ -61,6 +61,7 @@ import {
   classifyPr,
   isClaudePostPr,
   reportFindings,
+  revisionCount,
   revisionPlan,
   withoutAutoLinks,
   type CcrThread,
@@ -1032,7 +1033,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
     pr = {
       number: prNumber, branch: raw.head?.ref ?? "", headSha: raw.head?.sha ?? "", title: raw.title,
       reasons: ["revision requested"],
-      revisions: comments.filter((c) => c.body.includes(REVISION_MARKER)).length, findings: [],
+      revisions: revisionCount(comments), findings: [],
     };
   }
   if (!pr) throw new Error(`#${prNumber} is not a held autoblog PR (see \`revise --list\`)`);
@@ -1151,6 +1152,12 @@ async function cmdReviseResolve(): Promise<void> {
     });
     console.log(`Finalize has not updated #${rev.pr}; threads left open. Say so in the report.`);
     process.exit(3);
+  }
+  // Idempotent: a retry after the revision was already recorded at this head does nothing.
+  const recorded = githubApi("GET", `/repos/${owner}/${name}/issues/${rev.pr}/comments?per_page=100`) as Array<{ body: string }>;
+  if (recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`))) {
+    console.log(`Revision ${rev.revision} is already recorded on #${rev.pr} at ${head.slice(0, 7)}; nothing to do.`);
+    return;
   }
   let failed = 0;
   // Blocking threads only: a P2 the session was free to leave stays open for later review.

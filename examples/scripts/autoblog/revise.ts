@@ -64,6 +64,20 @@ export interface ReviewComment {
   user: { login: string } | null;
 }
 
+/**
+ * Revisions recorded on a PR: distinct revision numbers among the marked
+ * comments, so a retried `revise --resolve` (or a timeout note followed by the
+ * landed revision) never spends the allowance twice.
+ */
+export function revisionCount(issueComments: Array<{ body: string }>): number {
+  const seen = new Set<string>();
+  for (const c of issueComments) {
+    if (!c.body.includes(REVISION_MARKER)) continue;
+    seen.add(c.body.match(/revision (\d+) of/i)?.[1] ?? c.body);
+  }
+  return seen.size;
+}
+
 export function isClaudePostPr(pr: OpenPr): boolean {
   return /^blog\/claude-/.test(pr.head.ref) && pr.labels.some((l) => l.name === "autoblog-claude-reviewed");
 }
@@ -102,7 +116,7 @@ export function classifyPr(
   if (labels.includes("autoblog-review-failed")) reasons.push("session review failed");
   if (labels.includes("autoblog-link-repair-needed")) reasons.push("dead link");
   if (reasons.length === 0) return undefined;
-  const revisions = issueComments.filter((c) => c.body.includes(REVISION_MARKER)).length;
+  const revisions = revisionCount(issueComments);
   let blocked: string | undefined;
   if (labels.includes("autoblog-hold")) blocked = "autoblog-hold (a human paused it)";
   else if (labels.includes("autoblog-human-approved") || labels.includes("autoblog-review-failed-overridden")) {
@@ -181,10 +195,16 @@ export function reportFindings(report: Record<string, unknown>, reasons: string[
         });
       }
       if (review.pass === false) {
-        const scores = review.scores && typeof review.scores === "object" ? Object.entries(review.scores as Record<string, unknown>) : [];
-        const low = scores
-          .map(([dim, v]) => [dim, typeof v === "number" ? v : Number((v as { score?: unknown })?.score)] as const)
-          .filter(([dim, v]) => dim !== "humanVoice" && Number.isFinite(v) && v < 6)
+        // ReviewResult.scores is an array of { dimension, score, reasoning }
+        // (blog-engine src/review.ts); a keyed object is accepted too.
+        const raw = review.scores;
+        const pairs: Array<[string, number]> = Array.isArray(raw)
+          ? raw.map((s) => [String((s as { dimension?: unknown })?.dimension ?? ""), Number((s as { score?: unknown })?.score)])
+          : raw && typeof raw === "object"
+            ? Object.entries(raw as Record<string, unknown>).map(([d, v]) => [d, typeof v === "number" ? v : Number((v as { score?: unknown })?.score)])
+            : [];
+        const low = pairs
+          .filter(([dim, v]) => dim && dim !== "humanVoice" && Number.isFinite(v) && v < 6)
           .map(([dim, v]) => `${dim} ${v}`);
         const overall = typeof review.overallScore === "number" ? review.overallScore : undefined;
         const parts = [
