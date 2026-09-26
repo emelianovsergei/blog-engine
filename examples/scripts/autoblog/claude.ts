@@ -970,16 +970,26 @@ function githubApi(method: string, apiPath: string, body?: unknown): unknown {
   return out.trim() ? JSON.parse(out) : {};
 }
 
+/** Every page of a list endpoint: a long-lived PR can carry more than 100 comments. */
+function githubList<T>(apiPath: string): T[] {
+  const all: T[] = [];
+  for (let page = 1; ; page++) {
+    const batch = githubApi("GET", `${apiPath}${apiPath.includes("?") ? "&" : "?"}per_page=100&page=${page}`) as T[];
+    all.push(...batch);
+    if (batch.length < 100) return all;
+  }
+}
+
 function heldPrs(): HeldPr[] {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
-  const open = githubApi("GET", `${repo}/pulls?state=open&per_page=100`) as OpenPr[];
+  const open = githubList<OpenPr>(`${repo}/pulls?state=open`);
   const held: HeldPr[] = [];
   for (const pr of open) {
     if (!isClaudePostPr(pr)) continue;
     const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
-    const reviewComments = githubApi("GET", `${repo}/pulls/${pr.number}/comments?per_page=100`) as ReviewComment[];
-    const issueComments = githubApi("GET", `${repo}/issues/${pr.number}/comments?per_page=100`) as Array<{ body: string }>;
+    const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
+    const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
     const entry = classifyPr(pr, threads, reviewComments, issueComments);
     if (entry) held.push(entry);
   }
@@ -1029,7 +1039,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
     if (raw.state !== "open" || !/^blog\/claude-/.test(raw.head?.ref ?? "")) {
       throw new Error(`#${prNumber} is not an open blog/claude-* PR`);
     }
-    const comments = githubApi("GET", `/repos/${owner}/${name}/issues/${prNumber}/comments?per_page=100`) as Array<{ body: string }>;
+    const comments = githubList<{ body: string }>(`/repos/${owner}/${name}/issues/${prNumber}/comments`);
     pr = {
       number: prNumber, branch: raw.head?.ref ?? "", headSha: raw.head?.sha ?? "", title: raw.title,
       reasons: ["revision requested"],
@@ -1163,7 +1173,7 @@ async function cmdReviseResolve(): Promise<void> {
   // Idempotent: a retry after the revision was already recorded at this head
   // only finishes the blocking threads that are still open (a transient API
   // failure the first time); it never replies twice or records it twice.
-  const recorded = githubApi("GET", `/repos/${owner}/${name}/issues/${rev.pr}/comments?per_page=100`) as Array<{ body: string }>;
+  const recorded = githubList<{ body: string }>(`/repos/${owner}/${name}/issues/${rev.pr}/comments`);
   const already = recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
   const threads = githubApi("GET", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/review_threads`) as CcrThread[];
   const open = (id: number) => !threads.some((t) => t.resolved && t.comment_ids.includes(id));

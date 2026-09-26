@@ -495,9 +495,14 @@ jobs:
           # is touched: a re-run after any later failure then recognizes its
           # own target by this status, and the review that the PR
           # create/reopen triggers can already see it.
+          # handoff= and source= are what re-runs and `revise --resolve` match
+          # on; GitHub rejects a description over 140 characters (a collision
+          # run key repeated in a revise branch name gets close).
+          DESC="Finalized from Claude handoff (handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"
+          [ "${#DESC}" -le 140 ] || DESC="(handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"
           GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
             -f state=success -f context=autoblog/finalized \
-            -f description="Finalized from Claude handoff (${RUN_KEY} handoff=${HANDOFF_SHA:0:12} source=${SOURCE})" >/dev/null
+            -f description="$DESC" >/dev/null
 
           # Checked before any branch or label changes: without the PAT the PR
           # would get no CI or review, and nothing has been replaced yet, so a
