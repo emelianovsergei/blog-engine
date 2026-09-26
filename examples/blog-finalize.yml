@@ -128,7 +128,7 @@ jobs:
           # A revision of an open post (`autoblog:claude revise`) names the
           # branch it replaces in meta.json, and updates that PR in place from
           # whichever branch carried it. The session pushes it to
-          # autoblog-revise/<key>, not the PR branch, so the PR head only ever
+          # autoblog-revise/<key>-<sha8>, not the PR branch, so the PR head only ever
           # moves to a finalized commit: on 2026-09-26 a handoff pushed onto the
           # PR branch was reviewed by Codex half-finalized (old post, new inbox).
           REVISION_OF=$(jq -r '.revisionOf // empty' "$INBOX/meta.json")
@@ -157,6 +157,18 @@ jobs:
               # run) is not in it, so the PR must still be on that head; a
               # lease on whatever is current would silently discard it.
               REVISION_BASE=$(jq -r '.revisionBase // empty' "$INBOX/meta.json")
+              # A re-run after this same handoff already reached the PR (a
+              # later step failed: PR edit, reopen, comment) finds the PR on
+              # the commit it finalized, not on revisionBase. That head is
+              # this handoff's own output, so resume from it.
+              if [ -n "$REVISION_BASE" ] && [ "$TIP" != "$REVISION_BASE" ]; then
+                DONE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                  --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' || true)
+                if [[ "$DONE" == *"handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"* ]]; then
+                  echo "::notice::$REVISION_OF is already on this handoff's finalized commit (${TIP:0:10}); resuming."
+                  REVISION_BASE="$TIP"
+                fi
+              fi
               if [ -z "$REVISION_BASE" ] || [ "$TIP" != "$REVISION_BASE" ]; then
                 echo "::error::$REVISION_OF is at ${TIP:0:10}, not the head this revision was built from (${REVISION_BASE:-none}); the handoff is left on $SOURCE."
                 exit 1

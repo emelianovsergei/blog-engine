@@ -1095,7 +1095,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
   ].join("\n");
   fs.writeFileSync(work("findings.md"), md);
   console.log(md);
-  console.log(`\nWorkspace rebuilt from ${pr.branch}. Edit, then \`check\`, \`review --round 1\` (a new subagent), \`handoff\`, push to autoblog-revise/${runKey}, then \`revise --resolve\`.`);
+  console.log(`\nWorkspace rebuilt from ${pr.branch}. Edit, then \`check\`, \`review --round 1\` (a new subagent), \`handoff\`, push to autoblog-revise/${runKey}-<first 8 of the handoff sha>, then \`revise --resolve\`.`);
 }
 
 /**
@@ -1145,9 +1145,10 @@ async function cmdReviseResolve(): Promise<void> {
   const minutes = Number(flag("wait-minutes") ?? "20");
   // The branch the handoff was pushed to (runbook step 0b): autoblog-revise/<key>,
   // or the session's own claude/* branch when that is all it may push.
-  const source = flag("source") ?? `autoblog-revise/${rev.branch.replace(/^blog\//, "")}`;
   // The handoff commit this session just pushed (HEAD after the runbook's commit + push).
   const handoff = flag("handoff") ?? gitHead();
+  // One transport branch per handoff: a branch a failed attempt left behind never blocks the push.
+  const source = flag("source") ?? `autoblog-revise/${rev.branch.replace(/^blog\//, "")}-${handoff.slice(0, 8)}`;
   console.log(`Waiting up to ${minutes} min for finalize (source ${source} at ${handoff.slice(0, 12)}) to replace the head of #${rev.pr}…`);
   const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, source, handoff, minutes) : undefined;
   if (!head) {
@@ -1159,30 +1160,39 @@ async function cmdReviseResolve(): Promise<void> {
     console.log(`Finalize has not updated #${rev.pr}; threads left open. Say so in the report.`);
     process.exit(3);
   }
-  // Idempotent: a retry after the revision was already recorded at this head does nothing.
+  // Idempotent: a retry after the revision was already recorded at this head
+  // only finishes the blocking threads that are still open (a transient API
+  // failure the first time); it never replies twice or records it twice.
   const recorded = githubApi("GET", `/repos/${owner}/${name}/issues/${rev.pr}/comments?per_page=100`) as Array<{ body: string }>;
-  if (recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`))) {
-    console.log(`Revision ${rev.revision} is already recorded on #${rev.pr} at ${head.slice(0, 7)}; nothing to do.`);
-    return;
-  }
+  const already = recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
+  const threads = githubApi("GET", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/review_threads`) as CcrThread[];
+  const open = (id: number) => !threads.some((t) => t.resolved && t.comment_ids.includes(id));
   let failed = 0;
   // Blocking threads only: a P2 the session was free to leave stays open for later review.
-  for (const f of rev.findings.filter((x) => x.kind === "codex" && x.commentId && x.blocking)) {
+  for (const f of rev.findings.filter((x) => x.kind === "codex" && x.commentId && x.blocking && open(x.commentId))) {
     try {
-      githubApi("POST", `/repos/${owner}/${name}/pulls/${rev.pr}/comments/${f.commentId}/replies`, {
-        body: `Addressed in revision ${rev.revision} (${head.slice(0, 7)}): the scheduled session revised the post, a separate reviewer re-graded it, and finalize rebuilt this PR from the new handoff.${footer}`,
-      });
+      if (!already) {
+        githubApi("POST", `/repos/${owner}/${name}/pulls/${rev.pr}/comments/${f.commentId}/replies`, {
+          body: `Addressed in revision ${rev.revision} (${head.slice(0, 7)}): the scheduled session revised the post, a separate reviewer re-graded it, and finalize rebuilt this PR from the new handoff.${footer}`,
+        });
+      }
       githubApi("POST", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/comments/${f.commentId}/resolve`);
     } catch (error) {
       failed++;
       console.warn(`⚠️ Could not reply to or resolve comment ${f.commentId}: ${String(error).split("\n")[0]}`);
     }
   }
-  const list = rev.findings.map((f) => `- ${f.kind} ${f.severity}: ${f.text.split("\n")[0].slice(0, 160)}`).join("\n");
-  githubApi("POST", `/repos/${owner}/${name}/issues/${rev.pr}/comments`, {
-    body: `${REVISION_MARKER}\n**Autoblog revision ${rev.revision} of ${MAX_REVISIONS}** (${head.slice(0, 7)}). The scheduled Claude session revised this post for:\n${list}\n\nFinalize rebuilt the PR from the new handoff; the Claude review gate applies to the new head as usual.${footer}`,
-  });
-  console.log(`Revision ${rev.revision} recorded on #${rev.pr} at ${head.slice(0, 7)}${failed ? ` (${failed} thread(s) could not be resolved)` : ""}.`);
+  if (!already) {
+    const list = rev.findings.map((f) => `- ${f.kind} ${f.severity}: ${f.text.split("\n")[0].slice(0, 160)}`).join("\n");
+    githubApi("POST", `/repos/${owner}/${name}/issues/${rev.pr}/comments`, {
+      body: `${REVISION_MARKER}\n**Autoblog revision ${rev.revision} of ${MAX_REVISIONS}** (${head.slice(0, 7)}). The scheduled Claude session revised this post for:\n${list}\n\nFinalize rebuilt the PR from the new handoff; the Claude review gate applies to the new head as usual.${footer}`,
+    });
+  }
+  if (failed) {
+    console.log(`Revision ${rev.revision} recorded on #${rev.pr} at ${head.slice(0, 7)}, but ${failed} blocking thread(s) are still open; run \`revise --resolve\` again.`);
+    process.exit(4);
+  }
+  console.log(`Revision ${rev.revision} recorded on #${rev.pr} at ${head.slice(0, 7)}${already ? " (already recorded; open threads finished)" : ""}.`);
 }
 
 async function cmdRevise(): Promise<void> {

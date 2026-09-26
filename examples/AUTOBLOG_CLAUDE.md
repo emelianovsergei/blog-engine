@@ -85,7 +85,7 @@ npm run autoblog:claude -- handoff               # meta.json names the PR branch
 BR=$(node -p 'require("./.autoblog/revise.json").branch')
 git add data/blog-claude-inbox
 git commit -qm "autoblog: revise $BR for held findings"
-git push origin "HEAD:refs/heads/autoblog-revise/${BR#blog/}"   # finalize rebuilds the post and updates the same PR
+git push origin "HEAD:refs/heads/autoblog-revise/${BR#blog/}-$(git rev-parse HEAD | cut -c1-8)"   # finalize rebuilds the post and updates the same PR
 npm run autoblog:claude -- revise --resolve     # waits for finalize to replace the PR head, then resolves the Codex threads
 git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
 ```
@@ -95,6 +95,10 @@ commit on the PR, and only then replies to and resolves the Codex threads:
 until then the old head is still approved, and a resolved thread would let
 merge-pending publish the unfixed post. Exit 3 means finalize did not land in
 time: the threads stay open (the post stays held); name it in the report.
+Exit 4 means the revision landed but a blocking thread could not be resolved:
+run `revise --resolve` once more (it only retries the threads still open).
+The transport branch is named after the handoff commit, so a branch a failed
+attempt left behind never blocks the push.
 
 Never push a revision onto the PR's own branch: the PR head must only move to
 a finalized commit (Codex reviews whatever the head is). If the push is refused
