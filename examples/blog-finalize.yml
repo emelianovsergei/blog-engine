@@ -23,6 +23,7 @@ on:
     branches:
       - "blog/claude-*"
       - "claude/**"
+      - "autoblog-revise/**"
     paths:
       - "data/blog-claude-inbox/**"
   workflow_dispatch:
@@ -124,6 +125,46 @@ jobs:
           if [ -z "$RUN_AT" ]; then
             RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
           fi
+          # A revision of an open post (`autoblog:claude revise`) names the
+          # branch it replaces in meta.json, and updates that PR in place from
+          # whichever branch carried it. The session pushes it to
+          # autoblog-revise/<key>, not the PR branch, so the PR head only ever
+          # moves to a finalized commit: on 2026-09-26 a handoff pushed onto the
+          # PR branch was reviewed by Codex half-finalized (old post, new inbox).
+          REVISION_OF=$(jq -r '.revisionOf // empty' "$INBOX/meta.json")
+          if [ -n "$REVISION_OF" ]; then
+            if [[ ! "$REVISION_OF" =~ ^blog/claude-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?$ ]]; then
+              echo "::error::revisionOf '$REVISION_OF' is not a blog/claude-<date> branch."
+              exit 1
+            fi
+            if ! OPEN_CLAUDE=$(gh pr list --head "$REVISION_OF" --state open --json labels \
+                --jq '[.[] | select([.labels[].name] | index("autoblog-claude-reviewed"))] | length'); then
+              echo "::error::Could not list PRs for $REVISION_OF — refusing to guess whether it is open."
+              exit 1
+            fi
+            TIP=$(git ls-remote origin "refs/heads/$REVISION_OF" | cut -f1)
+            if [ "${OPEN_CLAUDE:-0}" -eq 0 ] || [ -z "$TIP" ]; then
+              # The handoff stays on $SOURCE: nothing is deleted on this path.
+              echo "::error::$REVISION_OF has no open Claude PR to revise; the handoff is left on $SOURCE."
+              exit 1
+            fi
+            TARGET="$REVISION_OF"
+            if [ "$SOURCE" = "$TARGET" ]; then
+              LEASE="$SOURCE_SHA"
+            else
+              # The revision was built from the PR head recorded in the
+              # handoff. Anything pushed to the PR since (a human fix, another
+              # run) is not in it, so the PR must still be on that head; a
+              # lease on whatever is current would silently discard it.
+              REVISION_BASE=$(jq -r '.revisionBase // empty' "$INBOX/meta.json")
+              if [ -z "$REVISION_BASE" ] || [ "$TIP" != "$REVISION_BASE" ]; then
+                echo "::error::$REVISION_OF is at ${TIP:0:10}, not the head this revision was built from (${REVISION_BASE:-none}); the handoff is left on $SOURCE."
+                exit 1
+              fi
+              LEASE="$TIP"
+            fi
+            echo "Revising $TARGET (its open Claude PR) from $SOURCE."
+          else
           case "$SOURCE" in
             blog/claude-*) TARGET="$SOURCE"; LEASE="$SOURCE_SHA" ;;
             *)
@@ -206,10 +247,12 @@ jobs:
               fi
               ;;
           esac
+          fi
           RUN_KEY="${TARGET#blog/}"
           {
             echo "skip=false"
             echo "source=$SOURCE"
+            echo "revision_of=$REVISION_OF"
             echo "target=$TARGET"
             echo "lease=$LEASE"
             echo "run_key=$RUN_KEY"
@@ -326,6 +369,7 @@ jobs:
           HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
           LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE: ${{ steps.run.outputs.source }}
+          REVISION_OF: ${{ steps.run.outputs.revision_of }}
           TARGET: ${{ steps.run.outputs.target }}
           LEASE: ${{ steps.run.outputs.lease }}
           RUN_KEY: ${{ steps.run.outputs.run_key }}
@@ -524,6 +568,12 @@ jobs:
             # so CI and review see the new head (generate-blog-post.yml).
             gh pr close "$PR_NUM" || { echo "::error::Could not close #$PR_NUM to re-raise its events."; exit 1; }
             gh pr reopen "$PR_NUM" || { echo "::error::Closed #$PR_NUM but could not reopen it — reopen it by hand."; exit 1; }
+            # A revision replaced the post Codex reviewed. Ask it to review the
+            # finalized head: it answers a user's comment (the PAT), not a bot's.
+            if [ -n "$REVISION_OF" ] && [ "$HAS_PAT" = "true" ]; then
+              gh pr comment "$PR_NUM" --body "@codex review" \
+                || echo "::warning::Could not ask Codex to review the revision of #$PR_NUM."
+            fi
           else
             CREATE_LABELS=(--label autoblog --label autoblog-claude-reviewed)
             if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then

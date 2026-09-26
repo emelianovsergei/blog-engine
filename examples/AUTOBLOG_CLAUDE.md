@@ -54,12 +54,91 @@ command -v convert >/dev/null || { apt-get update -qq && apt-get install -y -qq 
   || { sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick; } || true
 TODAY=$(TZ=America/Los_Angeles date +%F)
 git fetch origin main autoblog-brief
-git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → stop
+```
+
+## 0b. Fix posts held on their PRs (before today's post)
+
+A finished post can sit on its PR and never merge: a Codex P0/P1 comment, a
+failed session review (`autoblog-review-failed`), or a dead link finalize
+could not unlink (`autoblog-link-repair-needed`). Nothing else fixes those,
+so do it first.
+
+```bash
+npm run -s autoblog:claude -- revise --list     # last line: REVISE: <PR numbers>
+```
+
+For each number on the `REVISE:` line (at most two per run):
+
+```bash
+git checkout -q -f --detach origin/main        # check/handoff pin the generator to HEAD
+npm run autoblog:claude -- revise --pr <N>     # rebuilds .autoblog/ from the PR; prints .autoblog/findings.md
+```
+
+Fix every P0/P1, blocker and major finding in `.autoblog/plan.json` (the
+frontmatter: FAQs, HowTo steps, summary, citations) and/or `.autoblog/body.md`;
+fix a P2 when it is cheap and plainly right. Change nothing else: same topic,
+same slug, same date. Then steps 7 and 8 exactly as for a new post (`check`,
+build, `review` with a **new** subagent, the fix loop). Then:
+
+```bash
+npm run autoblog:claude -- handoff               # meta.json names the PR branch (revisionOf)
+BR=$(node -p 'require("./.autoblog/revise.json").branch')
+git add data/blog-claude-inbox
+git commit -qm "autoblog: revise $BR for held findings"
+git push origin "HEAD:refs/heads/autoblog-revise/${BR#blog/}"   # finalize rebuilds the post and updates the same PR
+npm run autoblog:claude -- revise --resolve     # waits for finalize to replace the PR head, then resolves the Codex threads
+git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
+```
+
+`revise --resolve` waits up to 20 minutes for finalize to put its finalized
+commit on the PR, and only then replies to and resolves the Codex threads:
+until then the old head is still approved, and a resolved thread would let
+merge-pending publish the unfixed post. Exit 3 means finalize did not land in
+time: the threads stay open (the post stays held); name it in the report.
+
+Never push a revision onto the PR's own branch: the PR head must only move to
+a finalized commit (Codex reviews whatever the head is). If the push is refused
+because this session may only push its own branch, push the same commit to
+that `claude/...` branch instead; `revisionOf` still points finalize at the PR.
+Then run `revise --resolve --source <that branch>`: it only accepts a head that
+finalize built from the branch you pushed. It resolves only the blocking
+(P0/P1) Codex threads; a P2 you left alone stays open.
+
+`revise --list` skips a PR a human paused (`autoblog-hold`) or approved
+(`autoblog-human-approved`), and one already revised twice: those need a
+human, so name them in your report. A revision whose review still fails is
+handed off anyway, like a new post.
+
+Then today's post:
+
+```bash
+git checkout -q -f --detach origin/main
+git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → report and stop
 ```
 
 ## 1. Read the brief
 
+GitHub starts scheduled workflows late, sometimes by hours (on 2026-09-26 the
+08:03 UTC brief ran at 12:51). If the brief on the branch is not today's, ask
+for a fresh one and wait up to 10 minutes for it. This is best-effort: if the
+request fails, carry on with the brief that is there (`init` warns).
+
 ```bash
+briefDate() { git show origin/autoblog-brief:brief.json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).runDate)}catch{}})'; }
+if [ "$(briefDate)" != "$TODAY" ]; then
+  REPO=$(git remote get-url origin | sed -E 's#(\.git)?/?$##; s#.*[/:]([^/]+/[^/]+)$#\1#')
+  TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if curl -fsS -X POST ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
+      -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+      "https://api.github.com/repos/$REPO/actions/workflows/blog-brief.yml/dispatches" -d '{"ref":"main"}'; then
+    for i in $(seq 20); do
+      sleep 30; git fetch -q origin autoblog-brief
+      [ "$(briefDate)" = "$TODAY" ] && echo "Fresh brief for $TODAY." && break
+    done
+  else
+    echo "Could not request a fresh brief; using the one on the branch."
+  fi
+fi
 git show origin/autoblog-brief:brief.json > /tmp/brief.json \
   || npm run autoblog:brief -- --out /tmp/brief.json   # degraded: no GSC, weather, sibling or autocomplete
 npm run autoblog:claude -- init --brief /tmp/brief.json
@@ -153,6 +232,13 @@ asks: markdown body only, no frontmatter, no FAQ section, the required
 heading, the CTA. Write like the company's senior tech talking to a neighbor:
 specific, local, plain.
 
+The prompt asks for a concrete, lived-in scenario. Never present an invented
+job as one the company did: no dated call, named neighborhood customer or
+meter reading told as fact ("last October we found..."), unless it comes from
+`content/our-work/`. Frame it as the pattern it is ("a typical first-cold-morning
+call: the house is a 1970s ranch, the trap is full of algae..."). Codex holds
+a post that states a made-up job as fact (P1, 2026-09-26).
+
 ## 7. Check and build
 
 ```bash
@@ -228,7 +314,9 @@ Retry a network failure up to 4 times (2s, 4s, 8s, 16s).
 
 End with a short summary: title, slug, category, the GSC query it targets (if
 any), review verdict and score, fix rounds used, branch pushed, and anything
-degraded (stale brief, no autocomplete, build blocked by a host). Stop there.
+degraded (stale brief, no autocomplete, build blocked by a host). Add each
+held post you revised (PR, findings fixed, review verdict) and each one
+`revise --list` skipped. Stop there.
 
 ## When something goes wrong
 
@@ -239,4 +327,5 @@ degraded (stale brief, no autocomplete, build blocked by a host). Stop there.
 | `check` keeps failing | Fix what it names. A slug clash means a new slug (or a new topic if the post exists). |
 | Build fails because of the post | Fix it. Never hand off a post you know breaks the build. |
 | Review fails 3 times | Hand off anyway. Finalize labels `autoblog-review-failed`. |
+| `revise --list` cannot reach GitHub | It prints an empty `REVISE:` line. Skip revisions, write today's post, say so in the report. |
 | Push refused twice after retries | Report the exact git error. The post is lost only if you skip this: paste `plan.json` and `body.md` into the report. |

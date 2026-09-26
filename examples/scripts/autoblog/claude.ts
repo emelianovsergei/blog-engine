@@ -14,6 +14,7 @@
  *   review    --round N [--answer .autoblog/review-N.answer.json]
  *   handoff
  *   clean
+ *   revise    --list | --pr <number> [--force] | --resolve   (fix a post held on its PR)
  *
  * Everything the session writes lives in .autoblog/ (git-ignored) until
  * `handoff` copies the deliverables to data/blog-claude-inbox/.
@@ -54,6 +55,21 @@ import {
   type PostPlan,
 } from "../generate-blog-post";
 import { SITE, reviewConfig, rotationBlocked } from "./site";
+import {
+  MAX_REVISIONS,
+  REVISION_MARKER,
+  classifyPr,
+  isClaudePostPr,
+  reportFindings,
+  revisionCount,
+  revisionPlan,
+  withoutAutoLinks,
+  type CcrThread,
+  type Finding,
+  type HeldPr,
+  type OpenPr,
+  type ReviewComment,
+} from "./revise";
 import {
   autocompleteFetch,
   autocompleteReachable,
@@ -163,6 +179,10 @@ interface Context {
   ownPosts: PostRow[];
   /** The sibling site's posts: brief rows plus anything the session could read itself. */
   siblingPosts: PostRow[];
+  /** Set by `revise`: the blog/claude-* branch whose open PR this handoff replaces. */
+  revisionOf?: string;
+  /** Set by `revise`: that PR's head when the workspace was built; finalize refuses any other. */
+  revisionBase?: string;
 }
 
 function pacificNow(): { runDate: string; runAt: string } {
@@ -850,6 +870,8 @@ function handoffMeta(ctx: ReturnType<typeof loadContext>) {
     topicSelection: sel.selection,
     ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
     candidates: sel.ranked,
+    // Finalize updates this PR in place instead of claiming a new branch.
+    ...(ctx.revisionOf && { revisionOf: ctx.revisionOf, revisionBase: ctx.revisionBase }),
   } satisfies ExternalMeta & Record<string, unknown>;
 }
 
@@ -905,6 +927,266 @@ function cmdHandoff(): void {
   }
 }
 
+// ─── revise (fix a held post) ───────────────────────────────────────────────
+
+/**
+ * A finished post can be held on its PR by things no workflow fixes any more:
+ * a Codex P0/P1 comment (Codex Heal needed a paid API, so it is off), a failed
+ * session review, or a dead link the generator could not unlink. `revise`
+ * finds those PRs and rebuilds this workspace from one of them (the run
+ * report's plan, topic and keyword research, the finalized body), so the
+ * session fixes it with the same check → separate-reviewer → handoff steps as
+ * a new post. The handoff goes onto the PR's own blog/claude-<date> branch;
+ * finalize rebuilds the post there and updates the same PR.
+ */
+function repoSlug(): { owner: string; name: string } {
+  const url = git(["remote", "get-url", "origin"]).trim().replace(/(\.git)?\/?$/, "");
+  const m = url.match(/[/:]([^/]+)\/([^/]+)$/);
+  if (!m) throw new Error(`cannot read owner/repo from origin ${url}`);
+  return { owner: m[1], name: m[2] };
+}
+
+function githubToken(): string | undefined {
+  return process.env.GH_TOKEN || process.env.GITHUB_TOKEN || undefined;
+}
+
+/**
+ * GitHub REST through curl, which honours the session's HTTPS proxy. The proxy
+ * adds credentials when the session has no token of its own. GraphQL is not
+ * available to Claude sessions; review threads come from the proxy's
+ * /pulls/{n}/ccr/review_threads route instead.
+ */
+function githubApi(method: string, apiPath: string, body?: unknown): unknown {
+  const token = githubToken();
+  const config = [
+    `url = "https://api.github.com${apiPath}"`,
+    `request = "${method}"`,
+    ...(token ? [`header = "Authorization: Bearer ${token}"`] : []),
+    `header = "Accept: application/vnd.github+json"`,
+    `header = "Content-Type: application/json"`,
+    ...(body === undefined ? [] : [`data = ${JSON.stringify(JSON.stringify(body))}`]),
+  ].join("\n");
+  const out = execFileSync("curl", ["-fsS", "-K", "-"], { input: config, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  return out.trim() ? JSON.parse(out) : {};
+}
+
+function heldPrs(): HeldPr[] {
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  const open = githubApi("GET", `${repo}/pulls?state=open&per_page=100`) as OpenPr[];
+  const held: HeldPr[] = [];
+  for (const pr of open) {
+    if (!isClaudePostPr(pr)) continue;
+    const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
+    const reviewComments = githubApi("GET", `${repo}/pulls/${pr.number}/comments?per_page=100`) as ReviewComment[];
+    const issueComments = githubApi("GET", `${repo}/issues/${pr.number}/comments?per_page=100`) as Array<{ body: string }>;
+    const entry = classifyPr(pr, threads, reviewComments, issueComments);
+    if (entry) held.push(entry);
+  }
+  return held;
+}
+
+/** Noon Pacific on the post's own date: its frontmatter date stays that day. */
+function pacificNoon(runDate: string): string {
+  const probe = new Date(`${runDate}T19:00:00Z`);
+  const tzName = new Intl.DateTimeFormat("en-US", { timeZone: SITE.timezone, timeZoneName: "longOffset" })
+    .formatToParts(probe)
+    .find((p) => p.type === "timeZoneName")?.value;
+  return `${runDate}T12:00:00${tzName?.replace("GMT", "") || "+00:00"}`;
+}
+
+function cmdReviseList(): void {
+  let held: HeldPr[];
+  try {
+    held = heldPrs();
+  } catch (error) {
+    console.log(`Could not list held posts (${String(error).split("\n")[0]}). Skipping revisions.`);
+    console.log("REVISE:");
+    return;
+  }
+  if (held.length === 0) {
+    console.log("No held autoblog posts.");
+    console.log("REVISE:");
+    return;
+  }
+  for (const pr of held) {
+    console.log(`#${pr.number} ${pr.branch} — ${pr.reasons.join(", ")}${pr.blocked ? ` — SKIP: ${pr.blocked}` : ""}`);
+  }
+  const todo = held.filter((pr) => !pr.blocked).map((pr) => pr.number);
+  console.log(`REVISE: ${todo.join(" ")}`);
+}
+
+function cmdRevisePrepare(prNumber: number, force: boolean): void {
+  let pr = heldPrs().find((p) => p.number === prNumber);
+  if (!pr && force) {
+    // A human asked for a revision of a post nothing holds (--force).
+    const { owner, name } = repoSlug();
+    const raw = githubApi("GET", `/repos/${owner}/${name}/pulls/${prNumber}`) as {
+      state?: string;
+      title: string;
+      head?: { ref?: string; sha?: string };
+    };
+    if (raw.state !== "open" || !/^blog\/claude-/.test(raw.head?.ref ?? "")) {
+      throw new Error(`#${prNumber} is not an open blog/claude-* PR`);
+    }
+    const comments = githubApi("GET", `/repos/${owner}/${name}/issues/${prNumber}/comments?per_page=100`) as Array<{ body: string }>;
+    pr = {
+      number: prNumber, branch: raw.head?.ref ?? "", headSha: raw.head?.sha ?? "", title: raw.title,
+      reasons: ["revision requested"],
+      revisions: revisionCount(comments), findings: [],
+    };
+  }
+  if (!pr) throw new Error(`#${prNumber} is not a held autoblog PR (see \`revise --list\`)`);
+  if (pr.blocked && !force) throw new Error(`#${prNumber}: ${pr.blocked}`);
+  git(["fetch", "--quiet", "origin", `+refs/heads/${pr.branch}:refs/remotes/origin/${pr.branch}`]);
+  const ref = `refs/remotes/origin/${pr.branch}`;
+  const show = (file: string) => git(["show", `${ref}:${file}`]);
+  try {
+    show("data/blog-claude-inbox/plan.json");
+    throw new Error(`#${prNumber} has a handoff waiting for finalize; revise it after finalize has run`);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("waiting for finalize")) throw error;
+  }
+  const runKey = pr.branch.replace(/^blog\//, "");
+  const reportFile = `data/blog-generation-runs/${runKey}.json`;
+  const report = JSON.parse(show(reportFile));
+  if (!report.plan || !report.slug || !report.runDate) throw new Error(`${reportFile} has no plan/slug/runDate`);
+  const slug: string = report.slug;
+  const published = parseDocument(show(`${SITE.contentDir}/${slug}.mdx`));
+  const plan = revisionPlan(report.plan, published.frontmatter as unknown as Record<string, unknown>);
+  const body = withoutAutoLinks(published.body, report.autoLinks);
+
+  removePreview();
+  fs.rmSync(WORK, { recursive: true, force: true });
+  fs.mkdirSync(WORK, { recursive: true });
+  writeJson(work("plan.json"), plan);
+  fs.writeFileSync(work("body.md"), body.endsWith("\n") ? body : `${body}\n`);
+  writeJson(work("selection.json"), { selection: report.topicSelection, ranked: report.candidates ?? [] });
+  if (report.keywordResearch) writeJson(work("keywords.json"), report.keywordResearch);
+  const notThis = (row: PostRow) => row.slug !== slug;
+  const ctx: Context = {
+    runDate: report.runDate,
+    runAt: pacificNoon(report.runDate),
+    briefDate: report.briefDate ?? report.runDate,
+    briefGeneratedAt: report.generatedAt ?? "",
+    autocompleteLive: false,
+    ownPosts: [
+      ...readPostRows(path.join(ROOT, SITE.contentDir), SITE.categories, "published"),
+      ...postsOnBranches(ROOT, "pending"),
+    ].filter(notThis),
+    siblingPosts: [],
+    revisionOf: pr.branch,
+    revisionBase: pr.headSha,
+  };
+  writeJson(work("context.json"), ctx);
+
+  const findings = [...pr.findings, ...reportFindings(report, pr.reasons)];
+  writeJson(work("revise.json"), {
+    pr: pr.number, branch: pr.branch, headSha: pr.headSha, slug, runKey, revision: pr.revisions + 1, findings,
+  });
+  const md = [
+    `# Revise #${pr.number}: ${pr.title}`,
+    "",
+    `Branch \`${pr.branch}\`, slug \`${slug}\`, revision ${pr.revisions + 1} of ${MAX_REVISIONS}. Held by: ${pr.reasons.join(", ")}.`,
+    "",
+    "Fix every P0/P1, blocker and major finding in .autoblog/plan.json (frontmatter: FAQs, HowTo steps, summary, citations) and/or .autoblog/body.md. Fix a P2 when it is cheap and plainly right. Change nothing else: no new topic, no new slug.",
+    "",
+    ...findings.map((f, i) => `## ${i + 1}. ${f.kind} ${f.severity}${f.path ? ` — ${f.path}${f.line ? `:${f.line}` : ""}` : ""}\n\n${f.text}\n`),
+  ].join("\n");
+  fs.writeFileSync(work("findings.md"), md);
+  console.log(md);
+  console.log(`\nWorkspace rebuilt from ${pr.branch}. Edit, then \`check\`, \`review --round 1\` (a new subagent), \`handoff\`, push to autoblog-revise/${runKey}, then \`revise --resolve\`.`);
+}
+
+/**
+ * Waits until finalize has replaced the PR head the revision started from with
+ * a commit it finalized (an `autoblog/finalized` status from github-actions).
+ * Until then the old head still carries its approval: resolving the Codex
+ * threads early would clear the only thing holding it, and merge-pending could
+ * publish the unfixed post if finalize is slow or fails.
+ */
+async function finalizedHead(pr: number, before: string, source: string, minutes: number): Promise<string | undefined> {
+  const { owner, name } = repoSlug();
+  const deadline = Date.now() + minutes * 60_000;
+  for (;;) {
+    try {
+      const head = (githubApi("GET", `/repos/${owner}/${name}/pulls/${pr}`) as { head: { sha: string } }).head.sha;
+      if (head !== before) {
+        const statuses = githubApi("GET", `/repos/${owner}/${name}/commits/${head}/statuses?per_page=100`) as Array<{
+          context: string;
+          state: string;
+          description?: string | null;
+          creator?: { login?: string } | null;
+        }>;
+        // Finalized from THIS handoff: blog-finalize.yml writes source=<branch> into the status.
+        if (statuses.some((s) =>
+          s.context === "autoblog/finalized" && s.state === "success" &&
+          s.creator?.login === "github-actions[bot]" && (s.description ?? "").includes(`source=${source})`))) {
+          return head;
+        }
+      }
+    } catch (error) {
+      console.warn(`⚠️ Could not read #${pr}: ${String(error).split("\n")[0]}`);
+    }
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
+  }
+}
+
+async function cmdReviseResolve(): Promise<void> {
+  need(work("revise.json"), "run `revise --pr N` first");
+  const rev = readJson<{ pr: number; branch: string; headSha?: string; revision: number; findings: Finding[] }>(work("revise.json"));
+  const { owner, name } = repoSlug();
+  const footer = "\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_";
+  const minutes = Number(flag("wait-minutes") ?? "20");
+  // The branch the handoff was pushed to (runbook step 0b): autoblog-revise/<key>,
+  // or the session's own claude/* branch when that is all it may push.
+  const source = flag("source") ?? `autoblog-revise/${rev.branch.replace(/^blog\//, "")}`;
+  console.log(`Waiting up to ${minutes} min for finalize (source ${source}) to replace the head of #${rev.pr}…`);
+  const head = rev.headSha ? await finalizedHead(rev.pr, rev.headSha, source, minutes) : undefined;
+  if (!head) {
+    // The attempt still counts toward the cap, so a post finalize keeps
+    // failing on is not revised forever; its threads stay open and hold it.
+    githubApi("POST", `/repos/${owner}/${name}/issues/${rev.pr}/comments`, {
+      body: `${REVISION_MARKER}\n**Autoblog revision ${rev.revision} of ${MAX_REVISIONS} did not land.** The handoff was pushed, but finalize had not replaced the PR head within ${minutes} minutes, so the findings stay open and keep this post held. Check the Blog Finalize run.${footer}`,
+    });
+    console.log(`Finalize has not updated #${rev.pr}; threads left open. Say so in the report.`);
+    process.exit(3);
+  }
+  // Idempotent: a retry after the revision was already recorded at this head does nothing.
+  const recorded = githubApi("GET", `/repos/${owner}/${name}/issues/${rev.pr}/comments?per_page=100`) as Array<{ body: string }>;
+  if (recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`))) {
+    console.log(`Revision ${rev.revision} is already recorded on #${rev.pr} at ${head.slice(0, 7)}; nothing to do.`);
+    return;
+  }
+  let failed = 0;
+  // Blocking threads only: a P2 the session was free to leave stays open for later review.
+  for (const f of rev.findings.filter((x) => x.kind === "codex" && x.commentId && x.blocking)) {
+    try {
+      githubApi("POST", `/repos/${owner}/${name}/pulls/${rev.pr}/comments/${f.commentId}/replies`, {
+        body: `Addressed in revision ${rev.revision} (${head.slice(0, 7)}): the scheduled session revised the post, a separate reviewer re-graded it, and finalize rebuilt this PR from the new handoff.${footer}`,
+      });
+      githubApi("POST", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/comments/${f.commentId}/resolve`);
+    } catch (error) {
+      failed++;
+      console.warn(`⚠️ Could not reply to or resolve comment ${f.commentId}: ${String(error).split("\n")[0]}`);
+    }
+  }
+  const list = rev.findings.map((f) => `- ${f.kind} ${f.severity}: ${f.text.split("\n")[0].slice(0, 160)}`).join("\n");
+  githubApi("POST", `/repos/${owner}/${name}/issues/${rev.pr}/comments`, {
+    body: `${REVISION_MARKER}\n**Autoblog revision ${rev.revision} of ${MAX_REVISIONS}** (${head.slice(0, 7)}). The scheduled Claude session revised this post for:\n${list}\n\nFinalize rebuilt the PR from the new handoff; the Claude review gate applies to the new head as usual.${footer}`,
+  });
+  console.log(`Revision ${rev.revision} recorded on #${rev.pr} at ${head.slice(0, 7)}${failed ? ` (${failed} thread(s) could not be resolved)` : ""}.`);
+}
+
+async function cmdRevise(): Promise<void> {
+  if (process.argv.includes("--list")) return cmdReviseList();
+  if (process.argv.includes("--resolve")) return cmdReviseResolve();
+  const pr = Number(flag("pr"));
+  if (!Number.isInteger(pr) || pr <= 0) throw new Error("revise needs --list, --pr <number> [--force] or --resolve");
+  cmdRevisePrepare(pr, process.argv.includes("--force"));
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 
 const commands: Record<string, () => void | Promise<void>> = {
@@ -916,6 +1198,7 @@ const commands: Record<string, () => void | Promise<void>> = {
   review: cmdReview,
   handoff: cmdHandoff,
   clean: removePreview,
+  revise: cmdRevise,
 };
 
 const command = process.argv[2];
