@@ -100,6 +100,9 @@ Never push a revision onto the PR's own branch: the PR head must only move to
 a finalized commit (Codex reviews whatever the head is). If the push is refused
 because this session may only push its own branch, push the same commit to
 that `claude/...` branch instead; `revisionOf` still points finalize at the PR.
+Then run `revise --resolve --source <that branch>`: it only accepts a head that
+finalize built from the branch you pushed. It resolves only the blocking
+(P0/P1) Codex threads; a P2 you left alone stays open.
 
 `revise --list` skips a PR a human paused (`autoblog-hold`) or approved
 (`autoblog-human-approved`), and one already revised twice: those need a

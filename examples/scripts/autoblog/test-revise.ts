@@ -9,6 +9,7 @@ import {
   REVISION_MARKER,
   classifyPr,
   codexSeverity,
+  reportFindings,
   codexTitle,
   revisionPlan,
   withoutAutoLinks,
@@ -164,6 +165,49 @@ assert.equal(
   withoutAutoLinks("A [x](/a(b)) link.\n", { service: { href: "/a(b)", anchor: "x", strategy: "fallback" } }),
   "A [x](/a(b)) link.\n",
   "regex characters in an href are escaped; an inline link is not a fallback entry",
+);
+
+// ── blocking flag on Codex findings ─────────────────────────────────────────
+held = classifyPr(pr([]), [thread(1), thread(2)], [codex(1, "P1"), codex(2, "P2")], []);
+assert.deepEqual(held?.findings.map((f) => [f.severity, f.blocking]), [["P1", true], ["P2", false]], "only P0/P1 are blocking; resolve leaves P2 open");
+
+// ── reportFindings ──────────────────────────────────────────────────────────
+const failedReport = {
+  planViolations: ["metaDescription is 170 characters"],
+  bodyViolations: [],
+  structuralViolations: [{ rule: "cta-heading", message: "missing" }],
+  claudeReview: {
+    result: {
+      pass: false,
+      overallScore: 6.4,
+      scores: { contentQuality: 5.5, seoMetadata: 7, brandVoiceFit: 6.5, humanVoice: 4 },
+      thresholdReasoning: "contentQuality under the floor",
+      issues: [
+        { severity: "minor", message: "nit" },
+        { severity: "major", message: "thin section", suggestion: "expand", location: "## Why" },
+      ],
+    },
+  },
+  linkAudit: { unresolved: ["https://dead.example/x"] },
+};
+let rf = reportFindings(failedReport, ["session review failed"]);
+assert.deepEqual(rf.map((f) => f.kind), ["rule", "rule", "review", "gate"], "rule violations, non-minor issues and the gate");
+assert.ok(rf.every((f) => f.blocking));
+assert.match(rf[1].text, /structuralViolations: .*cta-heading/, "object violations are stringified");
+assert.match(rf[3].text, /contentQuality 5\.5/, "score below the floor is named");
+assert.ok(!rf[3].text.includes("humanVoice"), "humanVoice is advisory");
+assert.match(rf[3].text, /overall 6\.4 is below 7\.0/);
+rf = reportFindings(
+  { claudeReview: { result: { pass: false, overallScore: 6.8, scores: { contentQuality: 7 }, issues: [] } } },
+  ["session review failed"],
+);
+assert.deepEqual(rf.map((f) => f.kind), ["gate"], "a score-only failure still yields a finding");
+assert.deepEqual(reportFindings(failedReport, ["dead link"]).map((f) => f.kind), ["link"], "dead link reason: links only");
+assert.deepEqual(reportFindings(failedReport, ["Codex P1"]), [], "a Codex-only hold adds nothing from the report");
+assert.deepEqual(
+  reportFindings({ claudeReview: { result: { pass: true, issues: [{ severity: "major", message: "x" }] } } }, ["session review failed"]).map((f) => f.kind),
+  ["review"],
+  "a passing review adds no gate finding",
 );
 
 console.log("✔ revise helper tests passed");

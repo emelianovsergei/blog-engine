@@ -9,9 +9,11 @@ export const MAX_REVISIONS = 2;
 export const CODEX = "chatgpt-codex-connector";
 
 export interface Finding {
-  kind: "codex" | "review" | "link";
+  kind: "codex" | "review" | "rule" | "gate" | "link";
   severity: string;
   text: string;
+  /** What holds the PR. `revise --resolve` closes only these Codex threads; an optional P2 stays open. */
+  blocking?: boolean;
   commentId?: number;
   path?: string;
   line?: number;
@@ -92,7 +94,7 @@ export function classifyPr(
     if (blocking) reasons.push(`Codex ${severity}`);
     if (blocking || (!t.outdated && severity === "P2")) {
       findings.push({
-        kind: "codex", severity, text: codexTitle(first.body),
+        kind: "codex", severity, text: codexTitle(first.body), blocking,
         commentId: t.comment_ids[0], path: t.path, line: t.line ?? undefined,
       });
     }
@@ -151,3 +153,60 @@ export function withoutAutoLinks(body: string, autoLinks: unknown): string {
   return out.replace(/(^|\n)## Related Resources[ \t]*\n+(?=## |\s*$)/, "$1").replace(/\n{3,}/g, "\n\n");
 }
 
+
+/**
+ * What the run report says held the post, for a PR labelled
+ * `autoblog-review-failed` or `autoblog-link-repair-needed`: the rule
+ * violations finalize found, the session review's blocker/major issues, why
+ * the review gate failed (a score floor or the overall score can fail it with
+ * no blocker at all), and the links finalize could not unlink. Without these
+ * the session could resubmit the same defect and spend a revision.
+ */
+export function reportFindings(report: Record<string, unknown>, reasons: string[]): Finding[] {
+  const findings: Finding[] = [];
+  const text = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+  if (reasons.includes("session review failed")) {
+    for (const key of ["planViolations", "bodyViolations", "structuralViolations"]) {
+      const list = report[key];
+      if (!Array.isArray(list)) continue;
+      for (const v of list) findings.push({ kind: "rule", severity: "blocker", text: `${key}: ${text(v)}`, blocking: true });
+    }
+    const review = (report.claudeReview as { result?: Record<string, unknown> } | undefined)?.result;
+    if (review) {
+      for (const issue of (review.issues as Array<Record<string, unknown>> | undefined) ?? []) {
+        if (issue.severity === "minor") continue;
+        findings.push({
+          kind: "review", severity: String(issue.severity), blocking: true,
+          text: `${text(issue.message)}${issue.suggestion ? `\nSuggestion: ${text(issue.suggestion)}` : ""}${issue.location ? `\nWhere: ${text(issue.location)}` : ""}`,
+        });
+      }
+      if (review.pass === false) {
+        const scores = review.scores && typeof review.scores === "object" ? Object.entries(review.scores as Record<string, unknown>) : [];
+        const low = scores
+          .map(([dim, v]) => [dim, typeof v === "number" ? v : Number((v as { score?: unknown })?.score)] as const)
+          .filter(([dim, v]) => dim !== "humanVoice" && Number.isFinite(v) && v < 6)
+          .map(([dim, v]) => `${dim} ${v}`);
+        const overall = typeof review.overallScore === "number" ? review.overallScore : undefined;
+        const parts = [
+          ...(low.length ? [`below the 6.0 floor: ${low.join(", ")}`] : []),
+          ...(overall !== undefined && overall < 7 ? [`overall ${overall} is below 7.0`] : []),
+          ...(review.thresholdReasoning ? [text(review.thresholdReasoning)] : []),
+        ];
+        findings.push({
+          kind: "gate", severity: "blocker", blocking: true,
+          text: `The review gate failed${parts.length ? `: ${parts.join("; ")}` : "."}`,
+        });
+      }
+    }
+  }
+  if (reasons.includes("dead link")) {
+    const audit = report.linkAudit as { unresolved?: unknown[] } | undefined;
+    for (const url of audit?.unresolved ?? []) {
+      findings.push({
+        kind: "link", severity: "blocker", blocking: true,
+        text: `Dead link finalize could not unlink: ${text(url)}. Remove it or replace it with a live page.`,
+      });
+    }
+  }
+  return findings;
+}
