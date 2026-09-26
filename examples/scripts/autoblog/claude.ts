@@ -179,6 +179,8 @@ interface Context {
   siblingPosts: PostRow[];
   /** Set by `revise`: the blog/claude-* branch whose open PR this handoff replaces. */
   revisionOf?: string;
+  /** Set by `revise`: that PR's head when the workspace was built; finalize refuses any other. */
+  revisionBase?: string;
 }
 
 function pacificNow(): { runDate: string; runAt: string } {
@@ -867,7 +869,7 @@ function handoffMeta(ctx: ReturnType<typeof loadContext>) {
     ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
     candidates: sel.ranked,
     // Finalize updates this PR in place instead of claiming a new branch.
-    ...(ctx.revisionOf && { revisionOf: ctx.revisionOf }),
+    ...(ctx.revisionOf && { revisionOf: ctx.revisionOf, revisionBase: ctx.revisionBase }),
   } satisfies ExternalMeta & Record<string, unknown>;
 }
 
@@ -1072,6 +1074,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
     ].filter(notThis),
     siblingPosts: [],
     revisionOf: pr.branch,
+    revisionBase: pr.headSha,
   };
   writeJson(work("context.json"), ctx);
 

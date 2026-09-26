@@ -149,7 +149,20 @@ jobs:
               exit 1
             fi
             TARGET="$REVISION_OF"
-            if [ "$SOURCE" = "$TARGET" ]; then LEASE="$SOURCE_SHA"; else LEASE="$TIP"; fi
+            if [ "$SOURCE" = "$TARGET" ]; then
+              LEASE="$SOURCE_SHA"
+            else
+              # The revision was built from the PR head recorded in the
+              # handoff. Anything pushed to the PR since (a human fix, another
+              # run) is not in it, so the PR must still be on that head; a
+              # lease on whatever is current would silently discard it.
+              REVISION_BASE=$(jq -r '.revisionBase // empty' "$INBOX/meta.json")
+              if [ -z "$REVISION_BASE" ] || [ "$TIP" != "$REVISION_BASE" ]; then
+                echo "::error::$REVISION_OF is at ${TIP:0:10}, not the head this revision was built from (${REVISION_BASE:-none}); the handoff is left on $SOURCE."
+                exit 1
+              fi
+              LEASE="$TIP"
+            fi
             echo "Revising $TARGET (its open Claude PR) from $SOURCE."
           else
           case "$SOURCE" in
