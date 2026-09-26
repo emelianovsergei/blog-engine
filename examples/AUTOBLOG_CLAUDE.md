@@ -81,15 +81,19 @@ same slug, same date. Then steps 7 and 8 exactly as for a new post (`check`,
 build, `review` with a **new** subagent, the fix loop). Then:
 
 ```bash
-npm run autoblog:claude -- handoff
+npm run autoblog:claude -- handoff               # meta.json names the PR branch (revisionOf)
 BR=$(node -p 'require("./.autoblog/revise.json").branch')
-git fetch -q origin "$BR" && git checkout -q -B "$BR" "origin/$BR"   # the inbox stays in the working tree
 git add data/blog-claude-inbox
 git commit -qm "autoblog: revise $BR for held findings"
-git push origin "$BR"                           # finalize rebuilds the post and updates the same PR
+git push origin "HEAD:refs/heads/autoblog-revise/${BR#blog/}"   # finalize rebuilds the post and updates the same PR
 npm run autoblog:claude -- revise --resolve     # replies to and resolves the Codex threads, records the revision
 git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
 ```
+
+Never push a revision onto the PR's own branch: the PR head must only move to
+a finalized commit (Codex reviews whatever the head is). If the push is refused
+because this session may only push its own branch, push the same commit to
+that `claude/...` branch instead; `revisionOf` still points finalize at the PR.
 
 `revise --list` skips a PR a human paused (`autoblog-hold`) or approved
 (`autoblog-human-approved`), and one already revised twice: those need a

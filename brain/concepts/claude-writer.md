@@ -37,7 +37,7 @@ A post that reaches its PR can still be held there: an unresolved Codex P0 (even
 
 - `npm run autoblog:claude -- revise --list` names the held PRs. It skips `autoblog-hold`, a human-approved head, and a PR already revised twice (those need a human).
 - `revise --pr N` rebuilds `.autoblog/` from the PR: the run report's plan, topic and keyword research, with every field the post carries taken from the finalized frontmatter, and the finalized body minus the links the generator's auto-link pass inserted. The rebuilt preview is byte-identical to the published post.
-- The session fixes the findings, runs `check` and a new reviewer subagent, and hands off onto the PR's own `blog/claude-<date>` branch. Finalize's direct path rebuilds the post there and updates the same PR, so the Claude review gate re-approves it with no human label.
+- The session fixes the findings, runs `check` and a new reviewer subagent, and hands off to `autoblog-revise/<key>` with `revisionOf` in `meta.json`. Finalize rebuilds the post onto the PR's `blog/claude-<date>` branch and updates the same PR, so the Claude review gate re-approves it with no human label, and asks Codex (`@codex review`) to review the finalized head. The handoff never lands on the PR branch itself: Codex reviews whatever the head is, and a half-finalized head drew false findings on 2026-09-26.
 - `revise --resolve` replies to and resolves the Codex threads through the session proxy's `/pulls/{n}/ccr/...` routes (GraphQL is not available to Claude sessions) and records the revision in a marked PR comment that counts toward the cap.
 - The rules live in `scripts/autoblog/revise.ts`; `scripts/autoblog/test-revise.ts` runs in CI.
 

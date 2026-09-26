@@ -177,6 +177,8 @@ interface Context {
   ownPosts: PostRow[];
   /** The sibling site's posts: brief rows plus anything the session could read itself. */
   siblingPosts: PostRow[];
+  /** Set by `revise`: the blog/claude-* branch whose open PR this handoff replaces. */
+  revisionOf?: string;
 }
 
 function pacificNow(): { runDate: string; runAt: string } {
@@ -864,6 +866,8 @@ function handoffMeta(ctx: ReturnType<typeof loadContext>) {
     topicSelection: sel.selection,
     ...(keywordsOrUndefined() && { keywordResearch: keywordsOrUndefined() }),
     candidates: sel.ranked,
+    // Finalize updates this PR in place instead of claiming a new branch.
+    ...(ctx.revisionOf && { revisionOf: ctx.revisionOf }),
   } satisfies ExternalMeta & Record<string, unknown>;
 }
 
@@ -1066,6 +1070,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
       ...postsOnBranches(ROOT, "pending"),
     ].filter(notThis),
     siblingPosts: [],
+    revisionOf: pr.branch,
   };
   writeJson(work("context.json"), ctx);
 
@@ -1096,7 +1101,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
   ].join("\n");
   fs.writeFileSync(work("findings.md"), md);
   console.log(md);
-  console.log(`\nWorkspace rebuilt from ${pr.branch}. Edit, then \`check\`, \`review --round 1\` (a new subagent), \`handoff\`, push to ${pr.branch}, then \`revise --resolve\`.`);
+  console.log(`\nWorkspace rebuilt from ${pr.branch}. Edit, then \`check\`, \`review --round 1\` (a new subagent), \`handoff\`, push to autoblog-revise/${runKey}, then \`revise --resolve\`.`);
 }
 
 function cmdReviseResolve(): void {
