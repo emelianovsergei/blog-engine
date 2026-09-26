@@ -31,7 +31,7 @@ assert.equal(codexTitle(badge("P1")), "**  Fix the thing**\n\nWhy it matters.");
 const pr = (labels: string[], ref = "blog/claude-2026-09-26"): OpenPr => ({
   number: 7,
   title: "Blog: post",
-  head: { ref },
+  head: { ref, sha: "a".repeat(40) },
   labels: ["autoblog", "autoblog-claude-reviewed", ...labels].map((name) => ({ name })),
 });
 const codex = (id: number, p: string): ReviewComment => ({ id, body: badge(p), user: { login: "chatgpt-codex-connector[bot]" } });

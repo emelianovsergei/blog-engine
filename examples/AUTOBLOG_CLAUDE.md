@@ -86,9 +86,15 @@ BR=$(node -p 'require("./.autoblog/revise.json").branch')
 git add data/blog-claude-inbox
 git commit -qm "autoblog: revise $BR for held findings"
 git push origin "HEAD:refs/heads/autoblog-revise/${BR#blog/}"   # finalize rebuilds the post and updates the same PR
-npm run autoblog:claude -- revise --resolve     # replies to and resolves the Codex threads, records the revision
+npm run autoblog:claude -- revise --resolve     # waits for finalize to replace the PR head, then resolves the Codex threads
 git checkout -q -f --detach origin/main && rm -rf .autoblog data/blog-claude-inbox
 ```
+
+`revise --resolve` waits up to 20 minutes for finalize to put its finalized
+commit on the PR, and only then replies to and resolves the Codex threads:
+until then the old head is still approved, and a resolved thread would let
+merge-pending publish the unfixed post. Exit 3 means finalize did not land in
+time: the threads stay open (the post stays held); name it in the report.
 
 Never push a revision onto the PR's own branch: the PR head must only move to
 a finalized commit (Codex reviews whatever the head is). If the push is refused

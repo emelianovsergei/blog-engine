@@ -20,6 +20,8 @@ export interface Finding {
 export interface HeldPr {
   number: number;
   branch: string;
+  /** The PR head when it was listed: `revise --resolve` waits for finalize to replace it. */
+  headSha: string;
   title: string;
   reasons: string[];
   revisions: number;
@@ -50,7 +52,7 @@ export interface CcrThread {
 export interface OpenPr {
   number: number;
   title: string;
-  head: { ref: string };
+  head: { ref: string; sha: string };
   labels: Array<{ name: string }>;
 }
 
@@ -104,7 +106,10 @@ export function classifyPr(
   else if (labels.includes("autoblog-human-approved") || labels.includes("autoblog-review-failed-overridden")) {
     blocked = "a human approved a head of it";
   } else if (revisions >= MAX_REVISIONS) blocked = `already revised ${revisions} times — needs a human`;
-  return { number: pr.number, branch: pr.head.ref, title: pr.title, reasons: [...new Set(reasons)], revisions, findings, blocked };
+  return {
+    number: pr.number, branch: pr.head.ref, headSha: pr.head.sha, title: pr.title,
+    reasons: [...new Set(reasons)], revisions, findings, blocked,
+  };
 }
 
 /**
