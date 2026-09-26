@@ -60,6 +60,12 @@ assert.equal(held?.findings[0].commentId, 1);
 assert.equal(held?.blocked, undefined);
 
 assert.equal(classifyPr(pr([]), [thread(1, { outdated: true })], [codex(1, "P1")], []), undefined, "an outdated P1 does not hold");
+assert.equal(classifyPr(pr([]), [thread(1)], [codex(1, "P1")], [], false), undefined, "a current P1 does not hold when the site lets P1s ship");
+assert.equal(
+  classifyPr(pr([]), [thread(1), thread(2)], [codex(1, "P0"), codex(2, "P1")], [], false)?.findings.find((f) => f.severity === "P1")?.blocking,
+  false,
+  "with the P1 hold off, a P1 rides along as a non-blocking finding",
+);
 assert.deepEqual(
   classifyPr(pr([]), [thread(1, { outdated: true })], [codex(1, "P0")], [])?.reasons,
   ["Codex P0"],

@@ -114,6 +114,12 @@ if you moved off it), so a late finalize of an earlier attempt never counts. It 
 human, so name them in your report. A revision whose review still fails is
 handed off anyway, like a new post.
 
+A current Codex P1 holds a post only while `AUTOBLOG_HOLD_ON_CODEX_P1` is not
+`false`, the same default as merge-pending. The session cannot read repository
+variables, so a site that sets that variable to `false` sets it in the
+routine's environment too; otherwise `revise --list` would rewrite posts that
+merge-pending is about to ship.
+
 Then today's post:
 
 ```bash

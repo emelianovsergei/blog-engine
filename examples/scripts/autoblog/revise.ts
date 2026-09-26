@@ -93,6 +93,9 @@ export function classifyPr(
   threads: CcrThread[],
   reviewComments: ReviewComment[],
   issueComments: Array<{ body: string }>,
+  // merge-pending's AUTOBLOG_HOLD_ON_CODEX_P1: when a site lets a current P1
+  // ship, reviving that post would only reset a merge-ready PR.
+  holdOnP1 = true,
 ): HeldPr | undefined {
   if (!isClaudePostPr(pr)) return undefined;
   const labels = pr.labels.map((l) => l.name);
@@ -104,9 +107,9 @@ export function classifyPr(
     if (t.resolved || !first || first.login !== CODEX) continue;
     const severity = codexSeverity(first.body);
     if (!severity) continue;
-    const blocking = severity === "P0" || (severity === "P1" && !t.outdated);
+    const blocking = severity === "P0" || (severity === "P1" && !t.outdated && holdOnP1);
     if (blocking) reasons.push(`Codex ${severity}`);
-    if (blocking || (!t.outdated && severity === "P2")) {
+    if (blocking || !t.outdated) {
       findings.push({
         kind: "codex", severity, text: codexTitle(first.body), blocking,
         commentId: t.comment_ids[0], path: t.path, line: t.line ?? undefined,

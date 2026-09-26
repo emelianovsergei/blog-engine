@@ -990,7 +990,9 @@ function heldPrs(): HeldPr[] {
     const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
     const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
     const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
-    const entry = classifyPr(pr, threads, reviewComments, issueComments);
+    // The session cannot read repository variables (the proxy refuses the
+    // Actions API), so the routine's environment carries the same setting.
+    const entry = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false");
     if (entry) held.push(entry);
   }
   return held;
