@@ -59,7 +59,27 @@ git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALR
 
 ## 1. Read the brief
 
+GitHub starts scheduled workflows late, sometimes by hours (on 2026-09-26 the
+08:03 UTC brief ran at 12:51). If the brief on the branch is not today's, ask
+for a fresh one and wait up to 10 minutes for it. This is best-effort: if the
+request fails, carry on with the brief that is there (`init` warns).
+
 ```bash
+briefDate() { git show origin/autoblog-brief:brief.json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).runDate)}catch{}})'; }
+if [ "$(briefDate)" != "$TODAY" ]; then
+  REPO=$(git remote get-url origin | sed -E 's#(\.git)?/?$##; s#.*[/:]([^/]+/[^/]+)$#\1#')
+  TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if curl -fsS -X POST ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
+      -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+      "https://api.github.com/repos/$REPO/actions/workflows/blog-brief.yml/dispatches" -d '{"ref":"main"}'; then
+    for i in $(seq 20); do
+      sleep 30; git fetch -q origin autoblog-brief
+      [ "$(briefDate)" = "$TODAY" ] && echo "Fresh brief for $TODAY." && break
+    done
+  else
+    echo "Could not request a fresh brief; using the one on the branch."
+  fi
+fi
 git show origin/autoblog-brief:brief.json > /tmp/brief.json \
   || npm run autoblog:brief -- --out /tmp/brief.json   # degraded: no GSC, weather, sibling or autocomplete
 npm run autoblog:claude -- init --brief /tmp/brief.json
