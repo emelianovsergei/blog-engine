@@ -146,12 +146,16 @@ jobs:
           the scheduled Claude autoblog session (`AUTOBLOG_CLAUDE.md`). Force-pushed;
           do not branch from it or merge it.
           EOF
+          # Vercel builds every pushed branch, and this one holds no app, so
+          # every brief showed up as a failed preview deployment. Vercel reads
+          # this file from the commit it is deploying: the brief opts out.
+          echo '{ "git": { "deploymentEnabled": false } }' > "$OUT/vercel.json"
           cd "$OUT"
           git init -q
           git checkout -q -b autoblog-brief
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add brief.json README.md
+          git add brief.json README.md vercel.json
           git commit -q -m "brief: $(jq -r .runDate brief.json) ($(jq -r .gsc.status brief.json) GSC, $(jq -r '.gsc.opportunities | length' brief.json) opportunities)"
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/autoblog-brief
           echo "Published brief for $(jq -r .runDate brief.json) to autoblog-brief."

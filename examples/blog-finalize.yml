@@ -23,6 +23,7 @@ on:
     branches:
       - "blog/claude-*"
       - "claude/**"
+      - "autoblog-revise/**"
     paths:
       - "data/blog-claude-inbox/**"
   workflow_dispatch:
@@ -36,8 +37,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Finalize runs for the same PR branch must never overlap. The workflow's
+  # concurrency group is keyed by the source branch, but a revision arrives on
+  # its own autoblog-revise/<key>-<sha8> (or claude/*) branch: two attempts
+  # for one held post would validate the same base, and the loser would edit
+  # the PR's gate labels before its leased push failed. This job names the
+  # branch the handoff will land on, and the finalize job queues on it.
+  target:
+    name: Resolve the PR branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      branch: ${{ steps.t.outputs.branch }}
+    steps:
+      - id: t
+        env:
+          SOURCE: ${{ github.event.inputs.ref || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Fail closed: keying the queue by SOURCE when the handoff names a PR
+          # branch would let two revisions of that PR run at once. Only a
+          # source with no inbox at all (404) is keyed by itself.
+          if META=$(gh api "repos/${GITHUB_REPOSITORY}/contents/data/blog-claude-inbox/meta.json?ref=${SOURCE}" --jq '.content' 2>api-err); then
+            T=$(base64 -d <<<"$META" | jq -r '.revisionOf // empty')
+          elif grep -q 'HTTP 404' api-err; then
+            T=""
+          else
+            cat api-err
+            echo "::error::Could not read the handoff metadata on $SOURCE; refusing to guess which PR branch it revises."
+            exit 1
+          fi
+          if [ -n "$T" ] && [[ ! "$T" =~ ^blog/claude-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?$ ]]; then
+            echo "::error::revisionOf '$T' is not a blog/claude-<date> branch."
+            exit 1
+          fi
+          echo "branch=${T:-$SOURCE}" >> "$GITHUB_OUTPUT"
+
   finalize:
     name: Finalize Claude post
+    needs: target
+    concurrency:
+      group: blog-finalize-target-${{ needs.target.outputs.branch }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -124,6 +168,75 @@ jobs:
           if [ -z "$RUN_AT" ]; then
             RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
           fi
+          # A revision of an open post (`autoblog:claude revise`) names the
+          # branch it replaces in meta.json, and updates that PR in place from
+          # whichever branch carried it. The session pushes it to
+          # autoblog-revise/<key>-<sha8>, not the PR branch, so the PR head only ever
+          # moves to a finalized commit: on 2026-09-26 a handoff pushed onto the
+          # PR branch was reviewed by Codex half-finalized (old post, new inbox).
+          REVISION_OF=$(jq -r '.revisionOf // empty' "$INBOX/meta.json")
+          if [ -n "$REVISION_OF" ]; then
+            if [[ ! "$REVISION_OF" =~ ^blog/claude-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?$ ]]; then
+              echo "::error::revisionOf '$REVISION_OF' is not a blog/claude-<date> branch."
+              exit 1
+            fi
+            if ! OPEN_CLAUDE=$(gh pr list --head "$REVISION_OF" --state open --json labels \
+                --jq '[.[] | select([.labels[].name] | index("autoblog-claude-reviewed"))] | length'); then
+              echo "::error::Could not list PRs for $REVISION_OF — refusing to guess whether it is open."
+              exit 1
+            fi
+            TIP=$(git ls-remote origin "refs/heads/$REVISION_OF" | cut -f1)
+            # Whether the PR head is this handoff's own finalized commit (a
+            # re-run after a later step failed). The handoff sha names one
+            # handoff; the source branch is left out of the match because a
+            # long one is dropped from the status to fit GitHub's 140 chars.
+            OURS=false
+            if [ -n "$TIP" ]; then
+              DONE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TIP}/statuses" \
+                --jq '[.[] | select(.context == "autoblog/finalized" and .state == "success" and .creator.login == "github-actions[bot]")][0].description // empty' || true)
+              [[ "$DONE" =~ handoff=${HANDOFF_SHA:0:12}[\ \)] ]] && OURS=true
+            fi
+            # That run may have closed the PR to re-raise its events and then
+            # failed to reopen it: reopen the closed, unmerged Claude PR that
+            # sits on this handoff's commit, then carry on as usual.
+            if [ "${OPEN_CLAUDE:-0}" -eq 0 ] && [ "$OURS" = true ]; then
+              CLOSED=$(gh pr list --head "$REVISION_OF" --state closed --json number,mergedAt,headRefOid,labels \
+                --jq "[.[] | select(.mergedAt == null and .headRefOid == \"$TIP\") | select([.labels[].name] | index(\"autoblog-claude-reviewed\"))][0].number // empty" || true)
+              if [ -n "$CLOSED" ] && gh pr reopen "$CLOSED"; then
+                echo "::notice::Reopened #$CLOSED, which an earlier run of this handoff closed and did not reopen."
+                OPEN_CLAUDE=1
+              fi
+            fi
+            if [ "${OPEN_CLAUDE:-0}" -eq 0 ] || [ -z "$TIP" ]; then
+              # The handoff stays on $SOURCE: nothing is deleted on this path.
+              echo "::error::$REVISION_OF has no open Claude PR to revise; the handoff is left on $SOURCE."
+              exit 1
+            fi
+            TARGET="$REVISION_OF"
+            if [ "$SOURCE" = "$TARGET" ]; then
+              LEASE="$SOURCE_SHA"
+            else
+              # The revision was built from the PR head recorded in the
+              # handoff. Anything pushed to the PR since (a human fix, another
+              # run) is not in it, so the PR must still be on that head; a
+              # lease on whatever is current would silently discard it.
+              REVISION_BASE=$(jq -r '.revisionBase // empty' "$INBOX/meta.json")
+              # A re-run after this same handoff already reached the PR (a
+              # later step failed: PR edit, reopen, comment) finds the PR on
+              # the commit it finalized, not on revisionBase. That head is
+              # this handoff's own output, so resume from it.
+              if [ -n "$REVISION_BASE" ] && [ "$TIP" != "$REVISION_BASE" ] && [ "$OURS" = true ]; then
+                echo "::notice::$REVISION_OF is already on this handoff's finalized commit (${TIP:0:10}); resuming."
+                REVISION_BASE="$TIP"
+              fi
+              if [ -z "$REVISION_BASE" ] || [ "$TIP" != "$REVISION_BASE" ]; then
+                echo "::error::$REVISION_OF is at ${TIP:0:10}, not the head this revision was built from (${REVISION_BASE:-none}); the handoff is left on $SOURCE."
+                exit 1
+              fi
+              LEASE="$TIP"
+            fi
+            echo "Revising $TARGET (its open Claude PR) from $SOURCE."
+          else
           case "$SOURCE" in
             blog/claude-*) TARGET="$SOURCE"; LEASE="$SOURCE_SHA" ;;
             *)
@@ -206,10 +319,12 @@ jobs:
               fi
               ;;
           esac
+          fi
           RUN_KEY="${TARGET#blog/}"
           {
             echo "skip=false"
             echo "source=$SOURCE"
+            echo "revision_of=$REVISION_OF"
             echo "target=$TARGET"
             echo "lease=$LEASE"
             echo "run_key=$RUN_KEY"
@@ -326,6 +441,7 @@ jobs:
           HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
           LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE: ${{ steps.run.outputs.source }}
+          REVISION_OF: ${{ steps.run.outputs.revision_of }}
           TARGET: ${{ steps.run.outputs.target }}
           LEASE: ${{ steps.run.outputs.lease }}
           RUN_KEY: ${{ steps.run.outputs.run_key }}
@@ -439,9 +555,14 @@ jobs:
           # is touched: a re-run after any later failure then recognizes its
           # own target by this status, and the review that the PR
           # create/reopen triggers can already see it.
+          # handoff= is what re-runs and `revise --resolve` match on; source=
+          # lets a re-run recognize its own claim branch. GitHub rejects a
+          # description over 140 characters, so a long source is left out.
+          DESC="Finalized from Claude handoff (handoff=${HANDOFF_SHA:0:12} source=${SOURCE})"
+          [ "${#DESC}" -le 140 ] || DESC="Finalized from Claude handoff (handoff=${HANDOFF_SHA:0:12})"
           GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
             -f state=success -f context=autoblog/finalized \
-            -f description="Finalized from the Claude session handoff (${RUN_KEY} source=${SOURCE})" >/dev/null
+            -f description="$DESC" >/dev/null
 
           # Checked before any branch or label changes: without the PAT the PR
           # would get no CI or review, and nothing has been replaced yet, so a
@@ -524,6 +645,12 @@ jobs:
             # so CI and review see the new head (generate-blog-post.yml).
             gh pr close "$PR_NUM" || { echo "::error::Could not close #$PR_NUM to re-raise its events."; exit 1; }
             gh pr reopen "$PR_NUM" || { echo "::error::Closed #$PR_NUM but could not reopen it — reopen it by hand."; exit 1; }
+            # A revision replaced the post Codex reviewed. Ask it to review the
+            # finalized head: it answers a user's comment (the PAT), not a bot's.
+            if [ -n "$REVISION_OF" ] && [ "$HAS_PAT" = "true" ]; then
+              gh pr comment "$PR_NUM" --body "@codex review" \
+                || echo "::warning::Could not ask Codex to review the revision of #$PR_NUM."
+            fi
           else
             CREATE_LABELS=(--label autoblog --label autoblog-claude-reviewed)
             if [ "$REVIEW_PASS" != "true" ] || [ "$RULE_COUNT" -gt 0 ]; then
