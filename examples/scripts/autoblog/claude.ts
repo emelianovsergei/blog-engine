@@ -1411,10 +1411,14 @@ async function cmdPublish(): Promise<void> {
   }
   const held = results.filter((r) => r.verdict === "held").map((r) => r.pr.number);
   const broken = results.filter((r) => r.verdict === "broken").map((r) => r.pr.number);
+  // Paused, human-approved or at the revision cap: only a human can move it.
+  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.pr.number);
   console.log(`HELD: ${held.join(" ")}`);
   console.log(`BROKEN: ${broken.join(" ")}`);
+  console.log(`BLOCKED: ${blocked.join(" ")}`);
   if (held.length) process.exit(4);
   if (broken.length) process.exit(5);
+  if (blocked.length) process.exit(6);
   if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
 }
 
