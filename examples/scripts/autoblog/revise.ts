@@ -241,6 +241,7 @@ export interface CheckRun {
   status: string;
   conclusion: string | null;
   started_at?: string | null;
+  completed_at?: string | null;
   /** Name of the Actions workflow that ran it (merge-pending's `workflowName`); unset for app checks. */
   workflow?: string;
 }
@@ -263,9 +264,11 @@ export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending
   const live = runs.filter((r) => !r.name.startsWith("Heal PR ") && r.workflow !== "Autoblog Codex Heal");
   const passed = (r: CheckRun) => r.status === "completed" && r.conclusion === "success";
   const sameCheck = (a: CheckRun, b: CheckRun) => a.name === b.name && (a.workflow ?? "") === (b.workflow ?? "");
+  // merge-pending's `startedAt // completedAt`: a run cancelled while queued never started.
+  const stamp = (r: CheckRun) => r.started_at || r.completed_at || "";
   const counted = live.filter((r) =>
-    !(r.conclusion === "cancelled" && r.started_at &&
-      live.some((p) => sameCheck(p, r) && passed(p) && (p.started_at ?? "") > r.started_at!)));
+    !(r.conclusion === "cancelled" && stamp(r) &&
+      live.some((p) => sameCheck(p, r) && passed(p) && stamp(p) > stamp(r))));
   const pending: string[] = [];
   const failing: string[] = [];
   // No check runs yet: CI has not started. merge-pending refuses a head with

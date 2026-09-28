@@ -294,6 +294,11 @@ assert.deepEqual(
   [],
 );
 assert.deepEqual(ciSummary([{ ...run("heal", "failure", "1"), workflow: "Autoblog Codex Heal" }, run("tests", "success", "1")], []).failing, []);
+assert.deepEqual(
+  ciSummary([{ ...run("tests", "cancelled", "1"), started_at: null, completed_at: "2026-09-28T09:01:00Z" }, { ...run("tests", "success", "1"), started_at: "2026-09-28T09:02:00Z" }], []).failing,
+  [],
+  "a run cancelled while queued is dated by its completion time",
+);
 
 const bot = { login: "chatgpt-codex-connector[bot]" };
 const none = { request: [], pr: [], soleHead: true };
