@@ -241,6 +241,8 @@ export interface CheckRun {
   status: string;
   conclusion: string | null;
   started_at?: string | null;
+  /** Name of the Actions workflow that ran it (merge-pending's `workflowName`); unset for app checks. */
+  workflow?: string;
 }
 
 export interface CommitStatus {
@@ -253,16 +255,17 @@ export interface CommitStatus {
 /**
  * CI on one commit, classified exactly as merge-pending's rollup gate does:
  * every run counts, except a cancelled run that a later passing run of the
- * same check superseded. A failure stays a failure even after a passing
- * rerun, an unfinished run (a queued rerun included) is pending, skipped and
- * neutral pass, and Codex Heal helpers are ignored.
+ * same check (same workflow and name) superseded. A failure stays a failure
+ * even after a passing rerun, an unfinished run (a queued rerun included) is
+ * pending, skipped and neutral pass, and Codex Heal helpers are ignored.
  */
 export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending: string[]; failing: string[] } {
-  const live = runs.filter((r) => !r.name.startsWith("Heal PR "));
+  const live = runs.filter((r) => !r.name.startsWith("Heal PR ") && r.workflow !== "Autoblog Codex Heal");
   const passed = (r: CheckRun) => r.status === "completed" && r.conclusion === "success";
+  const sameCheck = (a: CheckRun, b: CheckRun) => a.name === b.name && (a.workflow ?? "") === (b.workflow ?? "");
   const counted = live.filter((r) =>
     !(r.conclusion === "cancelled" && r.started_at &&
-      live.some((p) => p.name === r.name && passed(p) && (p.started_at ?? "") > r.started_at!)));
+      live.some((p) => sameCheck(p, r) && passed(p) && (p.started_at ?? "") > r.started_at!)));
   const pending: string[] = [];
   const failing: string[] = [];
   // No check runs yet: CI has not started. merge-pending refuses a head with

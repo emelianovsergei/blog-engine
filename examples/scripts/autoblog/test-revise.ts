@@ -284,6 +284,16 @@ assert.deepEqual(
   "no check runs means CI has not started, not that it passed",
 );
 assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1"), run("tests", "success", "1")], []), { pending: [], failing: [] }, "Codex Heal helpers are ignored");
+assert.deepEqual(
+  ciSummary([{ ...run("review", "cancelled", "1"), workflow: "Autoblog Review" }, { ...run("review", "success", "2"), workflow: "CI" }], []).failing,
+  ["review"],
+  "a pass in another workflow with the same job name does not supersede a cancelled run",
+);
+assert.deepEqual(
+  ciSummary([{ ...run("review", "cancelled", "1"), workflow: "CI" }, { ...run("review", "success", "2"), workflow: "CI" }], []).failing,
+  [],
+);
+assert.deepEqual(ciSummary([{ ...run("heal", "failure", "1"), workflow: "Autoblog Codex Heal" }, run("tests", "success", "1")], []).failing, []);
 
 const bot = { login: "chatgpt-codex-connector[bot]" };
 const none = { request: [], pr: [], soleHead: true };

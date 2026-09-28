@@ -1293,7 +1293,14 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
   const soleHead = commits === 1 && !forcePushed;
   const prReactions = soleHead ? githubList<Reaction>(`${repo}/issues/${pr.number}/reactions`) : [];
   const statuses = githubList<CommitStatus>(`${repo}/commits/${head}/statuses`);
-  const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: CheckRun[] }).check_runs;
+  // merge-pending tells checks apart by workflow as well as name; REST check
+  // runs carry only their check suite, so name it from the head's workflow runs.
+  const workflows = new Map(
+    (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: Array<{ name: string; check_suite_id: number }> })
+      .workflow_runs.map((w) => [w.check_suite_id, w.name] as const),
+  );
+  const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: Array<CheckRun & { check_suite?: { id?: number } }> })
+    .check_runs.map((r) => ({ ...r, workflow: workflows.get(r.check_suite?.id ?? -1) }));
   const finalized = statuses.some((st) =>
     st.context === "autoblog/finalized" && st.state === "success" && st.creator?.login === "github-actions[bot]");
   const state = {
