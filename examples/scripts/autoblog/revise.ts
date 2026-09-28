@@ -264,6 +264,9 @@ export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending
   }
   const pending: string[] = [];
   const failing: string[] = [];
+  // No check runs yet: CI has not started. merge-pending refuses a head with
+  // no checks, so this is "wait", never "green".
+  if (latest.size === 0) pending.push("CI (no check runs yet)");
   for (const run of latest.values()) {
     if (run.status !== "completed") pending.push(run.name);
     else if (!["success", "skipped", "neutral"].includes(run.conclusion ?? "")) failing.push(run.name);
@@ -316,6 +319,8 @@ export interface PublishState {
   ci: { pending: string[]; failing: string[] };
   codex: "reviewed" | "limited" | "pending";
   held?: HeldPr;
+  /** `autoblog-hold`: a human paused it; merge-pending skips it whatever else holds. */
+  paused?: boolean;
 }
 
 /**
@@ -324,6 +329,7 @@ export interface PublishState {
  * does not hold a post forever.
  */
 export function publishVerdict(s: PublishState, delayMinutes = 60): PublishVerdict {
+  if (s.paused) return "blocked";
   if (s.held) return s.held.blocked ? "blocked" : "held";
   if (!s.finalized) return "wait";
   if (s.ci.failing.length) return "broken";

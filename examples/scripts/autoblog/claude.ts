@@ -1282,13 +1282,16 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
     ci: ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized")),
     codex: codexOnHead(head, approvedAt, reviews, reactions, issueComments),
     held,
+    paused: labels.includes("autoblog-hold"),
   };
   // merge-pending's AUTOBLOG_MERGE_DELAY (default 1h); the session cannot read
   // repository variables, so the routine's environment carries an override.
   const verdict = publishVerdict(state, Number(process.env.AUTOBLOG_MERGE_DELAY_MINUTES ?? "60"));
   const detail =
     verdict === "held" || verdict === "blocked"
-      ? held!.blocked ?? held!.reasons.join(", ")
+      ? state.paused
+        ? "autoblog-hold (a human paused it)"
+        : held!.blocked ?? held!.reasons.join(", ")
       : verdict === "broken"
         ? `CI failing: ${state.ci.failing.join(", ")}`
         : verdict === "wait"
@@ -1352,21 +1355,44 @@ async function cmdPublish(): Promise<void> {
   );
   for (const r of results) console.log(`#${r.pr.number} ${r.pr.head.ref} — ${r.verdict}: ${r.detail}`);
   const ready = results.filter((r) => r.verdict === "ready");
+  // Dispatched but not merged within 10 minutes (queued run, or a gate changed):
+  // not published, so not exit 0.
+  const unmerged: number[] = [];
   if (ready.length && dispatch) {
     githubApi("POST", `${repo}/actions/workflows/autoblog-merge-pending.yml/dispatches`, { ref: "main" });
     console.log(`Dispatched autoblog-merge-pending for #${ready.map((r) => r.pr.number).join(", #")}.`);
     // Report the outcome, not the dispatch: wait for the merges to land.
     const until = Date.now() + 10 * 60_000;
     for (const r of ready) {
+      unmerged.push(r.pr.number);
       let mergedAt: string | null | undefined;
       while (!mergedAt && Date.now() < until) {
         await new Promise((resolve) => setTimeout(resolve, 30_000));
         mergedAt = (githubApi("GET", `${repo}/pulls/${r.pr.number}`) as { merged_at?: string | null }).merged_at;
       }
-      console.log(mergedAt ? `PUBLISHED: #${r.pr.number} merged at ${mergedAt}.` : `#${r.pr.number}: not merged yet; see the Autoblog Merge Pending run.`);
+      if (mergedAt) {
+        unmerged.pop();
+        console.log(`PUBLISHED: #${r.pr.number} merged at ${mergedAt}.`);
+        results.splice(results.findIndex((x) => x.pr.number === r.pr.number), 1);
+      }
     }
   } else if (ready.length) {
     console.log(`Ready (not dispatched): #${ready.map((r) => r.pr.number).join(", #")}.`);
+  }
+  // A dispatched post that did not merge: re-read it. merge-pending may have
+  // skipped it for a finding that arrived since (held), a failed check
+  // (broken), or its run is still queued (wait). Never report it as done.
+  for (const num of unmerged) {
+    const i = results.findIndex((r) => r.pr.number === num);
+    const fresh = githubApi("GET", `${repo}/pulls/${num}`) as OpenPr & { state?: string; merged_at?: string | null };
+    if (fresh.merged_at) {
+      console.log(`PUBLISHED: #${num} merged at ${fresh.merged_at}.`);
+      results.splice(i, 1);
+      continue;
+    }
+    const again = publishState(fresh);
+    results[i] = { pr: fresh, verdict: again.verdict === "ready" ? "wait" : again.verdict, detail: again.detail };
+    console.log(`#${num} after dispatch — ${results[i].verdict}: ${again.detail}`);
   }
   const held = results.filter((r) => r.verdict === "held").map((r) => r.pr.number);
   const broken = results.filter((r) => r.verdict === "broken").map((r) => r.pr.number);

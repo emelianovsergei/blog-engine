@@ -258,11 +258,16 @@ assert.deepEqual(
 assert.deepEqual(ciSummary([run("tests", null, "1", "in_progress")], []).pending, ["tests"]);
 assert.deepEqual(ciSummary([run("tests", "failure", "1")], []).failing, ["tests"]);
 assert.deepEqual(
-  ciSummary([], [{ context: "Vercel", state: "success" }, { context: "Vercel", state: "pending" }]).pending,
+  ciSummary([run("tests", "success", "1")], [{ context: "Vercel", state: "success" }, { context: "Vercel", state: "pending" }]).pending,
   [],
   "only the newest status per context counts",
 );
-assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1")], []).failing, [], "Codex Heal helpers are ignored");
+assert.deepEqual(
+  ciSummary([], [{ context: "Vercel", state: "success" }]).pending,
+  ["CI (no check runs yet)"],
+  "no check runs means CI has not started, not that it passed",
+);
+assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1"), run("tests", "success", "1")], []), { pending: [], failing: [] }, "Codex Heal helpers are ignored");
 
 const bot = { login: "chatgpt-codex-connector[bot]" };
 assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [{ user: bot, commit_id: "h1" }], [], []), "reviewed");
@@ -290,5 +295,6 @@ assert.equal(publishVerdict({ ...green, ci: { pending: [], failing: ["tests"] } 
 held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], []);
 assert.equal(publishVerdict({ ...green, held }), "held", "a Codex P1 sends it back to step 0b");
 assert.equal(publishVerdict({ ...green, held: held && { ...held, blocked: "autoblog-hold" } }), "blocked");
+assert.equal(publishVerdict({ ...green, paused: true }), "blocked", "autoblog-hold alone blocks a ready post");
 
 console.log("✔ revise helper tests passed");

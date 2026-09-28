@@ -360,6 +360,12 @@ A Codex that is out of quota never reviews: `publish` reports those posts as
 `delayed`, and merge-pending merges them once its 1-hour delay has passed (the
 morning sweep or the daily fallback run).
 
+`publish` assumes merge-pending's `AUTOBLOG_MERGE_DELAY` is the default 1h:
+the session cannot read repository variables. A site that changes it sets
+`AUTOBLOG_MERGE_DELAY_MINUTES` in the routine's environment to match (as with
+`AUTOBLOG_HOLD_ON_CODEX_P1`). A mismatch is safe: `publish` re-reads a post
+merge-pending did not merge and reports it as waiting, never as published.
+
 ## 11. Report
 
 End with a short summary: title, slug, category, the GSC query it targets (if
