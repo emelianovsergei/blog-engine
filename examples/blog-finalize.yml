@@ -647,8 +647,10 @@ jobs:
             gh pr reopen "$PR_NUM" || { echo "::error::Closed #$PR_NUM but could not reopen it — reopen it by hand."; exit 1; }
             # A revision replaced the post Codex reviewed. Ask it to review the
             # finalized head: it answers a user's comment (the PAT), not a bot's.
+            # The SHA marker binds a clean 👍 on this comment to this head
+            # (autoblog-merge-pending, autoblog-codex-heal, `publish`).
             if [ -n "$REVISION_OF" ] && [ "$HAS_PAT" = "true" ]; then
-              gh pr comment "$PR_NUM" --body "@codex review" \
+              gh pr comment "$PR_NUM" --body "$(printf '@codex review\n\n<!-- autoblog-codex-heal-head: %s -->' "$(git rev-parse HEAD)")" \
                 || echo "::warning::Could not ask Codex to review the revision of #$PR_NUM."
             fi
           else

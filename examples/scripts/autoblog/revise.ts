@@ -233,3 +233,128 @@ export function reportFindings(report: Record<string, unknown>, reasons: string[
   }
   return findings;
 }
+
+// ─── publish ────────────────────────────────────────────────────────────────
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  /** Name of the Actions workflow that ran it (merge-pending's `workflowName`); unset for app checks. */
+  workflow?: string;
+}
+
+export interface CommitStatus {
+  context: string;
+  state: string;
+  description?: string | null;
+  creator?: { login?: string } | null;
+}
+
+/**
+ * CI on one commit, classified exactly as merge-pending's rollup gate does:
+ * every run counts, except a cancelled run that a later passing run of the
+ * same check (same workflow and name) superseded. A failure stays a failure
+ * even after a passing rerun, an unfinished run (a queued rerun included) is
+ * pending, skipped and neutral pass, and Codex Heal helpers are ignored.
+ */
+export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending: string[]; failing: string[] } {
+  const live = runs.filter((r) => !r.name.startsWith("Heal PR ") && r.workflow !== "Autoblog Codex Heal");
+  const passed = (r: CheckRun) => r.status === "completed" && r.conclusion === "success";
+  const sameCheck = (a: CheckRun, b: CheckRun) => a.name === b.name && (a.workflow ?? "") === (b.workflow ?? "");
+  // merge-pending's `startedAt // completedAt`: a run cancelled while queued never started.
+  const stamp = (r: CheckRun) => r.started_at || r.completed_at || "";
+  const counted = live.filter((r) =>
+    !(r.conclusion === "cancelled" && stamp(r) &&
+      live.some((p) => sameCheck(p, r) && passed(p) && stamp(p) > stamp(r))));
+  const pending: string[] = [];
+  const failing: string[] = [];
+  // No checks of either kind yet: CI has not started. merge-pending refuses a
+  // head with an empty rollup, so this is "wait", never "green".
+  if (counted.length === 0 && statuses.length === 0) pending.push("CI (no checks yet)");
+  for (const run of counted) {
+    if (run.status !== "completed") pending.push(run.name);
+    else if (!["success", "skipped", "neutral"].includes(run.conclusion ?? "")) failing.push(run.name);
+  }
+  // Statuses come newest first; the first one per context is current.
+  const seen = new Set<string>();
+  for (const s of statuses) {
+    if (seen.has(s.context)) continue;
+    seen.add(s.context);
+    if (s.state === "pending") pending.push(s.context);
+    else if (s.state !== "success") failing.push(s.context);
+  }
+  return { pending, failing };
+}
+
+type Reaction = { user?: { login?: string } | null; content?: string; created_at?: string };
+
+/**
+ * Whether Codex has looked at this exact head. Only signals bound to it count
+ * (merge-pending checks the same):
+ * - a review with `commit_id === head`;
+ * - a 👍 on an `@codex review` request that names this head (`headRequestComments`
+ *   picks those; Codex reacts instead of reviewing when it has nothing to say);
+ * - a 👍 on the PR itself after the approval, but only when `soleHead`: the PR
+ *   never had another head, so the reaction cannot be about an older one.
+ * A usage-limit reply after the approval means it will not review at all.
+ */
+export function codexOnHead(
+  head: string,
+  approvedAt: string | undefined,
+  reviews: Array<{ user?: { login?: string } | null; commit_id?: string; state?: string }>,
+  plusOnes: { request: Reaction[]; pr: Reaction[]; soleHead: boolean },
+  comments: Array<{ user?: { login?: string } | null; body?: string; created_at?: string }>,
+): "reviewed" | "limited" | "pending" {
+  const isCodex = (u?: { login?: string } | null) => (u?.login ?? "").replace(/\[bot\]$/, "") === CODEX;
+  const after = (t?: string) => Boolean(approvedAt && t && t >= approvedAt);
+  const thumbsUp = (r: Reaction) => isCodex(r.user) && r.content === "+1";
+  if (reviews.some((r) => isCodex(r.user) && r.commit_id === head)) return "reviewed";
+  if (plusOnes.request.some(thumbsUp)) return "reviewed";
+  if (plusOnes.soleHead && plusOnes.pr.some((r) => thumbsUp(r) && after(r.created_at))) return "reviewed";
+  if (comments.some((c) => isCodex(c.user) && /usage limits/i.test(c.body ?? "") && after(c.created_at))) return "limited";
+  return "pending";
+}
+
+/** `@codex review` requests bound to `head` by the SHA marker finalize and codex-heal add. */
+export function headRequestComments<T extends { body?: string }>(comments: T[], head: string): T[] {
+  return comments.filter((c) => (c.body ?? "").includes(`autoblog-codex-heal-head: ${head}`));
+}
+
+export type PublishVerdict =
+  | "ready" // every gate passed: merge-pending can merge it now
+  | "delayed" // gates passed but Codex is out of quota: merge-pending waits out its delay
+  | "held" // a blocking finding: revise it (step 0b)
+  | "blocked" // held, but a human must act (paused, human-approved, revision cap)
+  | "broken" // CI failed on the finalized head
+  | "wait"; // finalize, the review, CI or Codex is still running
+
+export interface PublishState {
+  finalized: boolean;
+  approvedOnHead: boolean;
+  /** Minutes since the head was approved; merge-pending's delay counts from here. */
+  approvedMinutes?: number;
+  pendingLabel: boolean;
+  ci: { pending: string[]; failing: string[] };
+  codex: "reviewed" | "limited" | "pending";
+  held?: HeldPr;
+  /** `autoblog-hold`: a human paused it; merge-pending skips it whatever else holds. */
+  paused?: boolean;
+}
+
+/**
+ * `delayMinutes` is merge-pending's AUTOBLOG_MERGE_DELAY: once it has passed,
+ * merge-pending merges without a Codex review, so a Codex that never answers
+ * does not hold a post forever.
+ */
+export function publishVerdict(s: PublishState, delayMinutes = 60): PublishVerdict {
+  if (s.paused) return "blocked";
+  if (s.held) return s.held.blocked ? "blocked" : "held";
+  if (!s.finalized) return "wait";
+  if (s.ci.failing.length) return "broken";
+  if (!s.approvedOnHead || !s.pendingLabel || s.ci.pending.length) return "wait";
+  if (s.codex === "reviewed" || (s.approvedMinutes ?? 0) >= delayMinutes) return "ready";
+  return s.codex === "limited" ? "delayed" : "wait";
+}

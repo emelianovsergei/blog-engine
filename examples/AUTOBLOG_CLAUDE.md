@@ -13,20 +13,24 @@ YOU (scheduled Claude session, ~1:37 AM PT)   → branch blog/claude-<date>: dat
 blog-finalize.yml (on your push)              → image, link audit, frontmatter, report → draft PR
                                                 labels: autoblog, autoblog-claude-reviewed
 autoblog-review.yml                           → skips Grok, applies autoblog-approved-pending
-ci.yml + autoblog-merge-pending.yml           → green CI + 1h window → squash-merge
+YOU again (step 10: `publish`)                → waits for CI + Codex, dispatches merge-pending
+autoblog-merge-pending.yml                    → green CI + Codex reviewed the head (else 1h) → squash-merge
+YOU again (~6:45 AM PT: morning sweep)        → revises and publishes whatever is still open
 autoblog-watchdog.yml                         → alerts if fewer than 7 posts merged in 7 days
 ```
 
-Your deliverable is **one pushed branch** holding `data/blog-claude-inbox/`
-(plan, body, meta, review). You never open the PR, never touch `main`, never
-merge.
+Your deliverable is **one published post**: a pushed branch holding
+`data/blog-claude-inbox/` (plan, body, meta, review), then `publish` (step 10)
+until it is merged or you know exactly why not. You never open the PR, never
+touch `main` and never merge yourself: `publish` dispatches merge-pending,
+which merges with its own gates.
 
 ## Hard rules
 
 - **Never discard a post.** If the review still fails after 2 fix rounds, hand
   it off anyway: finalize labels it `autoblog-review-failed` and a human decides.
-- **One post per run.** If `blog/claude-<today>` already exists on origin, stop
-  and report — today is done.
+- **One post per run.** If `blog/claude-<today>` already exists on origin, skip
+  to step 10 (publish) and report — today's post is written.
 - **Commit only `data/blog-claude-inbox/`.** No other file in the repo changes.
   Finalize runs `main`'s code and takes only the four inbox files from your
   branch; any other change you push is dropped.
@@ -125,7 +129,7 @@ Then today's post:
 
 ```bash
 git checkout -q -f --detach origin/main
-git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → report and stop
+git ls-remote --exit-code origin "refs/heads/blog/claude-${TODAY}*" && echo "ALREADY DONE" # → go to step 10
 ```
 
 ## 1. Read the brief
@@ -299,6 +303,13 @@ that are cheap), re-run `check` until clean, then `review --round 2` with **a
 new subagent** (same instructions, round 2 files). Round 3 is the last. After
 round 3, hand off whatever the result.
 
+The reviewer prompt ends with a **site editorial policy**: a job, customer or
+call told as something the company did ("a Citrus Heights homeowner called us
+last week") is a blocker unless it matches a documented job in
+`content/our-work/`. Codex held three posts in a row for exactly this. Fix it
+by reframing the story as the typical case it is ("a typical first-cold-morning
+call: ..."), never by adding more invented detail.
+
 ## 9. Hand off and push
 
 `handoff` refuses a plan or body that changed after the last review, and
@@ -322,13 +333,60 @@ push the same commit to the branch your session instructions name (a
 `blog-finalize.yml` accepts both and moves the post to `blog/claude-${TODAY}`.
 Retry a network failure up to 4 times (2s, 4s, 8s, 16s).
 
-## 10. Report
+## 10. Publish
+
+Nobody merges by hand and GitHub's cron runs the merge job only every few
+hours, so you publish:
+
+```bash
+npm run autoblog:claude -- publish      # waits up to 45 min, then dispatches merge-pending
+```
+
+It waits for today's PR to exist and for every open Claude post to clear its
+gates (finalized, Claude review approved the head, CI green, Codex reviewed the
+head, or the 1-hour merge delay has passed), then dispatches
+`autoblog-merge-pending.yml`, which merges with the same gates, and waits for
+the merge. It prints `TODAY: open|merged|none` and `PUBLISHED: #N ...` per
+merged post.
+
+| Exit | Meaning | Do |
+| --- | --- | --- |
+| 0 | Published (or nothing left to do) | Report. |
+| 4 | `HELD:` lists posts Codex (or a label) now holds | Revise each one exactly as in step 0b, then run `publish` again. The 2-revision cap still applies. |
+| 5 | `BROKEN:` lists posts whose CI failed | Read the failing job's log (`GET /repos/{owner}/{repo}/actions/jobs/{id}/logs`). If the post causes it, `revise --pr N --force`, fix, and continue as in step 0b. Otherwise report it. |
+| 6 | `BLOCKED:` lists posts only a human can move (`autoblog-hold`, a human-approved head, or two revisions spent) | Name each one and why at the top of the report. Do not revise them. |
+| 3 | Still waiting after 45 min (Codex slow, CI queued) | Report it. The morning sweep publishes it. |
+
+A Codex that is out of quota never reviews: `publish` reports those posts as
+`delayed`, and merge-pending merges them once its 1-hour delay has passed (the
+morning sweep or the daily fallback run).
+
+`publish` assumes merge-pending's `AUTOBLOG_MERGE_DELAY` is the default 1h:
+the session cannot read repository variables. A site that changes it sets
+`AUTOBLOG_MERGE_DELAY_MINUTES` in the routine's environment to match (as with
+`AUTOBLOG_HOLD_ON_CODEX_P1`). A mismatch is safe: `publish` re-reads a post
+merge-pending did not merge and reports it as waiting, never as published.
+
+## 11. Report
 
 End with a short summary: title, slug, category, the GSC query it targets (if
-any), review verdict and score, fix rounds used, branch pushed, and anything
-degraded (stale brief, no autocomplete, build blocked by a host). Add each
+any), review verdict and score, fix rounds used, branch pushed, and whether it
+is **published** (the `PUBLISHED:` line) or what it still waits for. Add each
 held post you revised (PR, findings fixed, review verdict) and each one
 `revise --list` skipped. Stop there.
+
+## Morning sweep
+
+A second Routine wakes this session around 6:45 AM PT with "run the morning
+sweep". It catches whatever the night left open, so nobody has to:
+
+1. Step 0 (clean `main`), then step 0b: revise every PR `revise --list` names.
+2. `npm run autoblog:claude -- publish --sweep --wait-minutes 45`, handling its
+   exit code as in step 10.
+3. If `publish` printed `TODAY: none` (the night run failed or never
+   started), run steps 1–10 now. Do not rely on `git ls-remote`: merging
+   deletes `blog/claude-${TODAY}`.
+4. Report as in step 11, and say what the night run had left behind.
 
 ## When something goes wrong
 
@@ -340,4 +398,5 @@ held post you revised (PR, findings fixed, review verdict) and each one
 | Build fails because of the post | Fix it. Never hand off a post you know breaks the build. |
 | Review fails 3 times | Hand off anyway. Finalize labels `autoblog-review-failed`. |
 | `revise --list` cannot reach GitHub | It prints an empty `REVISE:` line. Skip revisions, write today's post, say so in the report. |
+| `publish` cannot dispatch merge-pending | Report the error. Merge-pending's daily fallback run and the morning sweep publish it. |
 | Push refused twice after retries | Report the exact git error. The post is lost only if you skip this: paste `plan.json` and `body.md` into the report. |

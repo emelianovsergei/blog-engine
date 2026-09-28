@@ -7,7 +7,11 @@ import assert from "node:assert/strict";
 import {
   MAX_REVISIONS,
   REVISION_MARKER,
+  ciSummary,
   classifyPr,
+  codexOnHead,
+  headRequestComments,
+  publishVerdict,
   codexSeverity,
   reportFindings,
   revisionCount,
@@ -239,5 +243,107 @@ assert.equal(
   "a timeout note, the landed revision and a retry are one revision",
 );
 assert.equal(revisionCount([{ body: `${REVISION_MARKER} revision 1 of 2` }, { body: `${REVISION_MARKER} revision 2 of 2` }]), 2);
+
+// ── publish ─────────────────────────────────────────────────────────────────
+const run = (name: string, conclusion: string | null, started: string, status = "completed") => ({ name, status, conclusion, started_at: started });
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), run("review", "skipped", "1")], [{ context: "Vercel", state: "success" }]),
+  { pending: [], failing: [] },
+  "green and skipped checks pass",
+);
+assert.deepEqual(
+  ciSummary([run("claude-reviewed", "cancelled", "1"), run("claude-reviewed", "success", "2")], []).failing,
+  [],
+  "a cancelled run superseded by a later pass does not fail",
+);
+assert.deepEqual(ciSummary([run("tests", null, "1", "in_progress")], []).pending, ["tests"]);
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), { name: "tests", status: "queued", conclusion: null, started_at: null }], []).pending,
+  ["tests"],
+  "a queued rerun (no started_at yet) is newer than the finished run it replaces",
+);
+assert.deepEqual(
+  ciSummary([run("tests", "failure", "1"), run("tests", "success", "2")], []).failing,
+  ["tests"],
+  "a failure stays a failure after a passing rerun, as in merge-pending's gate",
+);
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), run("tests", "cancelled", "2")], []).failing,
+  ["tests"],
+  "a cancellation after the pass is not superseded",
+);
+assert.deepEqual(ciSummary([run("tests", "failure", "1")], []).failing, ["tests"]);
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1")], [{ context: "Vercel", state: "success" }, { context: "Vercel", state: "pending" }]).pending,
+  [],
+  "only the newest status per context counts",
+);
+assert.deepEqual(ciSummary([], []).pending, ["CI (no checks yet)"], "no checks means CI has not started, not that it passed");
+assert.deepEqual(
+  ciSummary([], [{ context: "ci/status-only", state: "success" }]),
+  { pending: [], failing: [] },
+  "CI reported only through commit statuses counts, as in merge-pending's rollup",
+);
+assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1"), run("tests", "success", "1")], []), { pending: [], failing: [] }, "Codex Heal helpers are ignored");
+assert.deepEqual(
+  ciSummary([{ ...run("review", "cancelled", "1"), workflow: "Autoblog Review" }, { ...run("review", "success", "2"), workflow: "CI" }], []).failing,
+  ["review"],
+  "a pass in another workflow with the same job name does not supersede a cancelled run",
+);
+assert.deepEqual(
+  ciSummary([{ ...run("review", "cancelled", "1"), workflow: "CI" }, { ...run("review", "success", "2"), workflow: "CI" }], []).failing,
+  [],
+);
+assert.deepEqual(ciSummary([{ ...run("heal", "failure", "1"), workflow: "Autoblog Codex Heal" }, run("tests", "success", "1")], []).failing, []);
+assert.deepEqual(
+  ciSummary([{ ...run("tests", "cancelled", "1"), started_at: null, completed_at: "2026-09-28T09:01:00Z" }, { ...run("tests", "success", "1"), started_at: "2026-09-28T09:02:00Z" }], []).failing,
+  [],
+  "a run cancelled while queued is dated by its completion time",
+);
+
+const bot = { login: "chatgpt-codex-connector[bot]" };
+const none = { request: [], pr: [], soleHead: true };
+const at = "2026-09-28T09:00:00Z";
+const up = (created_at: string) => ({ user: bot, content: "+1", created_at });
+assert.equal(codexOnHead("h1", at, [{ user: bot, commit_id: "h1" }], none, []), "reviewed");
+assert.equal(codexOnHead("h1", at, [{ user: bot, commit_id: "h0" }], none, []), "pending", "a review of an older head does not count");
+assert.equal(
+  codexOnHead("h1", at, [], { ...none, request: [up("2026-09-28T09:05:00Z")] }, []),
+  "reviewed",
+  "a 👍 on the request naming this head means Codex found nothing",
+);
+assert.equal(
+  codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-28T09:05:00Z")] }, []),
+  "reviewed",
+  "a 👍 on a PR that never had another head is about this head",
+);
+assert.equal(
+  codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-28T09:05:00Z")], soleHead: false }, []),
+  "pending",
+  "a PR-level 👍 cannot prove which head it was for once the head changed",
+);
+assert.equal(codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-27T09:05:00Z")] }, []), "pending");
+assert.equal(
+  codexOnHead("h1", at, [], none, [{ user: bot, body: "You have reached your Codex usage limits", created_at: "2026-09-28T09:03:00Z" }]),
+  "limited",
+);
+assert.deepEqual(
+  headRequestComments([{ id: 1, body: "@codex review" }, { id: 2, body: "@codex review\n\n<!-- autoblog-codex-heal-head: h1 -->" }, { id: 3, body: "<!-- autoblog-codex-heal-head: h0 -->" }], "h1").map((c) => c.id),
+  [2],
+);
+
+const green = { finalized: true, approvedOnHead: true, pendingLabel: true, ci: { pending: [], failing: [] }, codex: "reviewed" as const };
+assert.equal(publishVerdict(green), "ready");
+assert.equal(publishVerdict({ ...green, codex: "limited" }), "delayed");
+assert.equal(publishVerdict({ ...green, codex: "pending" }), "wait");
+assert.equal(publishVerdict({ ...green, codex: "pending", approvedMinutes: 61 }), "ready", "past the merge delay, a silent Codex does not hold the post");
+assert.equal(publishVerdict({ ...green, codex: "limited", approvedMinutes: 30 }), "delayed");
+assert.equal(publishVerdict({ ...green, codex: "limited", approvedMinutes: 60 }), "ready");
+assert.equal(publishVerdict({ ...green, finalized: false }), "wait");
+assert.equal(publishVerdict({ ...green, ci: { pending: [], failing: ["tests"] } }), "broken");
+held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], []);
+assert.equal(publishVerdict({ ...green, held }), "held", "a Codex P1 sends it back to step 0b");
+assert.equal(publishVerdict({ ...green, held: held && { ...held, blocked: "autoblog-hold" } }), "blocked");
+assert.equal(publishVerdict({ ...green, paused: true }), "blocked", "autoblog-hold alone blocks a ready post");
 
 console.log("✔ revise helper tests passed");

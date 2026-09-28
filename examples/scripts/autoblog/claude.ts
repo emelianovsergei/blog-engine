@@ -58,16 +58,23 @@ import { SITE, reviewConfig, rotationBlocked } from "./site";
 import {
   MAX_REVISIONS,
   REVISION_MARKER,
+  ciSummary,
   classifyPr,
+  codexOnHead,
+  headRequestComments,
   isClaudePostPr,
+  publishVerdict,
   reportFindings,
   revisionCount,
   revisionPlan,
   withoutAutoLinks,
   type CcrThread,
+  type CheckRun,
+  type CommitStatus,
   type Finding,
   type HeldPr,
   type OpenPr,
+  type PublishVerdict,
   type ReviewComment,
 } from "./revise";
 import {
@@ -802,6 +809,38 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
   return posts;
 }
 
+/**
+ * A site rule the engine's rubric does not carry. Codex held three posts in a
+ * row (2026-09-26..28) for a made-up service call told as the company's own
+ * job, after the reviewer had praised it as "believable". The documented jobs
+ * are listed so the reviewer can tell a real one from an invented one.
+ */
+function editorialPolicy(): string {
+  const dir = path.join(ROOT, "content", "our-work");
+  // The facts each entry documents (what was done, where, when), not just its
+  // slug: the reviewer checks a story's details against them.
+  const jobs = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((f) => f.endsWith(".mdx")).sort().map((f) => {
+        let fm: Record<string, unknown> = {};
+        try {
+          fm = parseDocument(fs.readFileSync(path.join(dir, f), "utf-8")).frontmatter as unknown as Record<string, unknown>;
+        } catch {
+          // A malformed entry must not break every review: list it by slug.
+        }
+        const text = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
+        const caption = text(fm.caption).replace(/\s*Call \(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}.*$/i, "").slice(0, 220);
+        return `- ${text(fm.date) || "undated"}, ${text(fm.location) || "unknown location"}: ${text(fm.title) || f.replace(/\.mdx$/, "")}${caption ? `. ${caption}` : ""}`;
+      })
+    : [];
+  return [
+    "Site editorial policy (blocking):",
+    `- A specific job, customer or call told as something ${SITE.review.business} actually did ("last October we found...", "a Citrus Heights homeowner called us", a dated visit, a named household, a meter reading from a real call) is fabricated first-hand experience unless a documented job below supports each of its details. Report it as a BLOCKER under the contentQuality dimension, quote the sentence as the location, and suggest reframing it as a typical scenario ("a typical first-cold-morning call: ...").`,
+    "- Framing a scenario as typical, common or hypothetical is fine and is not an issue.",
+    "Documented jobs (content/our-work/):",
+    ...(jobs.length ? jobs : ["- none"]),
+  ].join("\n");
+}
+
 async function cmdReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(work("preview.json"), "run `check` first — the reviewer grades the preview MDX");
@@ -830,7 +869,7 @@ async function cmdReview(): Promise<void> {
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
   const promptPath = work(`review-${round}.prompt.md`);
-  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)");
+  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)", editorialPolicy());
   let result: ReviewResult;
   try {
     result = await reviewBlogPost({
@@ -1225,6 +1264,186 @@ async function cmdRevise(): Promise<void> {
   cmdRevisePrepare(pr, process.argv.includes("--force"));
 }
 
+// ─── publish ────────────────────────────────────────────────────────────────
+
+/**
+ * Where one Claude post PR stands against merge-pending's gates. Read-only:
+ * the same facts merge-pending checks, gathered through the session's REST
+ * access (GraphQL is not available here).
+ */
+function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  const head = pr.head.sha;
+  const labels = pr.labels.map((l) => l.name);
+  const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
+  const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
+  const issueComments = githubList<{ id: number; body: string; user?: { login?: string }; created_at?: string }>(`${repo}/issues/${pr.number}/comments`);
+  const held = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false");
+  const reviews = githubList<{ user?: { login?: string }; commit_id?: string; state?: string; submitted_at?: string }>(`${repo}/pulls/${pr.number}/reviews`);
+  const approvals = reviews.filter((r) => r.state === "APPROVED" && r.commit_id === head);
+  const approvedAt = approvals.map((r) => r.submitted_at ?? "").sort().pop() || undefined;
+  // Codex 👍s count only when bound to this head (see codexOnHead).
+  type Reaction = { user?: { login?: string }; content?: string; created_at?: string };
+  const requestReactions = headRequestComments(issueComments, head)
+    .flatMap((c) => githubList<Reaction>(`${repo}/issues/comments/${c.id}/reactions`));
+  const commits = (githubApi("GET", `${repo}/pulls/${pr.number}`) as { commits?: number }).commits;
+  const forcePushed = githubList<{ event?: string }>(`${repo}/issues/${pr.number}/events`)
+    .some((e) => e.event === "head_ref_force_pushed");
+  const soleHead = commits === 1 && !forcePushed;
+  const prReactions = soleHead ? githubList<Reaction>(`${repo}/issues/${pr.number}/reactions`) : [];
+  const statuses = githubList<CommitStatus>(`${repo}/commits/${head}/statuses`);
+  // merge-pending tells checks apart by workflow as well as name; REST check
+  // runs carry only their check suite, so name it from the head's workflow runs.
+  const workflows = new Map(
+    (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: Array<{ name: string; check_suite_id: number }> })
+      .workflow_runs.map((w) => [w.check_suite_id, w.name] as const),
+  );
+  const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: Array<CheckRun & { check_suite?: { id?: number } }> })
+    .check_runs.map((r) => ({ ...r, workflow: workflows.get(r.check_suite?.id ?? -1) }));
+  // Finalized when any commit on the branch carries finalize's status, newest
+  // first, as autoblog-review checks: a verified `[autoblog-cifix]` commit or a
+  // human-approved edit may sit on top of the finalize commit.
+  const finalizeStatus = (list: CommitStatus[]) => list.some((st) =>
+    st.context === "autoblog/finalized" && st.state === "success" && st.creator?.login === "github-actions[bot]");
+  const finalized = finalizeStatus(statuses) ||
+    githubList<{ sha: string }>(`${repo}/pulls/${pr.number}/commits`).reverse().slice(1)
+      .some((c) => finalizeStatus(githubList<CommitStatus>(`${repo}/commits/${c.sha}/statuses`)));
+  const state = {
+    finalized,
+    approvedOnHead: approvals.length > 0,
+    approvedMinutes: approvedAt ? (Date.now() - Date.parse(approvedAt)) / 60_000 : undefined,
+    pendingLabel: labels.includes("autoblog-approved-pending"),
+    ci: ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized")),
+    codex: codexOnHead(head, approvedAt, reviews, { request: requestReactions, pr: prReactions, soleHead }, issueComments),
+    held,
+    paused: labels.includes("autoblog-hold"),
+  };
+  // merge-pending's AUTOBLOG_MERGE_DELAY (default 1h); the session cannot read
+  // repository variables, so the routine's environment carries an override.
+  const verdict = publishVerdict(state, Number(process.env.AUTOBLOG_MERGE_DELAY_MINUTES ?? "60"));
+  const detail =
+    verdict === "held" || verdict === "blocked"
+      ? state.paused
+        ? "autoblog-hold (a human paused it)"
+        : held!.blocked ?? held!.reasons.join(", ")
+      : verdict === "broken"
+        ? `CI failing: ${state.ci.failing.join(", ")}`
+        : verdict === "wait"
+          ? [
+              !finalized && "finalize",
+              !state.approvedOnHead && "Claude review approval",
+              state.ci.pending.length > 0 && `CI (${state.ci.pending.join(", ")})`,
+              state.codex === "pending" && "Codex review",
+            ].filter(Boolean).join(", ") || "labels"
+          : verdict === "delayed"
+            ? "Codex is out of quota: merge-pending's delay applies"
+            : state.codex === "reviewed"
+              ? "all gates passed"
+              : "all gates passed; Codex did not review, the merge delay has passed";
+  return { verdict, detail };
+}
+
+/**
+ * Step 10 and the morning sweep: wait for every open Claude post (and, without
+ * --sweep, for today's PR to exist) to clear its gates, then dispatch
+ * merge-pending, which merges with the same gates. GitHub runs its hourly cron
+ * every 3-10 hours, so the session drives it instead. Exit 0 = dispatched or
+ * nothing to do, 3 = still waiting when the time ran out, 4 = a post is held
+ * (revise it: step 0b), 5 = CI failed on a finalized post.
+ */
+async function cmdPublish(): Promise<void> {
+  const sweep = process.argv.includes("--sweep");
+  const dispatch = !process.argv.includes("--no-dispatch");
+  const minutes = Number(flag("wait-minutes") ?? (sweep ? "0" : "45"));
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  const { runDate } = pacificNow();
+  const prefix = `blog/claude-${runDate}`;
+  const isToday = (p: OpenPr) => p.head.ref === prefix || p.head.ref.startsWith(`${prefix}-`);
+  const deadline = Date.now() + minutes * 60_000;
+  let results: Array<{ pr: OpenPr; verdict: PublishVerdict; detail: string }> = [];
+  let todayMerged: (OpenPr & { merged_at?: string | null }) | undefined;
+  let todayOpen = false;
+  for (;;) {
+    // Every open Claude post, so a post revised in step 0b ships in the same run.
+    const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
+    todayOpen = open.some(isToday);
+    if (!todayOpen && !todayMerged) {
+      const recent = githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>;
+      todayMerged = recent.find((p) => p.merged_at && isToday(p));
+    }
+    results = open.map((pr) => ({ pr, ...publishState(pr) }));
+    // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
+    // possibly within this run: keep waiting for it too.
+    const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
+    if (!waiting || Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 60_000));
+  }
+  // The merge deletes blog/claude-<date>, so a branch check cannot tell
+  // "published" from "never written": the morning sweep reads this line.
+  const todayPr = results.find((r) => isToday(r.pr));
+  console.log(
+    todayMerged
+      ? `TODAY: merged #${todayMerged.number} at ${todayMerged.merged_at}`
+      : todayPr
+        ? `TODAY: open #${todayPr.pr.number}`
+        : `TODAY: none (no open or merged PR for ${prefix})`,
+  );
+  for (const r of results) console.log(`#${r.pr.number} ${r.pr.head.ref} — ${r.verdict}: ${r.detail}`);
+  const ready = results.filter((r) => r.verdict === "ready");
+  // Dispatched but not merged within 10 minutes (queued run, or a gate changed):
+  // not published, so not exit 0.
+  const unmerged: number[] = [];
+  if (ready.length && dispatch) {
+    githubApi("POST", `${repo}/actions/workflows/autoblog-merge-pending.yml/dispatches`, { ref: "main" });
+    console.log(`Dispatched autoblog-merge-pending for #${ready.map((r) => r.pr.number).join(", #")}.`);
+    // Report the outcome, not the dispatch: wait for the merges to land.
+    const until = Date.now() + 10 * 60_000;
+    for (const r of ready) {
+      unmerged.push(r.pr.number);
+      let mergedAt: string | null | undefined;
+      while (!mergedAt && Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        mergedAt = (githubApi("GET", `${repo}/pulls/${r.pr.number}`) as { merged_at?: string | null }).merged_at;
+      }
+      if (mergedAt) {
+        unmerged.pop();
+        console.log(`PUBLISHED: #${r.pr.number} merged at ${mergedAt}.`);
+        results.splice(results.findIndex((x) => x.pr.number === r.pr.number), 1);
+      }
+    }
+  } else if (ready.length) {
+    console.log(`Ready (not dispatched): #${ready.map((r) => r.pr.number).join(", #")}.`);
+  }
+  // A dispatched post that did not merge: re-read it. merge-pending may have
+  // skipped it for a finding that arrived since (held), a failed check
+  // (broken), or its run is still queued (wait). Never report it as done.
+  for (const num of unmerged) {
+    const i = results.findIndex((r) => r.pr.number === num);
+    const fresh = githubApi("GET", `${repo}/pulls/${num}`) as OpenPr & { state?: string; merged_at?: string | null };
+    if (fresh.merged_at) {
+      console.log(`PUBLISHED: #${num} merged at ${fresh.merged_at}.`);
+      results.splice(i, 1);
+      continue;
+    }
+    const again = publishState(fresh);
+    results[i] = { pr: fresh, verdict: again.verdict === "ready" ? "wait" : again.verdict, detail: again.detail };
+    console.log(`#${num} after dispatch — ${results[i].verdict}: ${again.detail}`);
+  }
+  const held = results.filter((r) => r.verdict === "held").map((r) => r.pr.number);
+  const broken = results.filter((r) => r.verdict === "broken").map((r) => r.pr.number);
+  // Paused, human-approved or at the revision cap: only a human can move it.
+  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.pr.number);
+  console.log(`HELD: ${held.join(" ")}`);
+  console.log(`BROKEN: ${broken.join(" ")}`);
+  console.log(`BLOCKED: ${blocked.join(" ")}`);
+  if (held.length) process.exit(4);
+  if (broken.length) process.exit(5);
+  if (blocked.length) process.exit(6);
+  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
+}
+
 // ─── main ───────────────────────────────────────────────────────────────────
 
 const commands: Record<string, () => void | Promise<void>> = {
@@ -1237,6 +1456,7 @@ const commands: Record<string, () => void | Promise<void>> = {
   handoff: cmdHandoff,
   clean: removePreview,
   revise: cmdRevise,
+  publish: cmdPublish,
 };
 
 const command = process.argv[2];

@@ -22,8 +22,12 @@ name: Autoblog Codex Heal
 on:
   pull_request_review:
     types: [submitted]
+  # Daily, not hourly: Claude-written posts (the daily path) are revised by
+  # the Claude routine (AUTOBLOG_CLAUDE.md step 0b) and skipped here. This
+  # retry catches a Grok fallback post whose Codex review arrived before it
+  # was labelled approved-pending, so the review event alone missed it.
   schedule:
-    - cron: '25 * * * *'   # hourly, :25 — after merge-pending at :20
+    - cron: '41 14 * * *'   # ~7:40 AM PT, before merge-pending's daily fallback (16:17 UTC)
   workflow_dispatch:
     inputs:
       pr:
