@@ -151,12 +151,27 @@ jobs:
             START_TS=$(date -u -d "$START" +%s)
             AGE=$((NOW - START_TS))
 
-            # Codex has looked at this exact head: a review on it, or a 👍 on
-            # the PR after it was approved (Codex reacts instead of reviewing
-            # when it has nothing to say). That ends the wait early; the
-            # P0/P1 and CI gates below still apply.
+            # Codex has looked at this exact head. Only signals bound to it
+            # count: a review with commit_id == head; a 👍 on an `@codex
+            # review` request that names this head (blog-finalize and
+            # autoblog-codex-heal add the SHA marker); or a 👍 on the PR
+            # itself when the PR never had another head (one commit, never
+            # force-pushed), so it can only be about this one. That ends the
+            # wait early; the P0/P1 and CI gates below still apply.
             CODEX_SEEN=$(jq -r --arg h "$HEAD_NOW" '[.[][] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector" and .commit_id == $h)] | length' <<<"$REVIEWS")
-            if [ "${CODEX_SEEN:-0}" -eq 0 ] && REACTIONS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/reactions"); then
+            if [ "${CODEX_SEEN:-0}" -eq 0 ] && REQ_IDS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/comments" \
+                | jq -r --arg h "$HEAD_NOW" '[.[][]? | select(.body | contains("autoblog-codex-heal-head: " + $h)) | .id] | .[]'); then
+              for cid in $REQ_IDS; do
+                n=$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}/reactions" \
+                  | jq '[.[] | select(.content == "+1" and (.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")] | length') || n=0
+                CODEX_SEEN=$(( ${CODEX_SEEN:-0} + ${n:-0} ))
+              done
+            fi
+            if [ "${CODEX_SEEN:-0}" -eq 0 ] \
+              && COMMITS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .commits) \
+              && FORCED=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/events" | jq '[.[][] | select(.event == "head_ref_force_pushed")] | length') \
+              && [ "$COMMITS" = "1" ] && [ "$FORCED" = "0" ] \
+              && REACTIONS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/reactions"); then
               CODEX_SEEN=$(jq -r --arg t "$APPROVED_AT" '[.[][] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector" and .content == "+1" and .created_at >= $t)] | length' <<<"$REACTIONS")
             fi
             if [ "${CODEX_SEEN:-0}" -gt 0 ]; then

@@ -283,24 +283,38 @@ export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending
   return { pending, failing };
 }
 
+type Reaction = { user?: { login?: string } | null; content?: string; created_at?: string };
+
 /**
- * Whether Codex has looked at this exact head: a review on it, a 👍 on the PR
- * after the head was approved (Codex reacts instead of reviewing when it has
- * nothing to say), or a usage-limit reply (it will not review at all).
+ * Whether Codex has looked at this exact head. Only signals bound to it count
+ * (merge-pending checks the same):
+ * - a review with `commit_id === head`;
+ * - a 👍 on an `@codex review` request that names this head (`headRequestComments`
+ *   picks those; Codex reacts instead of reviewing when it has nothing to say);
+ * - a 👍 on the PR itself after the approval, but only when `soleHead`: the PR
+ *   never had another head, so the reaction cannot be about an older one.
+ * A usage-limit reply after the approval means it will not review at all.
  */
 export function codexOnHead(
   head: string,
   approvedAt: string | undefined,
   reviews: Array<{ user?: { login?: string } | null; commit_id?: string; state?: string }>,
-  reactions: Array<{ user?: { login?: string } | null; content?: string; created_at?: string }>,
+  plusOnes: { request: Reaction[]; pr: Reaction[]; soleHead: boolean },
   comments: Array<{ user?: { login?: string } | null; body?: string; created_at?: string }>,
 ): "reviewed" | "limited" | "pending" {
   const isCodex = (u?: { login?: string } | null) => (u?.login ?? "").replace(/\[bot\]$/, "") === CODEX;
-  if (reviews.some((r) => isCodex(r.user) && r.commit_id === head)) return "reviewed";
   const after = (t?: string) => Boolean(approvedAt && t && t >= approvedAt);
-  if (reactions.some((r) => isCodex(r.user) && r.content === "+1" && after(r.created_at))) return "reviewed";
+  const thumbsUp = (r: Reaction) => isCodex(r.user) && r.content === "+1";
+  if (reviews.some((r) => isCodex(r.user) && r.commit_id === head)) return "reviewed";
+  if (plusOnes.request.some(thumbsUp)) return "reviewed";
+  if (plusOnes.soleHead && plusOnes.pr.some((r) => thumbsUp(r) && after(r.created_at))) return "reviewed";
   if (comments.some((c) => isCodex(c.user) && /usage limits/i.test(c.body ?? "") && after(c.created_at))) return "limited";
   return "pending";
+}
+
+/** `@codex review` requests bound to `head` by the SHA marker finalize and codex-heal add. */
+export function headRequestComments<T extends { body?: string }>(comments: T[], head: string): T[] {
+  return comments.filter((c) => (c.body ?? "").includes(`autoblog-codex-heal-head: ${head}`));
 }
 
 export type PublishVerdict =

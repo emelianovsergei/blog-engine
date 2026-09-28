@@ -10,6 +10,7 @@ import {
   ciSummary,
   classifyPr,
   codexOnHead,
+  headRequestComments,
   publishVerdict,
   codexSeverity,
   reportFindings,
@@ -285,17 +286,34 @@ assert.deepEqual(
 assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1"), run("tests", "success", "1")], []), { pending: [], failing: [] }, "Codex Heal helpers are ignored");
 
 const bot = { login: "chatgpt-codex-connector[bot]" };
-assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [{ user: bot, commit_id: "h1" }], [], []), "reviewed");
-assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [{ user: bot, commit_id: "h0" }], [], []), "pending", "a review of an older head does not count");
+const none = { request: [], pr: [], soleHead: true };
+const at = "2026-09-28T09:00:00Z";
+const up = (created_at: string) => ({ user: bot, content: "+1", created_at });
+assert.equal(codexOnHead("h1", at, [{ user: bot, commit_id: "h1" }], none, []), "reviewed");
+assert.equal(codexOnHead("h1", at, [{ user: bot, commit_id: "h0" }], none, []), "pending", "a review of an older head does not count");
 assert.equal(
-  codexOnHead("h1", "2026-09-28T09:00:00Z", [], [{ user: bot, content: "+1", created_at: "2026-09-28T09:05:00Z" }], []),
+  codexOnHead("h1", at, [], { ...none, request: [up("2026-09-28T09:05:00Z")] }, []),
   "reviewed",
-  "a 👍 after the approval means Codex found nothing",
+  "a 👍 on the request naming this head means Codex found nothing",
 );
-assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [], [{ user: bot, content: "+1", created_at: "2026-09-27T09:05:00Z" }], []), "pending");
 assert.equal(
-  codexOnHead("h1", "2026-09-28T09:00:00Z", [], [], [{ user: bot, body: "You have reached your Codex usage limits", created_at: "2026-09-28T09:03:00Z" }]),
+  codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-28T09:05:00Z")] }, []),
+  "reviewed",
+  "a 👍 on a PR that never had another head is about this head",
+);
+assert.equal(
+  codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-28T09:05:00Z")], soleHead: false }, []),
+  "pending",
+  "a PR-level 👍 cannot prove which head it was for once the head changed",
+);
+assert.equal(codexOnHead("h1", at, [], { ...none, pr: [up("2026-09-27T09:05:00Z")] }, []), "pending");
+assert.equal(
+  codexOnHead("h1", at, [], none, [{ user: bot, body: "You have reached your Codex usage limits", created_at: "2026-09-28T09:03:00Z" }]),
   "limited",
+);
+assert.deepEqual(
+  headRequestComments([{ id: 1, body: "@codex review" }, { id: 2, body: "@codex review\n\n<!-- autoblog-codex-heal-head: h1 -->" }, { id: 3, body: "<!-- autoblog-codex-heal-head: h0 -->" }], "h1").map((c) => c.id),
+  [2],
 );
 
 const green = { finalized: true, approvedOnHead: true, pendingLabel: true, ci: { pending: [], failing: [] }, codex: "reviewed" as const };

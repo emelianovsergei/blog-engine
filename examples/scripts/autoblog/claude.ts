@@ -61,6 +61,7 @@ import {
   ciSummary,
   classifyPr,
   codexOnHead,
+  headRequestComments,
   isClaudePostPr,
   publishVerdict,
   reportFindings,
@@ -1277,12 +1278,20 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
   const labels = pr.labels.map((l) => l.name);
   const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
   const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
-  const issueComments = githubList<{ body: string; user?: { login?: string }; created_at?: string }>(`${repo}/issues/${pr.number}/comments`);
+  const issueComments = githubList<{ id: number; body: string; user?: { login?: string }; created_at?: string }>(`${repo}/issues/${pr.number}/comments`);
   const held = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false");
   const reviews = githubList<{ user?: { login?: string }; commit_id?: string; state?: string; submitted_at?: string }>(`${repo}/pulls/${pr.number}/reviews`);
   const approvals = reviews.filter((r) => r.state === "APPROVED" && r.commit_id === head);
   const approvedAt = approvals.map((r) => r.submitted_at ?? "").sort().pop() || undefined;
-  const reactions = githubList<{ user?: { login?: string }; content?: string; created_at?: string }>(`${repo}/issues/${pr.number}/reactions`);
+  // Codex 👍s count only when bound to this head (see codexOnHead).
+  type Reaction = { user?: { login?: string }; content?: string; created_at?: string };
+  const requestReactions = headRequestComments(issueComments, head)
+    .flatMap((c) => githubList<Reaction>(`${repo}/issues/comments/${c.id}/reactions`));
+  const commits = (githubApi("GET", `${repo}/pulls/${pr.number}`) as { commits?: number }).commits;
+  const forcePushed = githubList<{ event?: string }>(`${repo}/issues/${pr.number}/events`)
+    .some((e) => e.event === "head_ref_force_pushed");
+  const soleHead = commits === 1 && !forcePushed;
+  const prReactions = soleHead ? githubList<Reaction>(`${repo}/issues/${pr.number}/reactions`) : [];
   const statuses = githubList<CommitStatus>(`${repo}/commits/${head}/statuses`);
   const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: CheckRun[] }).check_runs;
   const finalized = statuses.some((st) =>
@@ -1293,7 +1302,7 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
     approvedMinutes: approvedAt ? (Date.now() - Date.parse(approvedAt)) / 60_000 : undefined,
     pendingLabel: labels.includes("autoblog-approved-pending"),
     ci: ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized")),
-    codex: codexOnHead(head, approvedAt, reviews, reactions, issueComments),
+    codex: codexOnHead(head, approvedAt, reviews, { request: requestReactions, pr: prReactions, soleHead }, issueComments),
     held,
     paused: labels.includes("autoblog-hold"),
   };
