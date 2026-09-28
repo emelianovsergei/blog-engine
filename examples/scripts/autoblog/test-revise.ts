@@ -256,6 +256,21 @@ assert.deepEqual(
   "a cancelled run superseded by a later pass does not fail",
 );
 assert.deepEqual(ciSummary([run("tests", null, "1", "in_progress")], []).pending, ["tests"]);
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), { name: "tests", status: "queued", conclusion: null, started_at: null }], []).pending,
+  ["tests"],
+  "a queued rerun (no started_at yet) is newer than the finished run it replaces",
+);
+assert.deepEqual(
+  ciSummary([run("tests", "failure", "1"), run("tests", "success", "2")], []).failing,
+  ["tests"],
+  "a failure stays a failure after a passing rerun, as in merge-pending's gate",
+);
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), run("tests", "cancelled", "2")], []).failing,
+  ["tests"],
+  "a cancellation after the pass is not superseded",
+);
 assert.deepEqual(ciSummary([run("tests", "failure", "1")], []).failing, ["tests"]);
 assert.deepEqual(
   ciSummary([run("tests", "success", "1")], [{ context: "Vercel", state: "success" }, { context: "Vercel", state: "pending" }]).pending,

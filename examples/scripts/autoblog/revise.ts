@@ -251,23 +251,24 @@ export interface CommitStatus {
 }
 
 /**
- * CI on one commit, the way merge-pending reads it: the newest run of each
- * check decides (a cancelled run superseded by a later pass does not count),
- * skipped/neutral pass, and Codex Heal helpers are ignored.
+ * CI on one commit, classified exactly as merge-pending's rollup gate does:
+ * every run counts, except a cancelled run that a later passing run of the
+ * same check superseded. A failure stays a failure even after a passing
+ * rerun, an unfinished run (a queued rerun included) is pending, skipped and
+ * neutral pass, and Codex Heal helpers are ignored.
  */
 export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending: string[]; failing: string[] } {
-  const latest = new Map<string, CheckRun>();
-  for (const run of runs) {
-    if (run.name.startsWith("Heal PR ")) continue;
-    const seen = latest.get(run.name);
-    if (!seen || (run.started_at ?? "") > (seen.started_at ?? "")) latest.set(run.name, run);
-  }
+  const live = runs.filter((r) => !r.name.startsWith("Heal PR "));
+  const passed = (r: CheckRun) => r.status === "completed" && r.conclusion === "success";
+  const counted = live.filter((r) =>
+    !(r.conclusion === "cancelled" && r.started_at &&
+      live.some((p) => p.name === r.name && passed(p) && (p.started_at ?? "") > r.started_at!)));
   const pending: string[] = [];
   const failing: string[] = [];
   // No check runs yet: CI has not started. merge-pending refuses a head with
   // no checks, so this is "wait", never "green".
-  if (latest.size === 0) pending.push("CI (no check runs yet)");
-  for (const run of latest.values()) {
+  if (counted.length === 0) pending.push("CI (no check runs yet)");
+  for (const run of counted) {
     if (run.status !== "completed") pending.push(run.name);
     else if (!["success", "skipped", "neutral"].includes(run.conclusion ?? "")) failing.push(run.name);
   }

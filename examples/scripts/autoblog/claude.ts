@@ -816,14 +816,27 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
  */
 function editorialPolicy(): string {
   const dir = path.join(ROOT, "content", "our-work");
+  // The facts each entry documents (what was done, where, when), not just its
+  // slug: the reviewer checks a story's details against them.
   const jobs = fs.existsSync(dir)
-    ? fs.readdirSync(dir).filter((f) => f.endsWith(".mdx")).map((f) => f.replace(/\.mdx$/, "")).sort()
+    ? fs.readdirSync(dir).filter((f) => f.endsWith(".mdx")).sort().map((f) => {
+        let fm: Record<string, unknown> = {};
+        try {
+          fm = parseDocument(fs.readFileSync(path.join(dir, f), "utf-8")).frontmatter as unknown as Record<string, unknown>;
+        } catch {
+          // A malformed entry must not break every review: list it by slug.
+        }
+        const text = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
+        const caption = text(fm.caption).replace(/\s*Call \(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}.*$/i, "").slice(0, 220);
+        return `- ${text(fm.date) || "undated"}, ${text(fm.location) || "unknown location"}: ${text(fm.title) || f.replace(/\.mdx$/, "")}${caption ? `. ${caption}` : ""}`;
+      })
     : [];
   return [
     "Site editorial policy (blocking):",
-    `- A specific job, customer or call told as something ${SITE.review.business} actually did ("last October we found...", "a Citrus Heights homeowner called us", a dated visit, a named household, a meter reading from a real call) is fabricated first-hand experience unless it matches a documented job below. Report it as a BLOCKER under the contentQuality dimension, quote the sentence as the location, and suggest reframing it as a typical scenario ("a typical first-cold-morning call: ...").`,
+    `- A specific job, customer or call told as something ${SITE.review.business} actually did ("last October we found...", "a Citrus Heights homeowner called us", a dated visit, a named household, a meter reading from a real call) is fabricated first-hand experience unless a documented job below supports each of its details. Report it as a BLOCKER under the contentQuality dimension, quote the sentence as the location, and suggest reframing it as a typical scenario ("a typical first-cold-morning call: ...").`,
     "- Framing a scenario as typical, common or hypothetical is fine and is not an issue.",
-    `Documented jobs (content/our-work/): ${jobs.length ? jobs.join(", ") : "none"}.`,
+    "Documented jobs (content/our-work/):",
+    ...(jobs.length ? jobs : ["- none"]),
   ].join("\n");
 }
 
@@ -1339,7 +1352,9 @@ async function cmdPublish(): Promise<void> {
       todayMerged = recent.find((p) => p.merged_at && isToday(p));
     }
     results = open.map((pr) => ({ pr, ...publishState(pr) }));
-    const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait");
+    // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
+    // possibly within this run: keep waiting for it too.
+    const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
     if (!waiting || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 60_000));
   }
@@ -1400,7 +1415,7 @@ async function cmdPublish(): Promise<void> {
   console.log(`BROKEN: ${broken.join(" ")}`);
   if (held.length) process.exit(4);
   if (broken.length) process.exit(5);
-  if (results.some((r) => r.verdict === "wait") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
+  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────

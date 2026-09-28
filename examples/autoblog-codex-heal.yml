@@ -27,7 +27,7 @@ on:
   # retry catches a Grok fallback post whose Codex review arrived before it
   # was labelled approved-pending, so the review event alone missed it.
   schedule:
-    - cron: '41 17 * * *'   # ~10:40 AM PT, after merge-pending's daily fallback
+    - cron: '41 14 * * *'   # ~7:40 AM PT, before merge-pending's daily fallback (16:17 UTC)
   workflow_dispatch:
     inputs:
       pr:
