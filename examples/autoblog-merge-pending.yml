@@ -4,8 +4,12 @@
 # Human-override window without branch protection or GitHub-native
 # auto-merge — works on every plan including Free.
 #
-# Hourly tick at :20 so a :00 generate can finish review+CI. Delay is
-# AUTOBLOG_MERGE_DELAY (default 1h), not 24h. Change with:
+# Dispatched by the Claude routine (`autoblog:claude publish`) as soon as a
+# post's gates pass; GitHub ran the old hourly cron only every 3-10 hours, so a
+# ready post sat unpublished for most of a day. The daily cron below is only a
+# fallback. A PR merges once Codex has reviewed its current head (a review on
+# that commit, or a 👍 after it was approved); without that, it waits
+# AUTOBLOG_MERGE_DELAY (default 1h) after the approval. Change with:
 #   gh variable set AUTOBLOG_MERGE_DELAY --body 1h
 #   gh variable set AUTOBLOG_HOLD_ON_CODEX_P1 --body true
 #
@@ -19,8 +23,13 @@ name: Autoblog Merge Pending
 
 on:
   schedule:
-    - cron: '20 * * * *'   # hourly, :20 so a :00 generate can finish
+    - cron: '17 16 * * *'   # daily fallback (~9 AM PT); the routines dispatch it
   workflow_dispatch:
+
+# A routine dispatch can land while the fallback run is still merging.
+concurrency:
+  group: autoblog-merge-pending
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -142,9 +151,23 @@ jobs:
             START_TS=$(date -u -d "$START" +%s)
             AGE=$((NOW - START_TS))
 
-            if [ "$AGE" -lt "$THRESHOLD" ]; then
+            # Codex has looked at this exact head: a review on it, or a 👍 on
+            # the PR after it was approved (Codex reacts instead of reviewing
+            # when it has nothing to say). That ends the wait early; the
+            # P0/P1 and CI gates below still apply.
+            CODEX_SEEN=$(jq -r --arg h "$HEAD_NOW" '[.[][] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector" and .commit_id == $h)] | length' <<<"$REVIEWS")
+            if [ "${CODEX_SEEN:-0}" -eq 0 ] && REACTIONS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/reactions"); then
+              CODEX_SEEN=$(jq -r --arg t "$APPROVED_AT" '[.[][] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector" and .content == "+1" and .created_at >= $t)] | length' <<<"$REACTIONS")
+            fi
+            if [ "${CODEX_SEEN:-0}" -gt 0 ]; then
+              WHY="Codex reviewed head ${HEAD_NOW:0:10}"
+            else
+              WHY="age ${AGE}s >= $AUTOBLOG_MERGE_DELAY"
+            fi
+
+            if [ "$AGE" -lt "$THRESHOLD" ] && [ "${CODEX_SEEN:-0}" -eq 0 ]; then
               REMAIN=$(( (THRESHOLD - AGE + 59) / 60 ))
-              echo "PR #$NUM: too young (${REMAIN}m left in $AUTOBLOG_MERGE_DELAY window since ${APPROVED_AT:-createdAt})"
+              echo "PR #$NUM: too young (${REMAIN}m left in $AUTOBLOG_MERGE_DELAY window since ${APPROVED_AT:-createdAt}; Codex has not reviewed this head)"
               continue
             fi
 
@@ -197,13 +220,13 @@ jobs:
                 | select(.body | test("badge/P1-|P1 Badge"; "i"))
               ] | length' <<<"$THREADS")
             if [ "${P0:-0}" -gt 0 ]; then
-              echo "::warning::PR #$NUM: skipped — $P0 unresolved Codex P0 comment(s). autoblog-codex-heal should rewrite."
+              echo "::warning::PR #$NUM: skipped — $P0 unresolved Codex P0 comment(s). The Claude routine revises it (runbook step 0b)."
               continue
             fi
             HOLD_P1=$(printf '%s' "$AUTOBLOG_HOLD_ON_CODEX_P1" | tr '[:upper:]' '[:lower:]')
             case "$HOLD_P1" in true|1|yes)
               if [ "${P1:-0}" -gt 0 ]; then
-                echo "::warning::PR #$NUM: skipped — $P1 unresolved Codex P1 comment(s). autoblog-codex-heal should rewrite; or resolve the thread / set AUTOBLOG_HOLD_ON_CODEX_P1=false."
+                echo "::warning::PR #$NUM: skipped — $P1 unresolved Codex P1 comment(s). The Claude routine revises it (runbook step 0b); or resolve the thread / set AUTOBLOG_HOLD_ON_CODEX_P1=false."
                 continue
               fi
               ;;
@@ -218,7 +241,8 @@ jobs:
             #
             # rc 0 = all green; 8 = still pending; 1 = failing; a PR with no
             # checks at all also errors. Anything but 0 means "not yet" — leave
-            # it for the next hourly tick, and the watchdog escalates if it sticks.
+            # it for the next run (routine dispatch or daily fallback); the watchdog
+            # escalates if it sticks.
             # Pin the SHA the checks are about to be read for, so the merge can
             # refuse to publish anything else. Between `gh pr checks` and
             # `gh pr merge` a generator re-run, an auto-fix commit or a reviewer
@@ -373,7 +397,7 @@ jobs:
               ;;
             esac
 
-            echo "PR #$NUM: age ${AGE}s >= $AUTOBLOG_MERGE_DELAY, CI green, labels and Codex threads re-verified — marking ready + squash-merging."
+            echo "PR #$NUM: $WHY, CI green, labels and Codex threads re-verified — marking ready + squash-merging."
             # Belt-and-suspenders mark-ready: a draft PR can't be squash-merged
             # and GITHUB_TOKEN is FORBIDDEN from marking one ready, so BOTH the
             # mutation and the `gh pr ready` fallback use the PAT. The node-id

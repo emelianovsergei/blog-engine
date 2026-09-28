@@ -22,8 +22,10 @@ name: Autoblog Codex Heal
 on:
   pull_request_review:
     types: [submitted]
-  schedule:
-    - cron: '25 * * * *'   # hourly, :25 — after merge-pending at :20
+  # No schedule: Claude-written posts (the daily path) are revised by the
+  # Claude routine (AUTOBLOG_CLAUDE.md step 0b), which this workflow skips,
+  # and an hourly tick spent runner minutes on nothing. Grok fallback posts
+  # still heal on Codex's review event or a manual dispatch.
   workflow_dispatch:
     inputs:
       pr:

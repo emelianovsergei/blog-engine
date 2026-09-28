@@ -233,3 +233,101 @@ export function reportFindings(report: Record<string, unknown>, reasons: string[
   }
   return findings;
 }
+
+// ─── publish ────────────────────────────────────────────────────────────────
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  started_at?: string | null;
+}
+
+export interface CommitStatus {
+  context: string;
+  state: string;
+  description?: string | null;
+  creator?: { login?: string } | null;
+}
+
+/**
+ * CI on one commit, the way merge-pending reads it: the newest run of each
+ * check decides (a cancelled run superseded by a later pass does not count),
+ * skipped/neutral pass, and Codex Heal helpers are ignored.
+ */
+export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending: string[]; failing: string[] } {
+  const latest = new Map<string, CheckRun>();
+  for (const run of runs) {
+    if (run.name.startsWith("Heal PR ")) continue;
+    const seen = latest.get(run.name);
+    if (!seen || (run.started_at ?? "") > (seen.started_at ?? "")) latest.set(run.name, run);
+  }
+  const pending: string[] = [];
+  const failing: string[] = [];
+  for (const run of latest.values()) {
+    if (run.status !== "completed") pending.push(run.name);
+    else if (!["success", "skipped", "neutral"].includes(run.conclusion ?? "")) failing.push(run.name);
+  }
+  // Statuses come newest first; the first one per context is current.
+  const seen = new Set<string>();
+  for (const s of statuses) {
+    if (seen.has(s.context)) continue;
+    seen.add(s.context);
+    if (s.state === "pending") pending.push(s.context);
+    else if (s.state !== "success") failing.push(s.context);
+  }
+  return { pending, failing };
+}
+
+/**
+ * Whether Codex has looked at this exact head: a review on it, a 👍 on the PR
+ * after the head was approved (Codex reacts instead of reviewing when it has
+ * nothing to say), or a usage-limit reply (it will not review at all).
+ */
+export function codexOnHead(
+  head: string,
+  approvedAt: string | undefined,
+  reviews: Array<{ user?: { login?: string } | null; commit_id?: string; state?: string }>,
+  reactions: Array<{ user?: { login?: string } | null; content?: string; created_at?: string }>,
+  comments: Array<{ user?: { login?: string } | null; body?: string; created_at?: string }>,
+): "reviewed" | "limited" | "pending" {
+  const isCodex = (u?: { login?: string } | null) => (u?.login ?? "").replace(/\[bot\]$/, "") === CODEX;
+  if (reviews.some((r) => isCodex(r.user) && r.commit_id === head)) return "reviewed";
+  const after = (t?: string) => Boolean(approvedAt && t && t >= approvedAt);
+  if (reactions.some((r) => isCodex(r.user) && r.content === "+1" && after(r.created_at))) return "reviewed";
+  if (comments.some((c) => isCodex(c.user) && /usage limits/i.test(c.body ?? "") && after(c.created_at))) return "limited";
+  return "pending";
+}
+
+export type PublishVerdict =
+  | "ready" // every gate passed: merge-pending can merge it now
+  | "delayed" // gates passed but Codex is out of quota: merge-pending waits out its delay
+  | "held" // a blocking finding: revise it (step 0b)
+  | "blocked" // held, but a human must act (paused, human-approved, revision cap)
+  | "broken" // CI failed on the finalized head
+  | "wait"; // finalize, the review, CI or Codex is still running
+
+export interface PublishState {
+  finalized: boolean;
+  approvedOnHead: boolean;
+  /** Minutes since the head was approved; merge-pending's delay counts from here. */
+  approvedMinutes?: number;
+  pendingLabel: boolean;
+  ci: { pending: string[]; failing: string[] };
+  codex: "reviewed" | "limited" | "pending";
+  held?: HeldPr;
+}
+
+/**
+ * `delayMinutes` is merge-pending's AUTOBLOG_MERGE_DELAY: once it has passed,
+ * merge-pending merges without a Codex review, so a Codex that never answers
+ * does not hold a post forever.
+ */
+export function publishVerdict(s: PublishState, delayMinutes = 60): PublishVerdict {
+  if (s.held) return s.held.blocked ? "blocked" : "held";
+  if (!s.finalized) return "wait";
+  if (s.ci.failing.length) return "broken";
+  if (!s.approvedOnHead || !s.pendingLabel || s.ci.pending.length) return "wait";
+  if (s.codex === "reviewed" || (s.approvedMinutes ?? 0) >= delayMinutes) return "ready";
+  return s.codex === "limited" ? "delayed" : "wait";
+}

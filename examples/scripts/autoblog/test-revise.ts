@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import {
   MAX_REVISIONS,
   REVISION_MARKER,
+  ciSummary,
   classifyPr,
+  codexOnHead,
+  publishVerdict,
   codexSeverity,
   reportFindings,
   revisionCount,
@@ -239,5 +242,53 @@ assert.equal(
   "a timeout note, the landed revision and a retry are one revision",
 );
 assert.equal(revisionCount([{ body: `${REVISION_MARKER} revision 1 of 2` }, { body: `${REVISION_MARKER} revision 2 of 2` }]), 2);
+
+// ── publish ─────────────────────────────────────────────────────────────────
+const run = (name: string, conclusion: string | null, started: string, status = "completed") => ({ name, status, conclusion, started_at: started });
+assert.deepEqual(
+  ciSummary([run("tests", "success", "1"), run("review", "skipped", "1")], [{ context: "Vercel", state: "success" }]),
+  { pending: [], failing: [] },
+  "green and skipped checks pass",
+);
+assert.deepEqual(
+  ciSummary([run("claude-reviewed", "cancelled", "1"), run("claude-reviewed", "success", "2")], []).failing,
+  [],
+  "a cancelled run superseded by a later pass does not fail",
+);
+assert.deepEqual(ciSummary([run("tests", null, "1", "in_progress")], []).pending, ["tests"]);
+assert.deepEqual(ciSummary([run("tests", "failure", "1")], []).failing, ["tests"]);
+assert.deepEqual(
+  ciSummary([], [{ context: "Vercel", state: "success" }, { context: "Vercel", state: "pending" }]).pending,
+  [],
+  "only the newest status per context counts",
+);
+assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1")], []).failing, [], "Codex Heal helpers are ignored");
+
+const bot = { login: "chatgpt-codex-connector[bot]" };
+assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [{ user: bot, commit_id: "h1" }], [], []), "reviewed");
+assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [{ user: bot, commit_id: "h0" }], [], []), "pending", "a review of an older head does not count");
+assert.equal(
+  codexOnHead("h1", "2026-09-28T09:00:00Z", [], [{ user: bot, content: "+1", created_at: "2026-09-28T09:05:00Z" }], []),
+  "reviewed",
+  "a 👍 after the approval means Codex found nothing",
+);
+assert.equal(codexOnHead("h1", "2026-09-28T09:00:00Z", [], [{ user: bot, content: "+1", created_at: "2026-09-27T09:05:00Z" }], []), "pending");
+assert.equal(
+  codexOnHead("h1", "2026-09-28T09:00:00Z", [], [], [{ user: bot, body: "You have reached your Codex usage limits", created_at: "2026-09-28T09:03:00Z" }]),
+  "limited",
+);
+
+const green = { finalized: true, approvedOnHead: true, pendingLabel: true, ci: { pending: [], failing: [] }, codex: "reviewed" as const };
+assert.equal(publishVerdict(green), "ready");
+assert.equal(publishVerdict({ ...green, codex: "limited" }), "delayed");
+assert.equal(publishVerdict({ ...green, codex: "pending" }), "wait");
+assert.equal(publishVerdict({ ...green, codex: "pending", approvedMinutes: 61 }), "ready", "past the merge delay, a silent Codex does not hold the post");
+assert.equal(publishVerdict({ ...green, codex: "limited", approvedMinutes: 30 }), "delayed");
+assert.equal(publishVerdict({ ...green, codex: "limited", approvedMinutes: 60 }), "ready");
+assert.equal(publishVerdict({ ...green, finalized: false }), "wait");
+assert.equal(publishVerdict({ ...green, ci: { pending: [], failing: ["tests"] } }), "broken");
+held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], []);
+assert.equal(publishVerdict({ ...green, held }), "held", "a Codex P1 sends it back to step 0b");
+assert.equal(publishVerdict({ ...green, held: held && { ...held, blocked: "autoblog-hold" } }), "blocked");
 
 console.log("✔ revise helper tests passed");

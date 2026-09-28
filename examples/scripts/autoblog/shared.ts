@@ -196,6 +196,8 @@ export function relayClient(
   promptPath: string,
   answerPath?: string,
   label = "claude (session relay)",
+  // Site rules appended to the engine's prompt, ahead of the answer schema.
+  appendix?: string,
 ): GeminiLike & {
   pending: boolean;
 } {
@@ -210,6 +212,7 @@ export function relayClient(
         const text = [
           String(req.contents),
           "",
+          ...(appendix ? [appendix.trim(), ""] : []),
           ...(schema
             ? [
                 "Answer with ONE JSON object and nothing else (no prose, no code fences). It must match this JSON schema:",
