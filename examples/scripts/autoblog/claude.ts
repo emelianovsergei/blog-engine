@@ -1301,8 +1301,14 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
   );
   const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: Array<CheckRun & { check_suite?: { id?: number } }> })
     .check_runs.map((r) => ({ ...r, workflow: workflows.get(r.check_suite?.id ?? -1) }));
-  const finalized = statuses.some((st) =>
+  // Finalized when any commit on the branch carries finalize's status, newest
+  // first, as autoblog-review checks: a verified `[autoblog-cifix]` commit or a
+  // human-approved edit may sit on top of the finalize commit.
+  const finalizeStatus = (list: CommitStatus[]) => list.some((st) =>
     st.context === "autoblog/finalized" && st.state === "success" && st.creator?.login === "github-actions[bot]");
+  const finalized = finalizeStatus(statuses) ||
+    githubList<{ sha: string }>(`${repo}/pulls/${pr.number}/commits`).reverse().slice(1)
+      .some((c) => finalizeStatus(githubList<CommitStatus>(`${repo}/commits/${c.sha}/statuses`)));
   const state = {
     finalized,
     approvedOnHead: approvals.length > 0,
