@@ -271,9 +271,9 @@ export function ciSummary(runs: CheckRun[], statuses: CommitStatus[]): { pending
       live.some((p) => sameCheck(p, r) && passed(p) && stamp(p) > stamp(r))));
   const pending: string[] = [];
   const failing: string[] = [];
-  // No check runs yet: CI has not started. merge-pending refuses a head with
-  // no checks, so this is "wait", never "green".
-  if (counted.length === 0) pending.push("CI (no check runs yet)");
+  // No checks of either kind yet: CI has not started. merge-pending refuses a
+  // head with an empty rollup, so this is "wait", never "green".
+  if (counted.length === 0 && statuses.length === 0) pending.push("CI (no checks yet)");
   for (const run of counted) {
     if (run.status !== "completed") pending.push(run.name);
     else if (!["success", "skipped", "neutral"].includes(run.conclusion ?? "")) failing.push(run.name);

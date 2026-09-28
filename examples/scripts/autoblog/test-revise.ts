@@ -278,10 +278,11 @@ assert.deepEqual(
   [],
   "only the newest status per context counts",
 );
+assert.deepEqual(ciSummary([], []).pending, ["CI (no checks yet)"], "no checks means CI has not started, not that it passed");
 assert.deepEqual(
-  ciSummary([], [{ context: "Vercel", state: "success" }]).pending,
-  ["CI (no check runs yet)"],
-  "no check runs means CI has not started, not that it passed",
+  ciSummary([], [{ context: "ci/status-only", state: "success" }]),
+  { pending: [], failing: [] },
+  "CI reported only through commit statuses counts, as in merge-pending's rollup",
 );
 assert.deepEqual(ciSummary([run("Heal PR 12", "failure", "1"), run("tests", "success", "1")], []), { pending: [], failing: [] }, "Codex Heal helpers are ignored");
 assert.deepEqual(
