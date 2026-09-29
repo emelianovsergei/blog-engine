@@ -29,6 +29,8 @@ export interface HeldPr {
   revisions: number;
   findings: Finding[];
   blocked?: string;
+  /** Revised MAX_REVISIONS times and still held: the routine closes it (`revise --list`). */
+  capped?: boolean;
 }
 
 export function codexSeverity(body: string): string | undefined {
@@ -69,10 +71,24 @@ export interface ReviewComment {
  * comments, so a retried `revise --resolve` (or a timeout note followed by the
  * landed revision) never spends the allowance twice.
  */
-export function revisionCount(issueComments: Array<{ body: string }>): number {
+export type MarkerComment = { body: string; author_association?: string; user?: { login?: string } | null };
+
+/** A revision marker the routine itself posted (see revisionCount). */
+export function isRoutineMarker(c: MarkerComment, markerAuthor?: string): boolean {
+  if (!c.body.includes(REVISION_MARKER)) return false;
+  return markerAuthor ? c.user?.login === markerAuthor : c.author_association === "OWNER";
+}
+
+/**
+ * Revisions already made, from the routine's marker comments. The count closes
+ * a post at the cap, so only the routine's own markers count: those posted by
+ * `markerAuthor` (the login the routine posts as). Without it, only the repo
+ * owner's; MEMBER and COLLABORATOR do not prove write access.
+ */
+export function revisionCount(issueComments: MarkerComment[], markerAuthor?: string): number {
   const seen = new Set<string>();
   for (const c of issueComments) {
-    if (!c.body.includes(REVISION_MARKER)) continue;
+    if (!isRoutineMarker(c, markerAuthor)) continue;
     seen.add(c.body.match(/revision (\d+) of/i)?.[1] ?? c.body);
   }
   return seen.size;
@@ -92,10 +108,12 @@ export function classifyPr(
   pr: OpenPr,
   threads: CcrThread[],
   reviewComments: ReviewComment[],
-  issueComments: Array<{ body: string }>,
+  issueComments: MarkerComment[],
   // merge-pending's AUTOBLOG_HOLD_ON_CODEX_P1: when a site lets a current P1
   // ship, reviving that post would only reset a merge-ready PR.
   holdOnP1 = true,
+  /** The login the routine posts revision markers as (see revisionCount). */
+  markerAuthor?: string,
 ): HeldPr | undefined {
   if (!isClaudePostPr(pr)) return undefined;
   const labels = pr.labels.map((l) => l.name);
@@ -119,15 +137,17 @@ export function classifyPr(
   if (labels.includes("autoblog-review-failed")) reasons.push("session review failed");
   if (labels.includes("autoblog-link-repair-needed")) reasons.push("dead link");
   if (reasons.length === 0) return undefined;
-  const revisions = revisionCount(issueComments);
+  const revisions = revisionCount(issueComments, markerAuthor);
   let blocked: string | undefined;
   if (labels.includes("autoblog-hold")) blocked = "autoblog-hold (a human paused it)";
   else if (labels.includes("autoblog-human-approved") || labels.includes("autoblog-review-failed-overridden")) {
     blocked = "a human approved a head of it";
-  } else if (revisions >= MAX_REVISIONS) blocked = `already revised ${revisions} times — needs a human`;
+  } else if (revisions >= MAX_REVISIONS) blocked = `already revised ${revisions} times`;
   return {
     number: pr.number, branch: pr.head.ref, headSha: pr.head.sha, title: pr.title,
     reasons: [...new Set(reasons)], revisions, findings, blocked,
+    capped: blocked !== undefined && revisions >= MAX_REVISIONS && !labels.includes("autoblog-hold") &&
+      !labels.includes("autoblog-human-approved") && !labels.includes("autoblog-review-failed-overridden"),
   };
 }
 

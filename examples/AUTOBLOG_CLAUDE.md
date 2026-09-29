@@ -68,7 +68,7 @@ could not unlink (`autoblog-link-repair-needed`). Nothing else fixes those,
 so do it first.
 
 ```bash
-npm run -s autoblog:claude -- revise --list     # last line: REVISE: <PR numbers>
+npm run -s autoblog:claude -- revise --list     # lines: REVISE: <PR numbers>, CLOSED: <PR numbers>
 ```
 
 For each number on the `REVISE:` line (at most two per run):
@@ -115,9 +115,12 @@ if you moved off it), so a late finalize of an earlier attempt never counts. It 
 (P0/P1) Codex threads; a P2 you left alone stays open.
 
 `revise --list` skips a PR a human paused (`autoblog-hold`) or approved
-(`autoblog-human-approved`), and one already revised twice: those need a
-human, so name them in your report. A revision whose review still fails is
-handed off anyway, like a new post.
+(`autoblog-human-approved`): name those in your report. A post already revised
+twice that is still held is closed right there (`CLOSED:` line, label
+`autoblog-abandoned`, branch kept): it will not be published, and nothing
+waits on a human. Name each closed post and its blocking finding in your
+report. A revision whose review still fails is handed off anyway, like a new
+post.
 
 A current Codex P1 holds a post only while `AUTOBLOG_HOLD_ON_CODEX_P1` is not
 `false`, the same default as merge-pending. The session cannot read repository
@@ -346,15 +349,15 @@ It waits for today's PR to exist and for every open Claude post to clear its
 gates (finalized, Claude review approved the head, CI green, Codex reviewed the
 head, or the 1-hour merge delay has passed), then dispatches
 `autoblog-merge-pending.yml`, which merges with the same gates, and waits for
-the merge. It prints `TODAY: open|merged|none` and `PUBLISHED: #N ...` per
+the merge. It prints `TODAY: open|merged|closed|none` (`closed`: today's post was closed after its last revision; do not write another) and `PUBLISHED: #N ...` per
 merged post.
 
 | Exit | Meaning | Do |
 | --- | --- | --- |
 | 0 | Published (or nothing left to do) | Report. |
-| 4 | `HELD:` lists posts Codex (or a label) now holds | Revise each one exactly as in step 0b, then run `publish` again. The 2-revision cap still applies. |
+| 4 | `HELD:` lists posts Codex (or a label) now holds | Revise each one exactly as in step 0b, then run `publish` again. The 2-revision cap still applies: `revise --list` closes a post held after two revisions. |
 | 5 | `BROKEN:` lists posts whose CI failed | Read the failing job's log (`GET /repos/{owner}/{repo}/actions/jobs/{id}/logs`). If the post causes it, `revise --pr N --force`, fix, and continue as in step 0b. Otherwise report it. |
-| 6 | `BLOCKED:` lists posts only a human can move (`autoblog-hold`, a human-approved head, or two revisions spent) | Name each one and why at the top of the report. Do not revise them. |
+| 6 | `BLOCKED:` lists posts only a human can move (`autoblog-hold` or a human-approved head) | Name each one and why at the top of the report. Do not revise them. A post held after two revisions is closed instead and listed on `CLOSED:`; name those too. |
 | 3 | Still waiting after 45 min (Codex slow, CI queued) | Report it. The morning sweep publishes it. |
 
 A Codex that is out of quota never reviews: `publish` reports those posts as

@@ -63,6 +63,7 @@ import {
   codexOnHead,
   headRequestComments,
   isClaudePostPr,
+  isRoutineMarker,
   publishVerdict,
   reportFindings,
   revisionCount,
@@ -73,6 +74,7 @@ import {
   type CommitStatus,
   type Finding,
   type HeldPr,
+  type MarkerComment,
   type OpenPr,
   type PublishVerdict,
   type ReviewComment,
@@ -1009,6 +1011,22 @@ function githubApi(method: string, apiPath: string, body?: unknown): unknown {
   return out.trim() ? JSON.parse(out) : {};
 }
 
+let routineLoginCache: string | null | undefined;
+/**
+ * The login this session posts as (revision markers included), or undefined
+ * when it cannot be read; revisionCount then trusts only the repo owner.
+ */
+function routineLogin(): string | undefined {
+  if (routineLoginCache === undefined) {
+    try {
+      routineLoginCache = (githubApi("GET", "/user") as { login?: string }).login ?? null;
+    } catch {
+      routineLoginCache = null;
+    }
+  }
+  return routineLoginCache ?? undefined;
+}
+
 /** Every page of a list endpoint: a long-lived PR can carry more than 100 comments. */
 function githubList<T>(apiPath: string): T[] {
   const all: T[] = [];
@@ -1025,16 +1043,23 @@ function heldPrs(): HeldPr[] {
   const open = githubList<OpenPr>(`${repo}/pulls?state=open`);
   const held: HeldPr[] = [];
   for (const pr of open) {
-    if (!isClaudePostPr(pr)) continue;
-    const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
-    const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
-    const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
-    // The session cannot read repository variables (the proxy refuses the
-    // Actions API), so the routine's environment carries the same setting.
-    const entry = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false");
+    const entry = heldPr(pr);
     if (entry) held.push(entry);
   }
   return held;
+}
+
+/** Whether one open PR is held, read fresh from GitHub (see classifyPr). */
+function heldPr(pr: OpenPr): HeldPr | undefined {
+  if (!isClaudePostPr(pr)) return undefined;
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
+  const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
+  const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
+  // The session cannot read repository variables (the proxy refuses the
+  // Actions API), so the routine's environment carries the same setting.
+  return classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false", routineLogin());
 }
 
 /** Noon Pacific on the post's own date: its frontmatter date stays that day. */
@@ -1060,11 +1085,85 @@ function cmdReviseList(): void {
     console.log("REVISE:");
     return;
   }
+  const closed: number[] = [];
   for (const pr of held) {
     console.log(`#${pr.number} ${pr.branch} — ${pr.reasons.join(", ")}${pr.blocked ? ` — SKIP: ${pr.blocked}` : ""}`);
+    if (pr.capped) {
+      try {
+        if (closeCappedPost(pr)) closed.push(pr.number);
+      } catch (error) {
+        console.log(`#${pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
+      }
+    }
   }
   const todo = held.filter((pr) => !pr.blocked).map((pr) => pr.number);
   console.log(`REVISE: ${todo.join(" ")}`);
+  console.log(`CLOSED: ${closed.join(" ")}`);
+}
+
+/**
+ * A post still held after MAX_REVISIONS revisions is closed, not left open for
+ * a human: nobody checks the PRs, and each revision so far drew a new blocking
+ * finding. The branch stays, so the text and review history are kept, and the
+ * `autoblog-abandoned` label marks why it never shipped.
+ */
+function closeCappedPost(pr: HeldPr): boolean {
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  // Re-classify right before closing, from fresh PR state, threads and
+  // comments: since the heldPrs() snapshot a human may have paused or approved
+  // it, a blocking thread may have been resolved, or a revision may have landed.
+  const now = githubApi("GET", `${repo}/pulls/${pr.number}`) as OpenPr & { state?: string };
+  const fresh = now.state === "open" && now.head?.sha === pr.headSha ? heldPr(now) : undefined;
+  if (!fresh?.capped) {
+    const why = now.state !== "open" ? "it is no longer open"
+      : now.head?.sha !== pr.headSha ? "its head changed"
+      : !fresh ? "nothing holds it any more"
+      : `it is no longer closable (${fresh.blocked ?? "under the cap"})`;
+    console.log(`#${pr.number}: not closed — ${why} since it was listed.`);
+    return false;
+  }
+  pr = fresh;
+  // A review-failed or dead-link hold carries its details in the run report,
+  // not in classifyPr's findings (revise prepare reads it the same way).
+  let reported: Finding[] = [];
+  try {
+    const runKey = pr.branch.replace(/^blog\//, "");
+    const file = githubApi("GET", `${repo}/contents/data/blog-generation-runs/${runKey}.json?ref=${encodeURIComponent(pr.branch)}`) as { content?: string };
+    if (file.content) reported = reportFindings(JSON.parse(Buffer.from(file.content, "base64").toString("utf-8")), pr.reasons);
+  } catch {
+    // No report: the reasons line still says why it was held.
+  }
+  const open = [...pr.findings, ...reported].filter((f) => f.blocking)
+    .map((f) => `- ${f.severity ?? f.kind}: ${f.text.split("\n")[0].replace(/\*\*/g, "").trim()}`);
+  const body = [
+    `**Autoblog: closed after ${pr.revisions} revisions.** The post is still held (${pr.reasons.join(", ")}), and the routine revises a post at most ${MAX_REVISIONS} times, so it will not be published.`,
+    ...(open.length ? ["", "Still blocking:", ...open] : []),
+    "",
+    `The branch \`${pr.branch}\` is kept. To publish it anyway, fix it on that branch, reopen this PR and remove \`autoblog-abandoned\`.`,
+    "",
+    "---",
+    "_Generated by [Claude Code](https://claude.ai/code)_",
+  ].join("\n");
+  // Label, then close, then comment. The label is what the watchdog counts,
+  // so it must land before the close: a closed PR is no longer listed, so a
+  // failure after the close would never be retried. A failed label or close
+  // throws with nothing posted, and the next run retries both cleanly (adding
+  // a label twice is harmless). A 422 on creating it means it already exists.
+  try {
+    githubApi("POST", `${repo}/labels`, { name: "autoblog-abandoned", color: "8a8a8a", description: "Closed by the autoblog routine after its last allowed revision" });
+  } catch {
+    // Already exists, or no permission to create it; adding it below reports the real failure.
+  }
+  githubApi("POST", `${repo}/issues/${pr.number}/labels`, { labels: ["autoblog-abandoned"] });
+  githubApi("PATCH", `${repo}/pulls/${pr.number}`, { state: "closed" });
+  try {
+    githubApi("POST", `${repo}/issues/${pr.number}/comments`, { body });
+  } catch (error) {
+    console.log(`#${pr.number}: closed, but could not post the reason (${String(error).split("\n")[0]}).`);
+  }
+  console.log(`#${pr.number}: closed after ${pr.revisions} revisions (autoblog-abandoned).`);
+  return true;
 }
 
 function cmdRevisePrepare(prNumber: number, force: boolean): void {
@@ -1084,7 +1183,7 @@ function cmdRevisePrepare(prNumber: number, force: boolean): void {
     pr = {
       number: prNumber, branch: raw.head?.ref ?? "", headSha: raw.head?.sha ?? "", title: raw.title,
       reasons: ["revision requested"],
-      revisions: revisionCount(comments), findings: [],
+      revisions: revisionCount(comments, routineLogin()), findings: [],
     };
   }
   if (!pr) throw new Error(`#${prNumber} is not a held autoblog PR (see \`revise --list\`)`);
@@ -1224,8 +1323,11 @@ async function cmdReviseResolve(): Promise<void> {
   // Idempotent: a retry after the revision was already recorded at this head
   // only finishes the blocking threads that are still open (a transient API
   // failure the first time); it never replies twice or records it twice.
-  const recorded = githubList<{ body: string }>(`/repos/${owner}/${name}/issues/${rev.pr}/comments`);
-  const already = recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
+  // Only the routine's own marker counts, as in revisionCount: a look-alike
+  // from someone else must not stop the real one being recorded.
+  const recorded = githubList<MarkerComment & { body: string }>(`/repos/${owner}/${name}/issues/${rev.pr}/comments`);
+  const markerAuthor = routineLogin();
+  const already = recorded.some((c) => isRoutineMarker(c, markerAuthor) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
   const threads = githubApi("GET", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/review_threads`) as CcrThread[];
   const open = (id: number) => !threads.some((t) => t.resolved && t.comment_ids.includes(id));
   let failed = 0;
@@ -1279,7 +1381,7 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
   const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
   const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
   const issueComments = githubList<{ id: number; body: string; user?: { login?: string }; created_at?: string }>(`${repo}/issues/${pr.number}/comments`);
-  const held = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false");
+  const held = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false", routineLogin());
   const reviews = githubList<{ user?: { login?: string }; commit_id?: string; state?: string; submitted_at?: string }>(`${repo}/pulls/${pr.number}/reviews`);
   const approvals = reviews.filter((r) => r.state === "APPROVED" && r.commit_id === head);
   const approvedAt = approvals.map((r) => r.submitted_at ?? "").sort().pop() || undefined;
@@ -1365,18 +1467,47 @@ async function cmdPublish(): Promise<void> {
   let results: Array<{ pr: OpenPr; verdict: PublishVerdict; detail: string }> = [];
   let todayMerged: (OpenPr & { merged_at?: string | null }) | undefined;
   let todayOpen = false;
+  const closed: number[] = [];
+  // Today's post closed after its last revision: handled, not missing.
+  let todayClosed: number | undefined;
+  // A post still held after its last revision is closed here too, as in
+  // revise --list, so publish never reports it as waiting on a human.
+  const closeIfCapped = (pr: OpenPr): boolean => {
+    const held = heldPr(pr);
+    if (!held?.capped) return false;
+    try {
+      if (!closeCappedPost(held)) return false;
+    } catch (error) {
+      console.log(`#${pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
+      return false;
+    }
+    closed.push(pr.number);
+    if (isToday(pr)) todayClosed = pr.number;
+    return true;
+  };
   for (;;) {
     // Every open Claude post, so a post revised in step 0b ships in the same run.
     const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
     todayOpen = open.some(isToday);
     if (!todayOpen && !todayMerged) {
-      const recent = githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>;
+      // Today's own branch first (exact, so no page limit can hide it), then
+      // recent closed PRs for a suffixed variant of it.
+      const exact = githubApi("GET", `${repo}/pulls?state=closed&head=${encodeURIComponent(`${owner}:${prefix}`)}&per_page=100`) as Array<OpenPr & { merged_at?: string | null }>;
+      const recent = [
+        ...exact,
+        ...(githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>),
+      ];
       todayMerged = recent.find((p) => p.merged_at && isToday(p));
+      // Closed by an earlier run (revise --list) after its last revision.
+      todayClosed ??= recent.find((p) => !p.merged_at && isToday(p) && p.labels.some((l) => l.name === "autoblog-abandoned"))?.number;
     }
     results = open.map((pr) => ({ pr, ...publishState(pr) }));
+    for (const r of results.filter((x) => x.verdict === "blocked")) closeIfCapped(r.pr);
+    results = results.filter((r) => !closed.includes(r.pr.number));
+    todayOpen = results.some((r) => isToday(r.pr));
     // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
     // possibly within this run: keep waiting for it too.
-    const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
+    const waiting = (!sweep && !todayOpen && !todayMerged && !todayClosed) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
     if (!waiting || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 60_000));
   }
@@ -1388,7 +1519,9 @@ async function cmdPublish(): Promise<void> {
       ? `TODAY: merged #${todayMerged.number} at ${todayMerged.merged_at}`
       : todayPr
         ? `TODAY: open #${todayPr.pr.number}`
-        : `TODAY: none (no open or merged PR for ${prefix})`,
+        : todayClosed
+          ? `TODAY: closed #${todayClosed} (autoblog-abandoned after its last revision)`
+          : `TODAY: none (no open or merged PR for ${prefix})`,
   );
   for (const r of results) console.log(`#${r.pr.number} ${r.pr.head.ref} — ${r.verdict}: ${r.detail}`);
   const ready = results.filter((r) => r.verdict === "ready");
@@ -1428,6 +1561,10 @@ async function cmdPublish(): Promise<void> {
       continue;
     }
     const again = publishState(fresh);
+    if (again.verdict === "blocked" && closeIfCapped(fresh)) {
+      results.splice(i, 1);
+      continue;
+    }
     results[i] = { pr: fresh, verdict: again.verdict === "ready" ? "wait" : again.verdict, detail: again.detail };
     console.log(`#${num} after dispatch — ${results[i].verdict}: ${again.detail}`);
   }
@@ -1438,10 +1575,11 @@ async function cmdPublish(): Promise<void> {
   console.log(`HELD: ${held.join(" ")}`);
   console.log(`BROKEN: ${broken.join(" ")}`);
   console.log(`BLOCKED: ${blocked.join(" ")}`);
+  console.log(`CLOSED: ${closed.join(" ")}`);
   if (held.length) process.exit(4);
   if (broken.length) process.exit(5);
   if (blocked.length) process.exit(6);
-  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
+  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged && !todayClosed)) process.exit(3);
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────

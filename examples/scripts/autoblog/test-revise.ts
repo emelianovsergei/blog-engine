@@ -11,6 +11,7 @@ import {
   classifyPr,
   codexOnHead,
   headRequestComments,
+  isRoutineMarker,
   publishVerdict,
   codexSeverity,
   reportFindings,
@@ -101,11 +102,19 @@ assert.match(
   classifyPr(pr(["autoblog-review-failed-overridden"]), [thread(1)], [codex(1, "P1")], [])?.blocked ?? "",
   /human approved/,
 );
-const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({ body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**` }));
+const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({
+  body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**`,
+  author_association: "OWNER",
+}));
 held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks);
 assert.equal(held?.revisions, MAX_REVISIONS);
-assert.match(held?.blocked ?? "", /needs a human/, "capped after MAX_REVISIONS");
+assert.match(held?.blocked ?? "", /already revised/, "capped after MAX_REVISIONS");
+assert.equal(held?.capped, true, "a capped post is closed by `revise --list`");
 assert.equal(classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks.slice(1))?.blocked, undefined, "one revision is not the cap");
+assert.equal(classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks.slice(1))?.capped, false);
+assert.equal(classifyPr(pr(["autoblog-hold"]), [thread(1)], [codex(1, "P1")], marks)?.capped, false, "a human pause is never closed");
+assert.equal(classifyPr(pr(["autoblog-human-approved"]), [thread(1)], [codex(1, "P1")], marks)?.capped, false);
+assert.equal(classifyPr(pr([]), [], [], marks), undefined, "a capped post with nothing blocking is not held, so not closed");
 
 // ── revisionPlan ────────────────────────────────────────────────────────────
 const reportPlan = { title: "Old", faqs: [{ question: "q", answer: "old" }], tags: ["a"], imagePrompt: "p", angle: "x" };
@@ -234,15 +243,52 @@ assert.deepEqual(
 // ── revisionCount ───────────────────────────────────────────────────────────
 assert.equal(
   revisionCount([
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2 did not land.**` },
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
-    { body: "unrelated" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2 did not land.**`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).`, author_association: "OWNER" },
+    { body: "unrelated", author_association: "OWNER" },
   ]),
   1,
   "a timeout note, the landed revision and a retry are one revision",
 );
-assert.equal(revisionCount([{ body: `${REVISION_MARKER} revision 1 of 2` }, { body: `${REVISION_MARKER} revision 2 of 2` }]), 2);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "OWNER" },
+  ]),
+  2,
+);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "NONE" },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "CONTRIBUTOR" },
+    { body: `${REVISION_MARKER} revision 3 of 2` },
+  ]),
+  0,
+  "markers from commenters without write access are not counted",
+);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "MEMBER", user: { login: "someone" } },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "COLLABORATOR", user: { login: "someone" } },
+  ]),
+  0,
+  "MEMBER and COLLABORATOR do not prove write access",
+);
+assert.equal(
+  revisionCount(
+    [
+      { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "OWNER", user: { login: "routine" } },
+      { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "OWNER", user: { login: "someone" } },
+    ],
+    "routine",
+  ),
+  1,
+  "with the routine's login known, only its own markers count",
+);
+assert.equal(isRoutineMarker({ body: `${REVISION_MARKER} revision 1 of 2`, user: { login: "routine" } }, "routine"), true);
+assert.equal(isRoutineMarker({ body: `${REVISION_MARKER} revision 1 of 2`, user: { login: "someone" } }, "routine"), false);
+assert.equal(isRoutineMarker({ body: "revision 1 of 2", user: { login: "routine" } }, "routine"), false, "no marker, no match");
 
 // ── publish ─────────────────────────────────────────────────────────────────
 const run = (name: string, conclusion: string | null, started: string, status = "completed") => ({ name, status, conclusion, started_at: started });
