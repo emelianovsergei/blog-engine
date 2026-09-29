@@ -1083,8 +1083,7 @@ function cmdReviseList(): void {
     console.log(`#${pr.number} ${pr.branch} — ${pr.reasons.join(", ")}${pr.blocked ? ` — SKIP: ${pr.blocked}` : ""}`);
     if (pr.capped) {
       try {
-        closeCappedPost(pr);
-        closed.push(pr.number);
+        if (closeCappedPost(pr)) closed.push(pr.number);
       } catch (error) {
         console.log(`#${pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
       }
@@ -1101,9 +1100,18 @@ function cmdReviseList(): void {
  * finding. The branch stays, so the text and review history are kept, and the
  * `autoblog-abandoned` label marks why it never shipped.
  */
-function closeCappedPost(pr: HeldPr): void {
+function closeCappedPost(pr: HeldPr): boolean {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
+  // Re-read right before closing: a human may have paused or approved it, or
+  // it may have moved on, since the heldPrs() snapshot.
+  const now = githubApi("GET", `${repo}/pulls/${pr.number}`) as { state?: string; head?: { sha?: string }; labels?: Array<{ name: string }> };
+  const protectedBy = (now.labels ?? []).map((l) => l.name)
+    .find((l) => ["autoblog-hold", "autoblog-human-approved", "autoblog-review-failed-overridden"].includes(l));
+  if (now.state !== "open" || now.head?.sha !== pr.headSha || protectedBy) {
+    console.log(`#${pr.number}: not closed — ${protectedBy ? `a human added ${protectedBy}` : now.state !== "open" ? "no longer open" : "its head changed"} since it was listed.`);
+    return false;
+  }
   const open = pr.findings.filter((f) => f.blocking)
     .map((f) => `- ${f.severity ?? f.kind}: ${f.text.split("\n")[0].replace(/\*\*/g, "").trim()}`);
   const body = [
@@ -1133,6 +1141,7 @@ function closeCappedPost(pr: HeldPr): void {
     console.log(`#${pr.number}: closed, but could not post the reason (${String(error).split("\n")[0]}).`);
   }
   console.log(`#${pr.number}: closed after ${pr.revisions} revisions (autoblog-abandoned).`);
+  return true;
 }
 
 function cmdRevisePrepare(prNumber: number, force: boolean): void {
