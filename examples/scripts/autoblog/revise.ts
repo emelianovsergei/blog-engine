@@ -71,10 +71,19 @@ export interface ReviewComment {
  * comments, so a retried `revise --resolve` (or a timeout note followed by the
  * landed revision) never spends the allowance twice.
  */
-export function revisionCount(issueComments: Array<{ body: string }>): number {
+/** Who may post a revision marker: the routine posts as the repo owner's token. */
+const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/**
+ * Revisions already made, from the routine's marker comments. Only markers
+ * from someone with write access count: the count closes a post at the cap,
+ * so an outside commenter must not be able to forge one.
+ */
+export function revisionCount(issueComments: Array<{ body: string; author_association?: string }>): number {
   const seen = new Set<string>();
   for (const c of issueComments) {
     if (!c.body.includes(REVISION_MARKER)) continue;
+    if (!TRUSTED_ASSOCIATIONS.has(c.author_association ?? "")) continue;
     seen.add(c.body.match(/revision (\d+) of/i)?.[1] ?? c.body);
   }
   return seen.size;
@@ -94,7 +103,7 @@ export function classifyPr(
   pr: OpenPr,
   threads: CcrThread[],
   reviewComments: ReviewComment[],
-  issueComments: Array<{ body: string }>,
+  issueComments: Array<{ body: string; author_association?: string }>,
   // merge-pending's AUTOBLOG_HOLD_ON_CODEX_P1: when a site lets a current P1
   // ship, reviving that post would only reset a merge-ready PR.
   holdOnP1 = true,

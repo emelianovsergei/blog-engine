@@ -101,7 +101,10 @@ assert.match(
   classifyPr(pr(["autoblog-review-failed-overridden"]), [thread(1)], [codex(1, "P1")], [])?.blocked ?? "",
   /human approved/,
 );
-const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({ body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**` }));
+const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({
+  body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**`,
+  author_association: "OWNER",
+}));
 held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks);
 assert.equal(held?.revisions, MAX_REVISIONS);
 assert.match(held?.blocked ?? "", /already revised/, "capped after MAX_REVISIONS");
@@ -239,15 +242,30 @@ assert.deepEqual(
 // ── revisionCount ───────────────────────────────────────────────────────────
 assert.equal(
   revisionCount([
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2 did not land.**` },
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
-    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).` },
-    { body: "unrelated" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2 did not land.**`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER}\n**Autoblog revision 1 of 2** (abc1234).`, author_association: "OWNER" },
+    { body: "unrelated", author_association: "OWNER" },
   ]),
   1,
   "a timeout note, the landed revision and a retry are one revision",
 );
-assert.equal(revisionCount([{ body: `${REVISION_MARKER} revision 1 of 2` }, { body: `${REVISION_MARKER} revision 2 of 2` }]), 2);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "OWNER" },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "COLLABORATOR" },
+  ]),
+  2,
+);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "NONE" },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "CONTRIBUTOR" },
+    { body: `${REVISION_MARKER} revision 3 of 2` },
+  ]),
+  0,
+  "markers from commenters without write access are not counted",
+);
 
 // ── publish ─────────────────────────────────────────────────────────────────
 const run = (name: string, conclusion: string | null, started: string, status = "completed") => ({ name, status, conclusion, started_at: started });
