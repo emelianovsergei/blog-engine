@@ -29,6 +29,8 @@ export interface HeldPr {
   revisions: number;
   findings: Finding[];
   blocked?: string;
+  /** Revised MAX_REVISIONS times and still held: the routine closes it (`revise --list`). */
+  capped?: boolean;
 }
 
 export function codexSeverity(body: string): string | undefined {
@@ -124,10 +126,12 @@ export function classifyPr(
   if (labels.includes("autoblog-hold")) blocked = "autoblog-hold (a human paused it)";
   else if (labels.includes("autoblog-human-approved") || labels.includes("autoblog-review-failed-overridden")) {
     blocked = "a human approved a head of it";
-  } else if (revisions >= MAX_REVISIONS) blocked = `already revised ${revisions} times — needs a human`;
+  } else if (revisions >= MAX_REVISIONS) blocked = `already revised ${revisions} times`;
   return {
     number: pr.number, branch: pr.head.ref, headSha: pr.head.sha, title: pr.title,
     reasons: [...new Set(reasons)], revisions, findings, blocked,
+    capped: blocked !== undefined && revisions >= MAX_REVISIONS && !labels.includes("autoblog-hold") &&
+      !labels.includes("autoblog-human-approved") && !labels.includes("autoblog-review-failed-overridden"),
   };
 }
 

@@ -104,8 +104,13 @@ assert.match(
 const marks = Array.from({ length: MAX_REVISIONS }, (_, i) => ({ body: `${REVISION_MARKER}\n**Autoblog revision ${i + 1} of ${MAX_REVISIONS}**` }));
 held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks);
 assert.equal(held?.revisions, MAX_REVISIONS);
-assert.match(held?.blocked ?? "", /needs a human/, "capped after MAX_REVISIONS");
+assert.match(held?.blocked ?? "", /already revised/, "capped after MAX_REVISIONS");
+assert.equal(held?.capped, true, "a capped post is closed by `revise --list`");
 assert.equal(classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks.slice(1))?.blocked, undefined, "one revision is not the cap");
+assert.equal(classifyPr(pr([]), [thread(1)], [codex(1, "P1")], marks.slice(1))?.capped, false);
+assert.equal(classifyPr(pr(["autoblog-hold"]), [thread(1)], [codex(1, "P1")], marks)?.capped, false, "a human pause is never closed");
+assert.equal(classifyPr(pr(["autoblog-human-approved"]), [thread(1)], [codex(1, "P1")], marks)?.capped, false);
+assert.equal(classifyPr(pr([]), [], [], marks), undefined, "a capped post with nothing blocking is not held, so not closed");
 
 // ── revisionPlan ────────────────────────────────────────────────────────────
 const reportPlan = { title: "Old", faqs: [{ question: "q", answer: "old" }], tags: ["a"], imagePrompt: "p", angle: "x" };
