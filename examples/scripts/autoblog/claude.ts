@@ -1490,7 +1490,13 @@ async function cmdPublish(): Promise<void> {
     const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
     todayOpen = open.some(isToday);
     if (!todayOpen && !todayMerged) {
-      const recent = githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>;
+      // Today's own branch first (exact, so no page limit can hide it), then
+      // recent closed PRs for a suffixed variant of it.
+      const exact = githubApi("GET", `${repo}/pulls?state=closed&head=${encodeURIComponent(`${owner}:${prefix}`)}&per_page=100`) as Array<OpenPr & { merged_at?: string | null }>;
+      const recent = [
+        ...exact,
+        ...(githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>),
+      ];
       todayMerged = recent.find((p) => p.merged_at && isToday(p));
       // Closed by an earlier run (revise --list) after its last revision.
       todayClosed ??= recent.find((p) => !p.merged_at && isToday(p) && p.labels.some((l) => l.name === "autoblog-abandoned"))?.number;
