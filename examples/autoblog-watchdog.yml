@@ -225,15 +225,16 @@ jobs:
           # (`autoblog-abandoned`, AUTOBLOG_CLAUDE.md step 0b) was a decision the
           # routine made and reported, not a stalled pipeline. It still does not
           # count as delivered, only as accounted for.
-          if ABANDONED_JSON=$(gh pr list --state closed --label autoblog-abandoned --limit 30 --json closedAt,headRefName); then
-            ABANDONED_COUNT=$(jq -r --arg cutoff "$WINDOW_CUTOFF" '[ .[]
-                      | select(.closedAt != null and .closedAt >= $cutoff)
-                      | select(.headRefName | startswith("blog/claude-"))
-                    ] | length' <<<"$ABANDONED_JSON")
-          else
-            echo "::warning::Could not list abandoned posts; counting none."
-            ABANDONED_COUNT=0
+          # Like the merged listing above, a failure is an error, not "none":
+          # counting zero could raise a false outage.
+          if ! ABANDONED_JSON=$(gh pr list --state closed --label autoblog-abandoned --limit 30 --json closedAt,headRefName); then
+            echo "::error::Could not list abandoned posts — cannot assess cadence."
+            exit 1
           fi
+          ABANDONED_COUNT=$(jq -r --arg cutoff "$WINDOW_CUTOFF" '[ .[]
+                    | select(.closedAt != null and .closedAt >= $cutoff)
+                    | select(.headRefName | startswith("blog/claude-"))
+                  ] | length' <<<"$ABANDONED_JSON")
           if [ "${ABANDONED_COUNT:-0}" -gt 0 ]; then
             echo "$ABANDONED_COUNT post(s) closed as autoblog-abandoned in the window count toward the cadence."
             RECENT_COUNT=$((RECENT_COUNT + ABANDONED_COUNT))
