@@ -1457,6 +1457,7 @@ async function cmdPublish(): Promise<void> {
   let results: Array<{ pr: OpenPr; verdict: PublishVerdict; detail: string }> = [];
   let todayMerged: (OpenPr & { merged_at?: string | null }) | undefined;
   let todayOpen = false;
+  const closed: number[] = [];
   for (;;) {
     // Every open Claude post, so a post revised in step 0b ships in the same run.
     const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
@@ -1466,6 +1467,19 @@ async function cmdPublish(): Promise<void> {
       todayMerged = recent.find((p) => p.merged_at && isToday(p));
     }
     results = open.map((pr) => ({ pr, ...publishState(pr) }));
+    // A post still held after its last revision is closed here too, as in
+    // revise --list, so publish never reports it as waiting on a human.
+    for (const r of results.filter((x) => x.verdict === "blocked")) {
+      const held = heldPr(r.pr);
+      if (!held?.capped) continue;
+      try {
+        if (closeCappedPost(held)) closed.push(r.pr.number);
+      } catch (error) {
+        console.log(`#${r.pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
+      }
+    }
+    results = results.filter((r) => !closed.includes(r.pr.number));
+    todayOpen = results.some((r) => isToday(r.pr));
     // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
     // possibly within this run: keep waiting for it too.
     const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
@@ -1530,6 +1544,7 @@ async function cmdPublish(): Promise<void> {
   console.log(`HELD: ${held.join(" ")}`);
   console.log(`BROKEN: ${broken.join(" ")}`);
   console.log(`BLOCKED: ${blocked.join(" ")}`);
+  console.log(`CLOSED: ${closed.join(" ")}`);
   if (held.length) process.exit(4);
   if (broken.length) process.exit(5);
   if (blocked.length) process.exit(6);

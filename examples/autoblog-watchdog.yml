@@ -235,16 +235,16 @@ jobs:
                     | select(.closedAt != null and .closedAt >= $cutoff)
                     | select(.headRefName | startswith("blog/claude-"))
                   ] | length' <<<"$ABANDONED_JSON")
-          if [ "${ABANDONED_COUNT:-0}" -gt 0 ]; then
-            echo "$ABANDONED_COUNT post(s) closed as autoblog-abandoned in the window count toward the cadence."
-            RECENT_COUNT=$((RECENT_COUNT + ABANDONED_COUNT))
-          fi
+          # recent_count stays the merged count; only the cadence check uses
+          # merged + abandoned.
+          CADENCE_COUNT=$((RECENT_COUNT + ${ABANDONED_COUNT:-0}))
           echo "recent_count=$RECENT_COUNT" >> "$GITHUB_OUTPUT"
-          if [ "$RECENT_COUNT" -lt "$EXPECTED_POSTS_PER_WEEK" ]; then
+          echo "abandoned_count=${ABANDONED_COUNT:-0}" >> "$GITHUB_OUTPUT"
+          if [ "$CADENCE_COUNT" -lt "$EXPECTED_POSTS_PER_WEEK" ]; then
             DELIVERY_OK=0
-            echo "::warning::Only $RECENT_COUNT new-post PR(s) merged in the last ${WINDOW_DAYS} days; expected ${EXPECTED_POSTS_PER_WEEK}."
+            echo "::warning::Only $RECENT_COUNT new-post PR(s) merged (+${ABANDONED_COUNT:-0} closed as abandoned) in the last ${WINDOW_DAYS} days; expected ${EXPECTED_POSTS_PER_WEEK}."
           else
-            echo "✅ $RECENT_COUNT new-post PR(s) merged in the last ${WINDOW_DAYS} days (expected ${EXPECTED_POSTS_PER_WEEK})."
+            echo "✅ $RECENT_COUNT new-post PR(s) merged (+${ABANDONED_COUNT:-0} closed as abandoned) in the last ${WINDOW_DAYS} days (expected ${EXPECTED_POSTS_PER_WEEK})."
           fi
           if [ "${DELIVERY_OK:-0}" = "1" ]; then
             echo "healthy=true" >> "$GITHUB_OUTPUT"
@@ -426,6 +426,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LAST_DELIVERY: ${{ steps.assess.outputs.last_delivery }}
           RECENT_COUNT: ${{ steps.assess.outputs.recent_count }}
+          ABANDONED_COUNT: ${{ steps.assess.outputs.abandoned_count }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -450,7 +451,7 @@ jobs:
             echo "The autoblog pipeline is behind: either no post merged in ${DELIVERY_STALE_DAYS} days, or fewer than ${EXPECTED_POSTS_PER_WEEK} new post(s) merged in the last ${WINDOW_DAYS} days."
             echo
             echo "- Last merged \`autoblog\` PR: **${LAST_DELIVERY:-unknown}**"
-            echo "- New-post PRs merged in the last ${WINDOW_DAYS} days: **${RECENT_COUNT:-unknown}** (expected ${EXPECTED_POSTS_PER_WEEK})"
+            echo "- New-post PRs merged in the last ${WINDOW_DAYS} days: **${RECENT_COUNT:-unknown}**, plus **${ABANDONED_COUNT:-0}** closed as \`autoblog-abandoned\` (expected ${EXPECTED_POSTS_PER_WEEK} together)"
             echo "- Watchdog run: $RUN_URL"
             echo
             cat diagnosis.md

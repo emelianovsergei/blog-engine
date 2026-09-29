@@ -357,7 +357,7 @@ merged post.
 | 0 | Published (or nothing left to do) | Report. |
 | 4 | `HELD:` lists posts Codex (or a label) now holds | Revise each one exactly as in step 0b, then run `publish` again. The 2-revision cap still applies: `revise --list` closes a post held after two revisions. |
 | 5 | `BROKEN:` lists posts whose CI failed | Read the failing job's log (`GET /repos/{owner}/{repo}/actions/jobs/{id}/logs`). If the post causes it, `revise --pr N --force`, fix, and continue as in step 0b. Otherwise report it. |
-| 6 | `BLOCKED:` lists posts only a human can move (`autoblog-hold`, a human-approved head, or two revisions spent) | Name each one and why at the top of the report. Do not revise them. |
+| 6 | `BLOCKED:` lists posts only a human can move (`autoblog-hold` or a human-approved head) | Name each one and why at the top of the report. Do not revise them. A post held after two revisions is closed instead and listed on `CLOSED:`; name those too. |
 | 3 | Still waiting after 45 min (Codex slow, CI queued) | Report it. The morning sweep publishes it. |
 
 A Codex that is out of quota never reviews: `publish` reports those posts as
