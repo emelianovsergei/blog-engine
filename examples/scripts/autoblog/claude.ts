@@ -1460,6 +1460,21 @@ async function cmdPublish(): Promise<void> {
   const closed: number[] = [];
   // Today's post closed after its last revision: handled, not missing.
   let todayClosed: number | undefined;
+  // A post still held after its last revision is closed here too, as in
+  // revise --list, so publish never reports it as waiting on a human.
+  const closeIfCapped = (pr: OpenPr): boolean => {
+    const held = heldPr(pr);
+    if (!held?.capped) return false;
+    try {
+      if (!closeCappedPost(held)) return false;
+    } catch (error) {
+      console.log(`#${pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
+      return false;
+    }
+    closed.push(pr.number);
+    if (isToday(pr)) todayClosed = pr.number;
+    return true;
+  };
   for (;;) {
     // Every open Claude post, so a post revised in step 0b ships in the same run.
     const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
@@ -1467,22 +1482,11 @@ async function cmdPublish(): Promise<void> {
     if (!todayOpen && !todayMerged) {
       const recent = githubApi("GET", `${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`) as Array<OpenPr & { merged_at?: string | null }>;
       todayMerged = recent.find((p) => p.merged_at && isToday(p));
+      // Closed by an earlier run (revise --list) after its last revision.
+      todayClosed ??= recent.find((p) => !p.merged_at && isToday(p) && p.labels.some((l) => l.name === "autoblog-abandoned"))?.number;
     }
     results = open.map((pr) => ({ pr, ...publishState(pr) }));
-    // A post still held after its last revision is closed here too, as in
-    // revise --list, so publish never reports it as waiting on a human.
-    for (const r of results.filter((x) => x.verdict === "blocked")) {
-      const held = heldPr(r.pr);
-      if (!held?.capped) continue;
-      try {
-        if (closeCappedPost(held)) {
-          closed.push(r.pr.number);
-          if (isToday(r.pr)) todayClosed = r.pr.number;
-        }
-      } catch (error) {
-        console.log(`#${r.pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
-      }
-    }
+    for (const r of results.filter((x) => x.verdict === "blocked")) closeIfCapped(r.pr);
     results = results.filter((r) => !closed.includes(r.pr.number));
     todayOpen = results.some((r) => isToday(r.pr));
     // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
@@ -1541,6 +1545,10 @@ async function cmdPublish(): Promise<void> {
       continue;
     }
     const again = publishState(fresh);
+    if (again.verdict === "blocked" && closeIfCapped(fresh)) {
+      results.splice(i, 1);
+      continue;
+    }
     results[i] = { pr: fresh, verdict: again.verdict === "ready" ? "wait" : again.verdict, detail: again.detail };
     console.log(`#${num} after dispatch — ${results[i].verdict}: ${again.detail}`);
   }
