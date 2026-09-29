@@ -349,7 +349,7 @@ It waits for today's PR to exist and for every open Claude post to clear its
 gates (finalized, Claude review approved the head, CI green, Codex reviewed the
 head, or the 1-hour merge delay has passed), then dispatches
 `autoblog-merge-pending.yml`, which merges with the same gates, and waits for
-the merge. It prints `TODAY: open|merged|none` and `PUBLISHED: #N ...` per
+the merge. It prints `TODAY: open|merged|closed|none` (`closed`: today's post was closed after its last revision; do not write another) and `PUBLISHED: #N ...` per
 merged post.
 
 | Exit | Meaning | Do |

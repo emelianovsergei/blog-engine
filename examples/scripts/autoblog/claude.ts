@@ -1458,6 +1458,8 @@ async function cmdPublish(): Promise<void> {
   let todayMerged: (OpenPr & { merged_at?: string | null }) | undefined;
   let todayOpen = false;
   const closed: number[] = [];
+  // Today's post closed after its last revision: handled, not missing.
+  let todayClosed: number | undefined;
   for (;;) {
     // Every open Claude post, so a post revised in step 0b ships in the same run.
     const open = githubList<OpenPr>(`${repo}/pulls?state=open`).filter(isClaudePostPr);
@@ -1473,7 +1475,10 @@ async function cmdPublish(): Promise<void> {
       const held = heldPr(r.pr);
       if (!held?.capped) continue;
       try {
-        if (closeCappedPost(held)) closed.push(r.pr.number);
+        if (closeCappedPost(held)) {
+          closed.push(r.pr.number);
+          if (isToday(r.pr)) todayClosed = r.pr.number;
+        }
       } catch (error) {
         console.log(`#${r.pr.number}: could not close (${String(error).split("\n")[0]}); the next run retries.`);
       }
@@ -1482,7 +1487,7 @@ async function cmdPublish(): Promise<void> {
     todayOpen = results.some((r) => isToday(r.pr));
     // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
     // possibly within this run: keep waiting for it too.
-    const waiting = (!sweep && !todayOpen && !todayMerged) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
+    const waiting = (!sweep && !todayOpen && !todayMerged && !todayClosed) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
     if (!waiting || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 60_000));
   }
@@ -1494,7 +1499,9 @@ async function cmdPublish(): Promise<void> {
       ? `TODAY: merged #${todayMerged.number} at ${todayMerged.merged_at}`
       : todayPr
         ? `TODAY: open #${todayPr.pr.number}`
-        : `TODAY: none (no open or merged PR for ${prefix})`,
+        : todayClosed
+          ? `TODAY: closed #${todayClosed} (autoblog-abandoned after its last revision)`
+          : `TODAY: none (no open or merged PR for ${prefix})`,
   );
   for (const r of results) console.log(`#${r.pr.number} ${r.pr.head.ref} — ${r.verdict}: ${r.detail}`);
   const ready = results.filter((r) => r.verdict === "ready");
@@ -1548,7 +1555,7 @@ async function cmdPublish(): Promise<void> {
   if (held.length) process.exit(4);
   if (broken.length) process.exit(5);
   if (blocked.length) process.exit(6);
-  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged)) process.exit(3);
+  if (results.some((r) => r.verdict === "wait" || r.verdict === "delayed") || (!sweep && !todayOpen && !todayMerged && !todayClosed)) process.exit(3);
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────
