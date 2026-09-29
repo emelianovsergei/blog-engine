@@ -253,7 +253,7 @@ assert.equal(
 assert.equal(
   revisionCount([
     { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "OWNER" },
-    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "COLLABORATOR" },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "OWNER" },
   ]),
   2,
 );
@@ -265,6 +265,25 @@ assert.equal(
   ]),
   0,
   "markers from commenters without write access are not counted",
+);
+assert.equal(
+  revisionCount([
+    { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "MEMBER", user: { login: "someone" } },
+    { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "COLLABORATOR", user: { login: "someone" } },
+  ]),
+  0,
+  "MEMBER and COLLABORATOR do not prove write access",
+);
+assert.equal(
+  revisionCount(
+    [
+      { body: `${REVISION_MARKER} revision 1 of 2`, author_association: "OWNER", user: { login: "routine" } },
+      { body: `${REVISION_MARKER} revision 2 of 2`, author_association: "OWNER", user: { login: "someone" } },
+    ],
+    "routine",
+  ),
+  1,
+  "with the routine's login known, only its own markers count",
 );
 
 // ── publish ─────────────────────────────────────────────────────────────────
