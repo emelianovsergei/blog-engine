@@ -1043,16 +1043,23 @@ function heldPrs(): HeldPr[] {
   const open = githubList<OpenPr>(`${repo}/pulls?state=open`);
   const held: HeldPr[] = [];
   for (const pr of open) {
-    if (!isClaudePostPr(pr)) continue;
-    const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
-    const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
-    const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
-    // The session cannot read repository variables (the proxy refuses the
-    // Actions API), so the routine's environment carries the same setting.
-    const entry = classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false", routineLogin());
+    const entry = heldPr(pr);
     if (entry) held.push(entry);
   }
   return held;
+}
+
+/** Whether one open PR is held, read fresh from GitHub (see classifyPr). */
+function heldPr(pr: OpenPr): HeldPr | undefined {
+  if (!isClaudePostPr(pr)) return undefined;
+  const { owner, name } = repoSlug();
+  const repo = `/repos/${owner}/${name}`;
+  const threads = githubApi("GET", `${repo}/pulls/${pr.number}/ccr/review_threads`) as CcrThread[];
+  const reviewComments = githubList<ReviewComment>(`${repo}/pulls/${pr.number}/comments`);
+  const issueComments = githubList<{ body: string }>(`${repo}/issues/${pr.number}/comments`);
+  // The session cannot read repository variables (the proxy refuses the
+  // Actions API), so the routine's environment carries the same setting.
+  return classifyPr(pr, threads, reviewComments, issueComments, process.env.AUTOBLOG_HOLD_ON_CODEX_P1 !== "false", routineLogin());
 }
 
 /** Noon Pacific on the post's own date: its frontmatter date stays that day. */
@@ -1103,15 +1110,20 @@ function cmdReviseList(): void {
 function closeCappedPost(pr: HeldPr): boolean {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
-  // Re-read right before closing: a human may have paused or approved it, or
-  // it may have moved on, since the heldPrs() snapshot.
-  const now = githubApi("GET", `${repo}/pulls/${pr.number}`) as { state?: string; head?: { sha?: string }; labels?: Array<{ name: string }> };
-  const protectedBy = (now.labels ?? []).map((l) => l.name)
-    .find((l) => ["autoblog-hold", "autoblog-human-approved", "autoblog-review-failed-overridden"].includes(l));
-  if (now.state !== "open" || now.head?.sha !== pr.headSha || protectedBy) {
-    console.log(`#${pr.number}: not closed — ${protectedBy ? `a human added ${protectedBy}` : now.state !== "open" ? "no longer open" : "its head changed"} since it was listed.`);
+  // Re-classify right before closing, from fresh PR state, threads and
+  // comments: since the heldPrs() snapshot a human may have paused or approved
+  // it, a blocking thread may have been resolved, or a revision may have landed.
+  const now = githubApi("GET", `${repo}/pulls/${pr.number}`) as OpenPr & { state?: string };
+  const fresh = now.state === "open" && now.head?.sha === pr.headSha ? heldPr(now) : undefined;
+  if (!fresh?.capped) {
+    const why = now.state !== "open" ? "it is no longer open"
+      : now.head?.sha !== pr.headSha ? "its head changed"
+      : !fresh ? "nothing holds it any more"
+      : `it is no longer closable (${fresh.blocked ?? "under the cap"})`;
+    console.log(`#${pr.number}: not closed — ${why} since it was listed.`);
     return false;
   }
+  pr = fresh;
   const open = pr.findings.filter((f) => f.blocking)
     .map((f) => `- ${f.severity ?? f.kind}: ${f.text.split("\n")[0].replace(/\*\*/g, "").trim()}`);
   const body = [
