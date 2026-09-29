@@ -400,7 +400,7 @@ npm run autoblog:claude -- refresh-brief     # dispatches blog-refresh.yml, wait
   allows.
 
 ```bash
-npm run autoblog:claude -- refresh-check                 # applies it with finalize's code; writes preview.mdx + preview.diff
+npm run autoblog:claude -- refresh-check                 # applies it with finalize's code on origin/main; writes preview.mdx + preview.diff
 npm run autoblog:claude -- refresh-review --round 1      # writes the reviewer prompt
 ```
 

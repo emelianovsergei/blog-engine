@@ -23,6 +23,8 @@
  *   BLOG_GENERATOR_DATE                       run-date override (the workflow passes Pacific time)
  *   BLOG_CONTENT_DIR, BLOG_REFRESH_REPORTS_DIR   path overrides (the fixture harness, refresh-check)
  *   BLOG_REFRESH_LINK_NETWORK                 "false": link audit by policy only (the session's preview)
+ *   BLOG_REFRESH_EXPECT_PREVIEW               finalize: sha256 of the preview the reviewer graded;
+ *                                             the report says whether this run reproduced it
  *   BLOG_REFRESH_FIXTURE_DIR                  offline mode: pages.json + refreshed.mdx replace
  *                                             Search Console and the model
  *   BLOG_REFRESH_FIXTURE_SIGNAL               "absent" | "malformed" to simulate that signal in fixture mode
@@ -79,6 +81,8 @@ interface RefreshReport {
   /** Brief stage: the engine prompt the session answers, and the post it was built from. */
   prompt?: string;
   postDigest?: string;
+  /** Finalize: whether the applied post is the preview the reviewer graded (BLOG_REFRESH_EXPECT_PREVIEW). */
+  reviewedPreview?: "match" | "mismatch" | "unchecked";
 }
 
 function getNow(): Date {
@@ -247,7 +251,7 @@ async function refreshPost(
   runDate: string,
   promptPath: string,
   answerPath?: string,
-): Promise<"prompt" | { changedFields: string[]; changeNotes: string; wrote: boolean }> {
+): Promise<"prompt" | { changedFields: string[]; changeNotes: string; wrote: boolean; previewDigest: string }> {
   const { parseDocument, serializeDocument } = await frontmatterIo();
   const { frontmatter, body } = parseDocument(fs.readFileSync(postPath, "utf-8"));
   const client = relayClient(promptPath, answerPath, "Claude session (weekly refresh)");
@@ -278,16 +282,17 @@ async function refreshPost(
     : [...result.changedFields];
   if (changedFields.length > 0 && !out.updated) out.updated = runDate;
   const preAudit = serializeDocument(out, result.markdown);
-  // The session's preview (refresh-check) runs where most sites are
-  // unreachable: policy only there, and finalize does the network audit.
-  const repaired = await auditAndRepairFile(preAudit, parseLinkPolicy(JSON.parse(fs.readFileSync(LINK_POLICY, "utf-8"))), {
-    network: process.env.BLOG_REFRESH_LINK_NETWORK !== "false",
-  });
+  const policy = parseLinkPolicy(JSON.parse(fs.readFileSync(LINK_POLICY, "utf-8")));
+  // What the session's preview (refresh-check) is: the policy-only audit,
+  // since most sites are unreachable there. Finalize compares its digest with
+  // the one the reviewer graded, then runs the network audit on top.
+  const preview = await auditAndRepairFile(preAudit, policy, { network: false });
+  const repaired = process.env.BLOG_REFRESH_LINK_NETWORK === "false" ? preview : await auditAndRepairFile(preAudit, policy);
   const auditChanged = repaired.text !== preAudit;
   if (auditChanged && changedFields.length === 0) changedFields.push("link-audit");
   const wrote = changedFields.length > 0;
   if (wrote) fs.writeFileSync(postPath, repaired.text);
-  return { changedFields, changeNotes: result.changeNotes, wrote };
+  return { changedFields, changeNotes: result.changeNotes, wrote, previewDigest: digest(preview.text) };
 }
 
 /** Finalize: apply the session's answer to the post the brief chose. */
@@ -307,6 +312,12 @@ async function finalizeStage(briefPath: string, answerPath: string): Promise<voi
   const promptPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "refresh-")), "prompt.md");
   const outcome = await refreshPost(postPath, brief.queries, brief.runDate, promptPath, path.resolve(answerPath));
   if (outcome === "prompt") throw new Error(`no answer at ${answerPath}`);
+  // The reviewer graded refresh-check's preview. Unless this run produced the
+  // same text (same answer, same code: finalize checks out the revision the
+  // preview was built on), the review does not cover what ships.
+  const expected = process.env.BLOG_REFRESH_EXPECT_PREVIEW;
+  const reviewedPreview = !expected ? "unchecked" : expected === outcome.previewDigest ? "match" : "mismatch";
+  if (reviewedPreview === "mismatch") console.log("::warning::The refreshed post differs from the preview the reviewer graded.");
   const { status: _status, prompt: _prompt, postDigest: _digest, ...rest } = brief;
   void _status; void _prompt; void _digest;
   if (!outcome.wrote) {
@@ -320,6 +331,7 @@ async function finalizeStage(briefPath: string, answerPath: string): Promise<voi
     status: "refreshed",
     changedFields: outcome.changedFields,
     changeNotes: outcome.changeNotes,
+    reviewedPreview,
   });
   console.log(`Refreshed ${brief.slug}: ${outcome.changedFields.join(", ")}`);
 }

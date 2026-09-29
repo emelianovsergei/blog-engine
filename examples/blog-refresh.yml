@@ -1,7 +1,8 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/blog-refresh.yml
 # Needs scripts/refresh-blog-post.ts and scripts/test-refresh-fixtures.ts
-# (examples/scripts/) and the session commands in examples/scripts/autoblog/claude.ts.
+# (examples/scripts/), their fixtures (examples/tests/fixtures/blog-refresh/)
+# and the session commands in examples/scripts/autoblog/claude.ts.
 #
 name: Refresh Ranking Blog Post
 
@@ -176,16 +177,32 @@ jobs:
             echo "run_date=$(jq -r .runDate "$IN/brief.json")"
             echo "slug=$(jq -r .slug "$IN/brief.json")"
             echo "pass=$(jq -r '.pass == true' "$IN/review.json")"
+            echo "generator=$(jq -r '.generatorSha // empty' "$IN/review.json")"
+            echo "preview=$(jq -r '.preview // empty' "$IN/review.json")"
             echo "handoff=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-      # The refresh is applied to main as it is now, never to whatever else
-      # the handoff branch carries.
-      - name: Start from main
+      # The refresh is applied to the revision of main the session previewed
+      # and the reviewer graded (`generatorSha`), never to whatever else the
+      # handoff branch carries: newer refresh code, rubric or link policy
+      # would publish text nobody reviewed. Anything else falls back to main
+      # and counts as a failed review (the PR is held, and `publish` closes it).
+      - name: Start from the reviewed revision of main
+        id: base
+        env:
+          GEN: ${{ steps.handoff.outputs.generator }}
         run: |
           set -euo pipefail
           git fetch -q origin main
-          git checkout -q -B refresh-finalize origin/main
+          if [[ "$GEN" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${GEN}^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$GEN" origin/main; then
+            git checkout -q -B refresh-finalize "$GEN"
+            echo "pinned=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The handoff's generatorSha '${GEN:-none}' is not a commit on main; applying on main and treating the review as failed."
+            git checkout -q -B refresh-finalize origin/main
+            echo "pinned=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -200,6 +217,7 @@ jobs:
         env:
           BLOG_REFRESH_BRIEF: ${{ runner.temp }}/inbox/brief.json
           BLOG_REFRESH_ANSWER: ${{ runner.temp }}/inbox/answer.json
+          BLOG_REFRESH_EXPECT_PREVIEW: ${{ steps.handoff.outputs.preview }}
         run: npm run blog:refresh
 
       - name: Read the run report
@@ -213,8 +231,11 @@ jobs:
           # The session's review travels with the report the PR carries.
           jq --slurpfile r "$RUNNER_TEMP/inbox/review.json" '. + {claudeReview: $r[0]}' "$REPORT" > "$REPORT.tmp"
           mv "$REPORT.tmp" "$REPORT"
-          echo "status=$(jq -r '.status' "$REPORT")" >> "$GITHUB_OUTPUT"
-          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+          {
+            echo "status=$(jq -r '.status' "$REPORT")"
+            echo "reviewed_preview=$(jq -r '.reviewedPreview // "unchecked"' "$REPORT")"
+            echo "report=$REPORT"
+          } >> "$GITHUB_OUTPUT"
           jq -r '.status, (.reason // "")' "$REPORT"
 
       - name: Commit, mark finalized and open the PR
@@ -226,7 +247,10 @@ jobs:
           RUN_DATE: ${{ steps.handoff.outputs.run_date }}
           SLUG: ${{ steps.handoff.outputs.slug }}
           REPORT: ${{ steps.report.outputs.report }}
-          PASS: ${{ steps.handoff.outputs.pass }}
+          # The session's verdict covers this post only when it is the preview
+          # it graded, built from the same revision.
+          PASS: ${{ steps.handoff.outputs.pass == 'true' && steps.base.outputs.pinned == 'true' && steps.report.outputs.reviewed_preview == 'match' }}
+          SESSION_PASS: ${{ steps.handoff.outputs.pass }}
           HANDOFF: ${{ steps.handoff.outputs.handoff }}
           BRANCH: ${{ github.ref_name }}
         run: |
@@ -251,7 +275,9 @@ jobs:
             jq -r '.changeNotes // "(no notes)"' "$REPORT"
             echo
             echo "### Claude review (separate subagent)"
-            if [ "$PASS" = "true" ]; then echo "✅ Passed."; else echo "❌ Failed — see \`claudeReview\` in \`${REPORT}\`."; fi
+            if [ "$PASS" = "true" ]; then echo "✅ Passed."
+            elif [ "$SESSION_PASS" = "true" ]; then echo "❌ Not covered: this post is not the preview the session's reviewer graded (built from another revision of main, or different output)."
+            else echo "❌ Failed — see \`claudeReview\` in \`${REPORT}\`."; fi
             jq -r '.claudeReview.summary // empty' "$REPORT"
             echo
             echo "Written by the scheduled Claude session (no API key). The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."

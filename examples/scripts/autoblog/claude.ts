@@ -1763,9 +1763,10 @@ function refreshDigests(): { answer: string; preview: string } {
 
 /**
  * Apply the answer with finalize's own code (scripts/refresh-blog-post.ts,
- * finalize mode) to a scratch copy of content/blog, so the reviewer grades
- * exactly what finalize will publish. The engine rejects a malformed answer
- * here, the same way it would in finalize.
+ * finalize mode) in a scratch worktree of origin/main, so the reviewer grades
+ * exactly what finalize will publish: finalize checks out that same commit
+ * (`generatorSha`) and verifies it reproduces this preview. The engine
+ * rejects a malformed answer here, the same way it would in finalize.
  */
 function cmdRefreshCheck(): void {
   need(refreshWork("brief.json"), "run `refresh-brief` first");
@@ -1774,13 +1775,17 @@ function cmdRefreshCheck(): void {
   if (answer !== refreshWork("answer.json")) fs.copyFileSync(answer, refreshWork("answer.json"));
   const brief = readJson<RefreshBrief>(refreshWork("brief.json"));
   if (brief.status !== "prompt" || !brief.slug) throw new Error("the refresh brief has no post to refresh");
+  git(["fetch", "--quiet", "origin", "main"]);
+  const generatorSha = git(["rev-parse", "refs/remotes/origin/main"]).trim();
   const scratch = fs.mkdtempSync(path.join(REFRESH_WORK, "check-"));
+  const tree = path.join(scratch, "tree");
   try {
-    const content = path.join(scratch, "content");
+    git(["worktree", "add", "--quiet", "--detach", tree, generatorSha]);
+    fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(tree, "node_modules"));
+    const content = path.join(tree, SITE.contentDir);
     const reports = path.join(scratch, "reports");
-    fs.cpSync(path.join(ROOT, SITE.contentDir), content, { recursive: true });
     const run = spawnSync("npx", ["tsx", "scripts/refresh-blog-post.ts"], {
-      cwd: ROOT,
+      cwd: tree,
       stdio: "inherit",
       env: {
         ...process.env,
@@ -1805,14 +1810,26 @@ function cmdRefreshCheck(): void {
       return;
     }
     fs.copyFileSync(path.join(content, `${brief.slug}.mdx`), refreshWork("preview.mdx"));
-    const diff = spawnSync("git", ["diff", "--no-index", "--no-color", path.join(ROOT, SITE.contentDir, `${brief.slug}.mdx`), refreshWork("preview.mdx")], { encoding: "utf-8" });
+    const diff = spawnSync("git", ["diff", "--no-color", "--", `${SITE.contentDir}/${brief.slug}.mdx`], { cwd: tree, encoding: "utf-8" });
     fs.writeFileSync(refreshWork("preview.diff"), diff.stdout ?? "");
-    writeJson(refreshWork("check.json"), { slug: brief.slug, changedFields: report.changedFields, changeNotes: report.changeNotes, ...refreshDigests() });
+    writeJson(refreshWork("check.json"), {
+      slug: brief.slug,
+      changedFields: report.changedFields,
+      changeNotes: report.changeNotes,
+      generatorSha,
+      ...refreshDigests(),
+    });
     console.log(`Changed: ${(report.changedFields ?? []).join(", ")}`);
     console.log(`Notes: ${report.changeNotes ?? "(none)"}`);
     console.log("Preview: .autoblog/refresh/preview.mdx (diff: .autoblog/refresh/preview.diff). Next: `refresh-review --round 1`.");
   } finally {
+    try {
+      git(["worktree", "remove", "--force", tree]);
+    } catch {
+      // Never added, or already gone.
+    }
     fs.rmSync(scratch, { recursive: true, force: true });
+    git(["worktree", "prune"]);
   }
 }
 
@@ -1820,7 +1837,7 @@ function cmdRefreshCheck(): void {
 async function cmdRefreshReview(): Promise<void> {
   const round = Number(flag("round") ?? "1");
   need(refreshWork("check.json"), "run `refresh-check` first — the reviewer grades its preview");
-  const check = readJson<{ slug: string; answer: string; preview: string }>(refreshWork("check.json"));
+  const check = readJson<{ slug: string; answer: string; preview: string; generatorSha: string }>(refreshWork("check.json"));
   const now = refreshDigests();
   if (check.answer !== now.answer || check.preview !== now.preview) {
     throw new Error("answer.json or the preview changed after `refresh-check`; run it again so the reviewer grades what finalize will publish");
@@ -1848,24 +1865,28 @@ async function cmdRefreshReview(): Promise<void> {
     throw error;
   }
   // finalize reads `.pass` and carries the whole object into the run report.
-  writeJson(refreshWork("review.json"), { ...result, round, fixRounds: Math.max(0, round - 1), reviewer: "claude-review-subagent", ...now });
+  // finalize checks out generatorSha and requires this preview digest again.
+  writeJson(refreshWork("review.json"), {
+    ...result, round, fixRounds: Math.max(0, round - 1), reviewer: "claude-review-subagent", generatorSha: check.generatorSha, ...now,
+  });
   console.log(renderReviewMarkdown(result));
   process.exit(result.pass ? 0 : 2);
 }
 
 /**
  * Push brief + answer + review to blog/refresh-<date>-<slug>, one commit on
- * top of origin/main (a scratch worktree: the session's checkout is left
- * alone). blog-refresh.yml's finalize stage takes it from there. Only a
+ * top of the reviewed revision of main (a scratch worktree: the session's
+ * checkout is left alone). blog-refresh.yml's finalize stage takes it from there. Only a
  * passing review is handed off: the post is live either way, so a refresh
  * that could not pass waits for next week instead of opening a PR.
  */
 function cmdRefreshHandoff(): void {
   for (const f of ["brief.json", "answer.json", "check.json", "review.json"]) need(refreshWork(f), "finish refresh-check and refresh-review first");
   const brief = readJson<RefreshBrief>(refreshWork("brief.json"));
-  const review = readJson<{ pass?: boolean; answer?: string; preview?: string }>(refreshWork("review.json"));
+  const review = readJson<{ pass?: boolean; answer?: string; preview?: string; generatorSha?: string }>(refreshWork("review.json"));
+  const check = readJson<{ generatorSha?: string }>(refreshWork("check.json"));
   const now = refreshDigests();
-  if (review.answer !== now.answer || review.preview !== now.preview) {
+  if (review.answer !== now.answer || review.preview !== now.preview || !review.generatorSha || review.generatorSha !== check.generatorSha) {
     throw new Error("answer.json changed after the last review; run `refresh-check` and `refresh-review` again (a new round)");
   }
   if (review.pass !== true) {
@@ -1876,7 +1897,7 @@ function cmdRefreshHandoff(): void {
   git(["fetch", "--quiet", "origin", "main"]);
   const tree = fs.mkdtempSync(path.join(REFRESH_WORK, "handoff-"));
   try {
-    git(["worktree", "add", "--quiet", "--detach", tree, "refs/remotes/origin/main"]);
+    git(["worktree", "add", "--quiet", "--detach", tree, review.generatorSha]);
     const inbox = path.join(tree, "data/blog-refresh-inbox");
     fs.mkdirSync(inbox, { recursive: true });
     for (const f of ["brief.json", "answer.json", "review.json"]) fs.copyFileSync(refreshWork(f), path.join(inbox, f));
