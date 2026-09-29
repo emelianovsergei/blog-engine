@@ -1124,7 +1124,17 @@ function closeCappedPost(pr: HeldPr): boolean {
     return false;
   }
   pr = fresh;
-  const open = pr.findings.filter((f) => f.blocking)
+  // A review-failed or dead-link hold carries its details in the run report,
+  // not in classifyPr's findings (revise prepare reads it the same way).
+  let reported: Finding[] = [];
+  try {
+    const runKey = pr.branch.replace(/^blog\//, "");
+    const file = githubApi("GET", `${repo}/contents/data/blog-generation-runs/${runKey}.json?ref=${encodeURIComponent(pr.branch)}`) as { content?: string };
+    if (file.content) reported = reportFindings(JSON.parse(Buffer.from(file.content, "base64").toString("utf-8")), pr.reasons);
+  } catch {
+    // No report: the reasons line still says why it was held.
+  }
+  const open = [...pr.findings, ...reported].filter((f) => f.blocking)
     .map((f) => `- ${f.severity ?? f.kind}: ${f.text.split("\n")[0].replace(/\*\*/g, "").trim()}`);
   const body = [
     `**Autoblog: closed after ${pr.revisions} revisions.** The post is still held (${pr.reasons.join(", ")}), and the routine revises a post at most ${MAX_REVISIONS} times, so it will not be published.`,
