@@ -291,6 +291,21 @@ jobs:
             echo "Written by the scheduled Claude session (no API key). The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
           } > "$BODY_FILE"
 
+          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number'); then
+            echo "::error::Could not list PRs for $BRANCH."
+            exit 1
+          fi
+          if [ -n "$EXISTING_PR" ]; then
+            # Take the old head off the merge path BEFORE it is replaced, as
+            # blog-finalize does: the review job re-applies the label to the
+            # new head if it earns it.
+            gh pr edit "$EXISTING_PR" --remove-label autoblog-approved-pending || true
+            if gh pr view "$EXISTING_PR" --json labels --jq '.labels[].name' | grep -qx autoblog-approved-pending; then
+              echo "::error::Could not remove autoblog-approved-pending from #$EXISTING_PR; not replacing an approved head."
+              exit 1
+            fi
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add content/blog/ data/blog-refresh-runs/
@@ -324,12 +339,15 @@ jobs:
           LABELS=(--label autoblog --label autoblog-refresh --label autoblog-claude-reviewed)
           [ "$PASS" = "true" ] || LABELS+=(--label autoblog-review-failed)
 
-          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number'); then
-            echo "::error::Could not list PRs for $BRANCH."
-            exit 1
-          fi
           if [ -n "$EXISTING_PR" ]; then
             gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE" "${LABELS[@]/--label/--add-label}"
+            # `--add-label` never clears the previous finalize's verdict: a
+            # passing handoff drops any earlier failure (overridden or not),
+            # and a failing one drops an override that approved another head.
+            if [ "$PASS" = "true" ]; then
+              gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed || true
+            fi
+            gh pr edit "$EXISTING_PR" --remove-label autoblog-review-failed-overridden || true
             # A GITHUB_TOKEN push raises no pull_request event; re-raise one
             # so CI and review see the new head.
             gh pr close "$EXISTING_PR" && gh pr reopen "$EXISTING_PR"
