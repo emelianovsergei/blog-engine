@@ -71,7 +71,13 @@ export interface ReviewComment {
  * comments, so a retried `revise --resolve` (or a timeout note followed by the
  * landed revision) never spends the allowance twice.
  */
-type MarkerComment = { body: string; author_association?: string; user?: { login?: string } | null };
+export type MarkerComment = { body: string; author_association?: string; user?: { login?: string } | null };
+
+/** A revision marker the routine itself posted (see revisionCount). */
+export function isRoutineMarker(c: MarkerComment, markerAuthor?: string): boolean {
+  if (!c.body.includes(REVISION_MARKER)) return false;
+  return markerAuthor ? c.user?.login === markerAuthor : c.author_association === "OWNER";
+}
 
 /**
  * Revisions already made, from the routine's marker comments. The count closes
@@ -82,9 +88,7 @@ type MarkerComment = { body: string; author_association?: string; user?: { login
 export function revisionCount(issueComments: MarkerComment[], markerAuthor?: string): number {
   const seen = new Set<string>();
   for (const c of issueComments) {
-    if (!c.body.includes(REVISION_MARKER)) continue;
-    const trusted = markerAuthor ? c.user?.login === markerAuthor : c.author_association === "OWNER";
-    if (!trusted) continue;
+    if (!isRoutineMarker(c, markerAuthor)) continue;
     seen.add(c.body.match(/revision (\d+) of/i)?.[1] ?? c.body);
   }
   return seen.size;

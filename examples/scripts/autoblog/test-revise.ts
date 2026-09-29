@@ -11,6 +11,7 @@ import {
   classifyPr,
   codexOnHead,
   headRequestComments,
+  isRoutineMarker,
   publishVerdict,
   codexSeverity,
   reportFindings,
@@ -285,6 +286,9 @@ assert.equal(
   1,
   "with the routine's login known, only its own markers count",
 );
+assert.equal(isRoutineMarker({ body: `${REVISION_MARKER} revision 1 of 2`, user: { login: "routine" } }, "routine"), true);
+assert.equal(isRoutineMarker({ body: `${REVISION_MARKER} revision 1 of 2`, user: { login: "someone" } }, "routine"), false);
+assert.equal(isRoutineMarker({ body: "revision 1 of 2", user: { login: "routine" } }, "routine"), false, "no marker, no match");
 
 // ── publish ─────────────────────────────────────────────────────────────────
 const run = (name: string, conclusion: string | null, started: string, status = "completed") => ({ name, status, conclusion, started_at: started });

@@ -63,6 +63,7 @@ import {
   codexOnHead,
   headRequestComments,
   isClaudePostPr,
+  isRoutineMarker,
   publishVerdict,
   reportFindings,
   revisionCount,
@@ -73,6 +74,7 @@ import {
   type CommitStatus,
   type Finding,
   type HeldPr,
+  type MarkerComment,
   type OpenPr,
   type PublishVerdict,
   type ReviewComment,
@@ -1290,8 +1292,11 @@ async function cmdReviseResolve(): Promise<void> {
   // Idempotent: a retry after the revision was already recorded at this head
   // only finishes the blocking threads that are still open (a transient API
   // failure the first time); it never replies twice or records it twice.
-  const recorded = githubList<{ body: string }>(`/repos/${owner}/${name}/issues/${rev.pr}/comments`);
-  const already = recorded.some((c) => c.body.includes(REVISION_MARKER) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
+  // Only the routine's own marker counts, as in revisionCount: a look-alike
+  // from someone else must not stop the real one being recorded.
+  const recorded = githubList<MarkerComment & { body: string }>(`/repos/${owner}/${name}/issues/${rev.pr}/comments`);
+  const markerAuthor = routineLogin();
+  const already = recorded.some((c) => isRoutineMarker(c, markerAuthor) && c.body.includes(`revision ${rev.revision} of`) && c.body.includes(`(${head.slice(0, 7)})`));
   const threads = githubApi("GET", `/repos/${owner}/${name}/pulls/${rev.pr}/ccr/review_threads`) as CcrThread[];
   const open = (id: number) => !threads.some((t) => t.resolved && t.comment_ids.includes(id));
   let failed = 0;
