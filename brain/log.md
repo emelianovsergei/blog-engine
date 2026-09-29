@@ -8,6 +8,11 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-29] Weekly refresh written by the Claude session
+- `examples/blog-refresh.yml` no longer calls a model. It has two stages: a brief that writes the engine's refresh prompt, and a finalize that applies the session's answer and opens a Claude-reviewed PR.
+- `examples/scripts/autoblog/claude.ts` adds `refresh-brief`, `refresh-check`, `refresh-review` and `refresh-handoff`. `publish` merges refresh PRs, and closes a held one with `autoblog-refresh-dropped`.
+- New `examples/scripts/refresh-blog-post.ts` and `test-refresh-fixtures.ts`. The runbook gains step 10b. See [[concepts/claude-writer]].
+
 ## [2026-09-25] Claude writer: examples for the scheduled-session pipeline
 
 The consumer sites move writing to a scheduled Claude session. `examples/` gains `blog-brief.yml`, `blog-finalize.yml`, `AUTOBLOG_CLAUDE.md` and `scripts/autoblog/` (brief builder and session CLI, with Pulse's `site.ts` as the worked example). `autoblog-review.yml` gains a `claude-reviewed` job, so `autoblog-claude-reviewed` PRs skip the Grok review and auto-fix. Codex heal skips them too. CI heal and the watchdog count `blog/claude-*`. `generate-blog-post.yml` is `workflow_dispatch` only. The watchdog defaults to 7 posts per 7 days. Refresh and backfill text now names the `AUTOBLOG_MERGE_DELAY` window instead of a 24-hour one. In `autoblog-ci-heal.yml` the stale-run check was gated on its own output, so it never ran and the link repair after it never ran either; that is fixed. No package release: no `src/` change. Consumers: [pulse-website#401](https://github.com/emelianovsergei/pulse-website/pull/401), [promax-website#320](https://github.com/emelianovsergei/promax-website/pull/320). [[concepts/claude-writer]].

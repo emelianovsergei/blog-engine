@@ -1,27 +1,43 @@
 # Drop-in template for consumer repos (promaxhvac.com, hvacpulse.com).
 # Place at: .github/workflows/blog-refresh.yml
+# Needs scripts/refresh-blog-post.ts and scripts/test-refresh-fixtures.ts
+# (examples/scripts/) and the session commands in examples/scripts/autoblog/claude.ts.
 #
 name: Refresh Ranking Blog Post
 
 # Weekly refresh of ONE published post: the URL with the most page-two Search
 # Console impressions that has not been touched in a while gets its answer
-# box, FAQs, keyword, sources and (lightly) its body regenerated against the
-# queries it already ranks for, and an honest `updated:` date. The existing
-# review gate and the AUTOBLOG_MERGE_DELAY merge window apply unchanged.
+# box, FAQs, keyword, sources and (lightly) its body refreshed against the
+# queries it already ranks for, and an honest `updated:` date.
 #
-# Runs Monday 1 AM Pacific (DST pair + the same hour-based guard as
-# generate-blog-post.yml). Nothing to refresh — no Search Console access, no
-# post outside the 120-day cooldown, a post with an open autoblog PR — is a
-# clean no-op: no branch, no PR.
+# The writer is the scheduled Claude session (subscription), never an API
+# key. Two stages, like the daily post (blog-brief.yml → session →
+# blog-finalize.yml):
 #
-# Required setup: the generate workflow's secrets plus GSC_SERVICE_ACCOUNT_JSON
-# and GSC_SITE_URL. Labels: autoblog, autoblog-refresh.
+#   brief     workflow_dispatch, sent by the Monday Pulse night routine
+#             (`npm run autoblog:claude -- refresh-brief`, AUTOBLOG_CLAUDE.md).
+#             Picks the post from Search Console and writes the engine's
+#             prompt to the side branch `autoblog-refresh-brief`. No model call.
+#   finalize  a push of data/blog-refresh-inbox/ to blog/refresh-* (the
+#             session's `refresh-handoff`). Applies the session's answer with
+#             the engine (same parsing and validation as a model reply),
+#             repairs links, commits on top of main, marks the commit
+#             `autoblog/finalized` and opens the PR as a Claude-reviewed post:
+#             the Grok review and auto-fix skip it, the claude-reviewed job
+#             approves it, and the routine's `publish` merges it.
+#
+# Nothing to refresh (no Search Console access, every post in its 120-day
+# cooldown or with an open autoblog PR) is a brief with that status: no
+# branch, no PR. Required setup: GSC_SERVICE_ACCOUNT_JSON, GSC_SITE_URL,
+# AUTOBLOG_PAT. Labels: autoblog, autoblog-refresh, autoblog-claude-reviewed.
 
 on:
-  schedule:
-    - cron: "0 8 * * 1"   # Monday 1 AM PDT (summer)
-    - cron: "0 9 * * 1"   # Monday 1 AM PST (winter)
   workflow_dispatch:
+  push:
+    branches:
+      - "blog/refresh-*"
+    paths:
+      - "data/blog-refresh-inbox/**"
 
 # One group for every workflow that selects and mutates EXISTING posts
 # (refresh, backfill): their exclusion lists are read before a PR exists, so
@@ -31,55 +47,25 @@ concurrency:
   group: autoblog-mutate-existing
   cancel-in-progress: false
 
-jobs:
-  schedule-guard:
-    name: Resolve Pacific run window
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.window.outputs.should_run }}
-      run_at: ${{ steps.window.outputs.run_at }}
-      run_date: ${{ steps.window.outputs.run_date }}
-    steps:
-      - name: Resolve Pacific run window
-        id: window
-        run: |
-          RUN_AT=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
-          RUN_DATE=${RUN_AT%%T*}
-          echo "run_at=$RUN_AT" >> "$GITHUB_OUTPUT"
-          echo "run_date=$RUN_DATE" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          HOUR=$(echo "${{ github.event.schedule }}" | awk '{print $2}')
-          UTC_OFFSET=$(TZ=America/Los_Angeles date +%z)
-          if [ "$UTC_OFFSET" = "-0700" ] && [ "$HOUR" = "8" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          elif [ "$UTC_OFFSET" = "-0800" ] && [ "$HOUR" = "9" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Off-DST twin of the slot; skipped on purpose."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
 
-  refresh:
-    name: Refresh one ranking post
-    needs: schedule-guard
-    if: needs.schedule-guard.outputs.should_run == 'true'
+jobs:
+  brief:
+    name: Pick the post and write the refresh prompt
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
           cache: npm
@@ -123,45 +109,133 @@ jobs:
           echo "slugs=$SLUGS" >> "$GITHUB_OUTPUT"
           echo "Excluded (open PRs): ${SLUGS:-none}"
 
-      - name: Refresh the best-ranking stale post
-        run: npm run blog:refresh
+      - name: Pick the post and write the prompt
         env:
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
           GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
-          BLOG_GENERATOR_DATE: ${{ needs.schedule-guard.outputs.run_at }}
           BLOG_REFRESH_EXCLUDE_SLUGS: ${{ steps.pending.outputs.slugs }}
+          BLOG_REFRESH_PROMPT_OUT: ${{ runner.temp }}/refresh-brief/prompt.md
+        run: |
+          set -euo pipefail
+          BLOG_GENERATOR_DATE=$(TZ=America/Los_Angeles date '+%Y-%m-%dT%H:%M:%S%:z')
+          export BLOG_GENERATOR_DATE
+          mkdir -p "$RUNNER_TEMP/refresh-brief"
+          npm run blog:refresh
+          RUN_DATE=${BLOG_GENERATOR_DATE%%T*}
+          cp "data/blog-refresh-runs/${RUN_DATE}.json" "$RUNNER_TEMP/refresh-brief/brief.json"
+          jq -r '"\(.runDate) \(.status) \(.slug // "") \(.reason // "")"' "$RUNNER_TEMP/refresh-brief/brief.json"
+
+      # One orphan commit, force-pushed: the branch only ever holds the latest
+      # brief. Pushed with GITHUB_TOKEN, which raises no workflow events.
+      - name: Publish to the autoblog-refresh-brief branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/refresh-brief"
+          cat > "$OUT/README.md" <<'EOF'
+          # autoblog-refresh-brief
+
+          Written by `.github/workflows/blog-refresh.yml` when the Monday Claude
+          routine asks for it. Read by `npm run autoblog:claude -- refresh-brief`.
+          Force-pushed; do not branch from it or merge it.
+          EOF
+          echo '{ "git": { "deploymentEnabled": false } }' > "$OUT/vercel.json"
+          cd "$OUT"
+          git init -q
+          git checkout -q -b autoblog-refresh-brief
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "refresh brief: $(jq -r '.runDate + " " + .status + " " + (.slug // "")' brief.json)"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/autoblog-refresh-brief
+
+  finalize:
+    name: Apply the session's refresh and open the PR
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the handoff
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Read the handoff
+        id: handoff
+        run: |
+          set -euo pipefail
+          IN=data/blog-refresh-inbox
+          for f in brief.json answer.json review.json; do
+            test -f "$IN/$f" || { echo "::error::$IN/$f is missing from the handoff."; exit 1; }
+          done
+          mkdir -p "$RUNNER_TEMP/inbox"
+          cp "$IN"/*.json "$RUNNER_TEMP/inbox/"
+          {
+            echo "run_date=$(jq -r .runDate "$IN/brief.json")"
+            echo "slug=$(jq -r .slug "$IN/brief.json")"
+            echo "pass=$(jq -r '.pass == true' "$IN/review.json")"
+            echo "handoff=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      # The refresh is applied to main as it is now, never to whatever else
+      # the handoff branch carries.
+      - name: Start from main
+        run: |
+          set -euo pipefail
+          git fetch -q origin main
+          git checkout -q -B refresh-finalize origin/main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply the answer
+        env:
+          BLOG_REFRESH_BRIEF: ${{ runner.temp }}/inbox/brief.json
+          BLOG_REFRESH_ANSWER: ${{ runner.temp }}/inbox/answer.json
+        run: npm run blog:refresh
 
       - name: Read the run report
         id: report
         env:
-          RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
+          RUN_DATE: ${{ steps.handoff.outputs.run_date }}
         run: |
           set -euo pipefail
           REPORT="data/blog-refresh-runs/${RUN_DATE}.json"
           test -f "$REPORT"
+          # The session's review travels with the report the PR carries.
+          jq --slurpfile r "$RUNNER_TEMP/inbox/review.json" '. + {claudeReview: $r[0]}' "$REPORT" > "$REPORT.tmp"
+          mv "$REPORT.tmp" "$REPORT"
           echo "status=$(jq -r '.status' "$REPORT")" >> "$GITHUB_OUTPUT"
-          echo "slug=$(jq -r '.slug // ""' "$REPORT")" >> "$GITHUB_OUTPUT"
           echo "report=$REPORT" >> "$GITHUB_OUTPUT"
           jq -r '.status, (.reason // "")' "$REPORT"
 
-      - name: Open the refresh PR
+      - name: Commit, mark finalized and open the PR
         if: steps.report.outputs.status == 'refreshed'
         env:
           GH_TOKEN: ${{ secrets.AUTOBLOG_PAT || secrets.GITHUB_TOKEN }}
           HAS_PAT: ${{ secrets.AUTOBLOG_PAT != '' }}
           LABEL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_DATE: ${{ needs.schedule-guard.outputs.run_date }}
-          SLUG: ${{ steps.report.outputs.slug }}
+          RUN_DATE: ${{ steps.handoff.outputs.run_date }}
+          SLUG: ${{ steps.handoff.outputs.slug }}
           REPORT: ${{ steps.report.outputs.report }}
+          PASS: ${{ steps.handoff.outputs.pass }}
+          HANDOFF: ${{ steps.handoff.outputs.handoff }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          BRANCH="blog/refresh-${RUN_DATE}-${SLUG}"
+          if [ "${HAS_PAT}" != "true" ]; then
+            echo "::error::AUTOBLOG_PAT is not configured; a PR opened with GITHUB_TOKEN would never receive CI or review. The handoff on $BRANCH is kept."
+            exit 1
+          fi
           PR_TITLE="Blog refresh: ${RUN_DATE} ${SLUG}"
-          NOTES="data/blog-refresh-runs/${RUN_DATE}-notes.md"
-
           BODY_FILE=$(mktemp)
           {
             echo "## Weekly Refresh of a Ranking Post"
@@ -174,33 +248,48 @@ jobs:
             jq -r '.queries[] | "- `\(.query)` — \(.impressions) impressions, position \(.position | . * 10 | round / 10)"' "$REPORT"
             echo
             echo "### What changed"
-            if [ -f "$NOTES" ]; then cat "$NOTES"; else jq -r '.changeNotes // "(no notes)"' "$REPORT"; fi
+            jq -r '.changeNotes // "(no notes)"' "$REPORT"
             echo
-            echo "The existing AI review gate runs on this PR; it merges through the same \`AUTOBLOG_MERGE_DELAY\` window as a new post. The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
+            echo "### Claude review (separate subagent)"
+            if [ "$PASS" = "true" ]; then echo "✅ Passed."; else echo "❌ Failed — see \`claudeReview\` in \`${REPORT}\`."; fi
+            jq -r '.claudeReview.summary // empty' "$REPORT"
+            echo
+            echo "Written by the scheduled Claude session (no API key). The publish date is unchanged; \`updated:\` is set to ${RUN_DATE}."
           } > "$BODY_FILE"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
           git add content/blog/ data/blog-refresh-runs/
-          git commit -m "Refresh ${SLUG} against its Search Console queries (${RUN_DATE})"
-          git push --force -u origin "$BRANCH"
+          git commit -q -m "Refresh ${SLUG} against its Search Console queries (${RUN_DATE})"
+          # The finalized branch is main + this commit, replacing the handoff.
+          # Leased on the handoff: a newer push to the branch is never overwritten.
+          git push --force-with-lease="refs/heads/${BRANCH}:${HANDOFF}" origin "HEAD:refs/heads/${BRANCH}"
+          GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
+            -f state=success -f context=autoblog/finalized \
+            -f description="Finalized from Claude refresh handoff (handoff=${HANDOFF:0:12})" >/dev/null
 
-          if [ "${HAS_PAT}" != "true" ]; then
-            echo "::error::AUTOBLOG_PAT is not configured; the refresh is safe on $BRANCH but a PR opened with GITHUB_TOKEN would never receive CI or review."
-            exit 1
-          fi
+          for L in "autoblog:0E8A16:Auto-generated blog post" "autoblog-refresh:1D76DB:Weekly refresh of a ranking post" \
+                   "autoblog-claude-reviewed:5319E7:Written and reviewed in the scheduled Claude session" \
+                   "autoblog-review-failed:B60205:Failed the autoblog review"; do
+            IFS=: read -r NAME COLOR DESC <<<"$L"
+            GH_TOKEN="$LABEL_TOKEN" gh label create "$NAME" --color "$COLOR" --description "$DESC" >/dev/null 2>&1 || true
+          done
+          LABELS=(--label autoblog --label autoblog-refresh --label autoblog-claude-reviewed)
+          [ "$PASS" = "true" ] || LABELS+=(--label autoblog-review-failed)
 
-          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog --color 0E8A16 --description "Auto-generated blog post" >/dev/null 2>&1 || true
-          GH_TOKEN="$LABEL_TOKEN" gh label create autoblog-refresh --color 1D76DB --description "Weekly refresh of a ranking post" >/dev/null 2>&1 || true
-
-          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number'); then
+          if ! EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number'); then
             echo "::error::Could not list PRs for $BRANCH."
             exit 1
           fi
           if [ -n "$EXISTING_PR" ]; then
-            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE" --add-label autoblog --add-label autoblog-refresh
+            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file "$BODY_FILE" "${LABELS[@]/--label/--add-label}"
+            # A GITHUB_TOKEN push raises no pull_request event; re-raise one
+            # so CI and review see the new head.
             gh pr close "$EXISTING_PR" && gh pr reopen "$EXISTING_PR"
+            # Codex reviewed the previous head. The SHA marker binds its 👍 to
+            # this one (autoblog-merge-pending, `publish`), as blog-finalize does.
+            gh pr comment "$EXISTING_PR" --body "$(printf '@codex review\n\n<!-- autoblog-codex-heal-head: %s -->' "$(git rev-parse HEAD)")" \
+              || echo "::warning::Could not ask Codex to review the new head of #$EXISTING_PR."
           else
-            gh pr create --draft --label autoblog --label autoblog-refresh --title "$PR_TITLE" --body-file "$BODY_FILE"
+            gh pr create --draft --base main --head "$BRANCH" "${LABELS[@]}" --title "$PR_TITLE" --body-file "$BODY_FILE"
           fi

@@ -99,6 +99,16 @@ export function isClaudePostPr(pr: OpenPr): boolean {
 }
 
 /**
+ * The Monday refresh of a published post, written and reviewed in the session
+ * (blog-refresh.yml). `publish` merges it through the same gates as a new
+ * post; it is never revised (the post is live either way), so a held one is
+ * closed and the next Monday picks again.
+ */
+export function isClaudeRefreshPr(pr: OpenPr): boolean {
+  return /^blog\/refresh-/.test(pr.head.ref) && pr.labels.some((l) => l.name === "autoblog-claude-reviewed");
+}
+
+/**
  * Whether an open Claude post PR is held, why, and what to fix. Mirrors
  * autoblog-merge-pending: an unresolved Codex P0 holds even when outdated, an
  * unresolved P1 when current; `autoblog-review-failed` and
@@ -115,7 +125,7 @@ export function classifyPr(
   /** The login the routine posts revision markers as (see revisionCount). */
   markerAuthor?: string,
 ): HeldPr | undefined {
-  if (!isClaudePostPr(pr)) return undefined;
+  if (!isClaudePostPr(pr) && !isClaudeRefreshPr(pr)) return undefined;
   const labels = pr.labels.map((l) => l.name);
   const byId = new Map(reviewComments.map((c) => [c.id, { body: c.body, login: (c.user?.login ?? "").replace(/\[bot\]$/, "") }]));
   const findings: Finding[] = [];

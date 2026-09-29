@@ -11,6 +11,8 @@ import {
   classifyPr,
   codexOnHead,
   headRequestComments,
+  isClaudePostPr,
+  isClaudeRefreshPr,
   isRoutineMarker,
   publishVerdict,
   codexSeverity,
@@ -58,6 +60,13 @@ assert.equal(
   undefined,
   "only Claude-reviewed PRs",
 );
+// The weekly refresh merges through the same gates, but is never revised.
+const refreshPr = pr([], "blog/refresh-2026-09-28-some-post");
+assert.equal(isClaudeRefreshPr(refreshPr), true);
+assert.equal(isClaudePostPr(refreshPr), false, "revise --list never picks up a refresh");
+assert.equal(isClaudeRefreshPr({ ...refreshPr, labels: [{ name: "autoblog" }, { name: "autoblog-refresh" }] }), false, "an API-key refresh is not the session's");
+assert.deepEqual(classifyPr(refreshPr, [thread(1)], [codex(1, "P1")], [])?.reasons, ["Codex P1"], "a Codex P1 holds a refresh");
+assert.equal(classifyPr(refreshPr, [], [], []), undefined, "a clean refresh is not held");
 
 let held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], []);
 assert.deepEqual(held?.reasons, ["Codex P1"], "a current P1 holds");

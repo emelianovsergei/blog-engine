@@ -10,6 +10,11 @@ it top to bottom, without asking questions: nobody is watching live.
 ```
 blog-brief.yml (GitHub Action, ~1:03 AM PT)   → branch autoblog-brief: brief.json
 YOU (scheduled Claude session, ~1:37 AM PT)   → branch blog/claude-<date>: data/blog-claude-inbox/
+  Mondays, after step 10 (step 10b):
+  blog-refresh.yml brief (you dispatch it)    → branch autoblog-refresh-brief: brief.json, prompt.md
+  YOU                                         → branch blog/refresh-<date>-<slug>: data/blog-refresh-inbox/
+  blog-refresh.yml finalize (on your push)    → applies your answer on main → draft PR
+                                                labels: autoblog, autoblog-refresh, autoblog-claude-reviewed
 blog-finalize.yml (on your push)              → image, link audit, frontmatter, report → draft PR
                                                 labels: autoblog, autoblog-claude-reviewed
 autoblog-review.yml                           → skips Grok, applies autoblog-approved-pending
@@ -32,6 +37,8 @@ which merges with its own gates.
 - **One post per run.** If `blog/claude-<today>` already exists on origin, skip
   to step 10 (publish) and report — today's post is written.
 - **Commit only `data/blog-claude-inbox/`.** No other file in the repo changes.
+  (Step 10b's `refresh-handoff` commits `data/blog-refresh-inbox/` itself, in a
+  scratch worktree; you never commit it by hand.)
   Finalize runs `main`'s code and takes only the four inbox files from your
   branch; any other change you push is dropped.
   Preview files from `check` are removed by `handoff`.
@@ -370,13 +377,74 @@ the session cannot read repository variables. A site that changes it sets
 `AUTOBLOG_HOLD_ON_CODEX_P1`). A mismatch is safe: `publish` re-reads a post
 merge-pending did not merge and reports it as waiting, never as published.
 
+## 10b. Weekly refresh (Mondays only)
+
+Only when `TZ=America/Los_Angeles date +%u` prints `1`, after step 10. One
+published post a week that ranks on page two of Google gets refreshed against
+the queries it already ranks for. You write the refresh; no API key is used.
+
+```bash
+npm run autoblog:claude -- refresh-brief     # dispatches blog-refresh.yml, waits ≤20 min for its brief
+```
+
+- `REFRESH: none (...)` is a normal week (no Search Console signal, every
+  candidate in its 120-day cooldown or already in an open PR). Say so in the
+  report and stop here.
+- `REFRESH: <slug>`: read `.autoblog/refresh/prompt.md` in full. It holds the
+  post, its ranking queries, the rubric, this site's editorial policy and the
+  JSON schema of the answer. Write **one JSON object** matching the schema to
+  `.autoblog/refresh/answer.json`: every field the prompt requests, the full
+  revised `markdown` body, and `changeNotes`. Keep the post's facts, voice and
+  structure. Answer the ranking queries earlier and more directly. Never invent
+  a service call (the editorial policy), and cite only sources the link policy
+  allows.
+
+```bash
+npm run autoblog:claude -- refresh-check                 # applies it with finalize's code; writes preview.mdx + preview.diff
+npm run autoblog:claude -- refresh-review --round 1      # writes the reviewer prompt
+```
+
+`refresh-check` exits 1 when the engine rejects the answer (a missing field, a
+malformed FAQ): fix `answer.json` and run it again. Exit 3 means the answer
+changes nothing: stop, and report it.
+
+Hand `.autoblog/refresh/review-1.prompt.md` to a **fresh subagent**, exactly as
+in step 8 (it never saw your answer). Save its JSON to
+`.autoblog/refresh/review-1.answer.json`, then:
+
+```bash
+npm run autoblog:claude -- refresh-review --round 1 --answer .autoblog/refresh/review-1.answer.json
+```
+
+Exit 2 is a failed review: fix `answer.json` from its blockers, run
+`refresh-check` again, then review round 2 with a new subagent. At most 2 fix
+rounds (round 3 is the last).
+
+```bash
+npm run autoblog:claude -- refresh-handoff               # pushes blog/refresh-<date>-<slug>
+npm run autoblog:claude -- publish                       # waits for finalize + CI + Codex, then merges it
+```
+
+`refresh-handoff` pushes only a passing review. After the last round a failed
+one prints `REFRESH-HANDOFF: skipped`: the live post is unchanged, and next
+Monday picks again. Report it; that is not an error. If the push is refused
+(this session may only push its own branch), report the git error: finalize
+runs only on `blog/refresh-*`.
+
+`publish` treats the refresh PR like a post. The only difference: a refresh is
+never revised. `publish` closes a held refresh PR (Codex P0/P1) with
+`autoblog-refresh-dropped` and lists it on `CLOSED:`. A refresh whose CI failed
+is shown on its own line, not on `BROKEN:`. Report it.
+
 ## 11. Report
 
 End with a short summary: title, slug, category, the GSC query it targets (if
 any), review verdict and score, fix rounds used, branch pushed, and whether it
 is **published** (the `PUBLISHED:` line) or what it still waits for. Add each
 held post you revised (PR, findings fixed, review verdict) and each one
-`revise --list` skipped. Stop there.
+`revise --list` skipped. On Mondays add the refresh: the post, the fields
+changed, the review verdict, and whether it merged (or `REFRESH: none` and
+why). Stop there.
 
 ## Morning sweep
 
@@ -389,6 +457,9 @@ sweep". It catches whatever the night left open, so nobody has to:
 3. If `publish` printed `TODAY: none` (the night run failed or never
    started), run steps 1–10 now. Do not rely on `git ls-remote`: merging
    deletes `blog/claude-${TODAY}`.
+   On a Monday whose night run did not finish step 10b (no `REFRESH:` line
+   tonight), run 10b now. Skip it if tonight's run already printed
+   `REFRESH: none` or `HANDOFF:`. A second brief would pick a second post.
 4. Report as in step 11, and say what the night run had left behind.
 
 ## When something goes wrong
