@@ -179,6 +179,14 @@ jobs:
             echo "pass=$(jq -r '.pass == true' "$IN/review.json")"
             echo "generator=$(jq -r '.generatorSha // empty' "$IN/review.json")"
             echo "preview=$(jq -r '.preview // empty' "$IN/review.json")"
+            # The verdict is bound to the answer it graded (sha256 of the file's
+            # bytes, as refresh-review records it); an answer edited since is
+            # not covered, whatever `.pass` says.
+            if [ "$(sha256sum "$IN/answer.json" | cut -d' ' -f1)" = "$(jq -r '.answer // empty' "$IN/review.json")" ]; then
+              echo "answer_reviewed=true"
+            else
+              echo "answer_reviewed=false"
+            fi
             echo "handoff=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
@@ -249,7 +257,7 @@ jobs:
           REPORT: ${{ steps.report.outputs.report }}
           # The session's verdict covers this post only when it is the preview
           # it graded, built from the same revision.
-          PASS: ${{ steps.handoff.outputs.pass == 'true' && steps.base.outputs.pinned == 'true' && steps.report.outputs.reviewed_preview == 'match' }}
+          PASS: ${{ steps.handoff.outputs.pass == 'true' && steps.handoff.outputs.answer_reviewed == 'true' && steps.base.outputs.pinned == 'true' && steps.report.outputs.reviewed_preview == 'match' }}
           SESSION_PASS: ${{ steps.handoff.outputs.pass }}
           HANDOFF: ${{ steps.handoff.outputs.handoff }}
           BRANCH: ${{ github.ref_name }}
@@ -276,7 +284,7 @@ jobs:
             echo
             echo "### Claude review (separate subagent)"
             if [ "$PASS" = "true" ]; then echo "✅ Passed."
-            elif [ "$SESSION_PASS" = "true" ]; then echo "❌ Not covered: this post is not the preview the session's reviewer graded (built from another revision of main, or different output)."
+            elif [ "$SESSION_PASS" = "true" ]; then echo "❌ Not covered: this post is not the preview the session's reviewer graded (the answer changed after the review, another revision of main, or different output)."
             else echo "❌ Failed — see \`claudeReview\` in \`${REPORT}\`."; fi
             jq -r '.claudeReview.summary // empty' "$REPORT"
             echo
@@ -286,10 +294,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add content/blog/ data/blog-refresh-runs/
-          git commit -q -m "Refresh ${SLUG} against its Search Console queries (${RUN_DATE})"
+          # The trailer names the handoff this commit finalizes, so a re-run
+          # of this job (a status or PR call failed after the push) can tell
+          # its own earlier result from someone else's push.
+          git commit -q -m "Refresh ${SLUG} against its Search Console queries (${RUN_DATE})" -m "Refresh-Handoff: ${HANDOFF}"
           # The finalized branch is main + this commit, replacing the handoff.
           # Leased on the handoff: a newer push to the branch is never overwritten.
-          git push --force-with-lease="refs/heads/${BRANCH}:${HANDOFF}" origin "HEAD:refs/heads/${BRANCH}"
+          LEASE="$HANDOFF"
+          REMOTE=$(git ls-remote origin "refs/heads/${BRANCH}" | cut -f1)
+          if [ -n "$REMOTE" ] && [ "$REMOTE" != "$HANDOFF" ]; then
+            git fetch -q origin "refs/heads/${BRANCH}"
+            if [ "$(git rev-parse FETCH_HEAD)" = "$REMOTE" ] \
+              && git log -1 --format=%B "$REMOTE" | grep -qx "Refresh-Handoff: ${HANDOFF}"; then
+              echo "Re-run: ${BRANCH} already holds this handoff's finalized commit ${REMOTE:0:12}; replacing it."
+              LEASE="$REMOTE"
+            fi
+          fi
+          git push --force-with-lease="refs/heads/${BRANCH}:${LEASE}" origin "HEAD:refs/heads/${BRANCH}"
           GH_TOKEN="$LABEL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
             -f state=success -f context=autoblog/finalized \
             -f description="Finalized from Claude refresh handoff (handoff=${HANDOFF:0:12})" >/dev/null
