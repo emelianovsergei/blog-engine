@@ -657,7 +657,7 @@ jobs:
           # the verdict.
           MB=$(git merge-base "origin/${BASE}" HEAD)
           OUTSIDE=$(git diff --name-only "$MB" HEAD \
-            | grep -vE '^(content/blog/|public/images/blog/|data/blog-generation-runs/|brain/)' || true)
+            | grep -vE '^(content/blog/|public/images/blog/|data/blog-generation-runs/|data/blog-refresh-runs/|brain/)' || true)
           if [ -n "$OUTSIDE" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
             {
@@ -715,7 +715,7 @@ jobs:
               fi
               CHANGED+="${P}: ${C:0:10} ${SUBJECT}"$'\n'
             done < <(git log --no-merges --format='%H%x09%s' "${FINALIZE}..HEAD" "^origin/${BASE}" -- "$P")
-          done < <(git diff --name-only "$FINALIZE" HEAD -- brain data/blog-generation-runs)
+          done < <(git diff --name-only "$FINALIZE" HEAD -- brain data/blog-generation-runs data/blog-refresh-runs)
           if [ -n "$CHANGED" ]; then
             echo "bound=false" >> "$GITHUB_OUTPUT"
             {

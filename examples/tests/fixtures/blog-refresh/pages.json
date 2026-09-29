@@ -1,0 +1,12 @@
+{
+  "https://www.hvacpulse.com/blog/hot-post": [
+    { "query": "ac short cycling sacramento", "impressions": 1400, "clicks": 12, "ctr": 0.009, "position": 9.8 },
+    { "query": "why does my ac short cycle", "impressions": 600, "clicks": 4, "ctr": 0.007, "position": 13.1 }
+  ],
+  "https://www.hvacpulse.com/blog/recent-post": [
+    { "query": "furnace recent query", "impressions": 5000, "clicks": 40, "ctr": 0.008, "position": 11 }
+  ],
+  "https://www.hvacpulse.com/blog/page-one-post": [
+    { "query": "page one query", "impressions": 4000, "clicks": 900, "ctr": 0.22, "position": 2.1 }
+  ]
+}

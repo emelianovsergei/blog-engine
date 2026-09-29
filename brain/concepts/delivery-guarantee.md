@@ -3,7 +3,7 @@ type: "concept"
 title: "Delivery Guarantee (Consumer Workflow Set + Watchdog)"
 description: "The workflow set a consumer repo runs (nine since Codex heal), why examples/ must carry all of them, and the out-of-band watchdog that proves a post actually shipped."
 tags: ["concepts", "ci", "workflows", "reliability", "examples"]
-timestamp: "2026-09-25"
+timestamp: "2026-09-29"
 sources: []
 ---
 # Delivery Guarantee (Consumer Workflow Set + Watchdog)
@@ -26,7 +26,7 @@ every repo provisioned from it.
 | `autoblog-rewrite.yml` | `/autoblog rewrite` — the manual escape hatch when the automated loop hands off. |
 | `autoblog-watchdog.yml` | Daily proof that a post actually shipped. `AUTOBLOG_EXPECTED_POSTS_PER_WEEK` defaults to 7: 7-day window, stale after `ceil(14/N)` days. Set it to `0` to derive the windows from `AUTOBLOG_INTERVAL`. `blog/claude-*` heads count. |
 | `autoblog-ci-heal.yml` | Reacts to red CI on `blog/auto-*`, `blog/claude-*`, `blog/refresh-*` and `blog/backfill-*` PRs so a failing check does not strand a finished post. |
-| `blog-refresh.yml` | Monday: `blog-engine-refresh --mode refresh` on the post with the most page-two Search Console impressions outside a 120-day cooldown ([[concepts/refresh-mode]]). Serialized with backfill via the `autoblog-mutate-existing` concurrency group. |
+| `blog-refresh.yml` | Two stages, no model call. The brief stage (`workflow_dispatch` from the Monday Claude routine) writes the `refreshBlogPost` prompt for the post with the most page-two Search Console impressions outside a 120-day cooldown ([[concepts/refresh-mode]]). The finalize stage (a push to `blog/refresh-*`) applies the session's answer and opens a Claude-reviewed PR ([[concepts/claude-writer]]). Serialized with backfill via the `autoblog-mutate-existing` concurrency group. |
 | `autoblog-backfill.yml` | `workflow_dispatch`: brings up to N older posts onto the current template, one PR each, body kept, autofix skipped (label `autoblog-backfill`). |
 
 Until 2026-08-02 `examples/` carried only three of the five, and the two missing

@@ -3,7 +3,7 @@ type: "concept"
 title: "Claude Writer (Scheduled Session)"
 description: "Daily posts written by a scheduled Claude session from a no-LLM brief, reviewed by a separate Claude subagent, finalized by the consumer's generator in external-plan mode."
 tags: ["concepts", "autoblog", "claude", "consumers", "review"]
-timestamp: "2026-09-25"
+timestamp: "2026-09-29"
 sources: ["examples/blog-brief.yml", "examples/blog-finalize.yml", "examples/AUTOBLOG_CLAUDE.md", "examples/scripts/autoblog/claude.ts"]
 ---
 # Claude Writer (Scheduled Session)
@@ -42,6 +42,17 @@ A post that reaches its PR can still be held there: an unresolved Codex P0 (even
 - `revise --resolve` replies to and resolves the Codex threads through the session proxy's `/pulls/{n}/ccr/...` routes (GraphQL is not available to Claude sessions) and records the revision in a marked PR comment that counts toward the cap.
 - The rules live in `scripts/autoblog/revise.ts`; `scripts/autoblog/test-revise.ts` runs in CI.
 
+## Weekly refresh
+
+The weekly refresh ([[concepts/refresh-mode]]) runs through the Claude session too, not an API key. Pulse runs it; PRO MAX does not yet. It is step 10b of the runbook, on Mondays, after the day's post is published.
+
+- `refresh-brief` dispatches `blog-refresh.yml`. Its brief job holds the Search Console secrets. It picks the page-two post and writes the engine's `refreshBlogPost` prompt (via `relayClient`) to the side branch `autoblog-refresh-brief`. No model is called.
+- The session writes the answer JSON. `refresh-check` applies it with the consumer's `scripts/refresh-blog-post.ts` in finalize mode, in a scratch worktree of `origin/main`, and records that commit as `generatorSha`. The engine parses and validates the answer exactly as it would a model reply. The link audit is policy-only there, because the session cannot reach most sites.
+- A separate subagent reviews the preview (`refresh-review`), with the same gate and editorial policy as a new post. The session gets up to 2 fix rounds.
+- `refresh-handoff` pushes `data/blog-refresh-inbox/{brief,answer,review}.json` to `blog/refresh-<date>-<slug>`. It hands off only a passing review, because the live post is unchanged either way.
+- The finalize job checks out `generatorSha` and applies the answer. The session's review covers the post only if the policy-only output matches the preview digest the reviewer graded. Otherwise the PR is labelled `autoblog-review-failed`. Codex found on blog-engine#63 that applying on the latest `main` could run newer code than the reviewer saw. Finalize then runs the network link audit. It marks the commit `autoblog/finalized` and opens a draft PR labelled `autoblog-refresh` and `autoblog-claude-reviewed`. The brief's post digest must still match `main`.
+- `publish` merges the PR through the same gates as a post. A refresh is never revised: a held refresh PR is closed with `autoblog-refresh-dropped`, which is not `autoblog-abandoned`, so the watchdog's cadence does not count it.
+
 ## Consumer contract
 
 The consumer generator (`scripts/generate-blog-post.ts`) must provide:
@@ -54,7 +65,9 @@ The consumer generator (`scripts/generate-blog-post.ts`) must provide:
 - The handoff's `meta.json` carries `generatorSha`, the commit of `main` the preview was built on. Finalize checks out exactly that commit (only if it is on `main`); anything else fails the review.
 
 `examples/scripts/autoblog/` carries the session CLI and brief builder, with
-Pulse's `site.ts` as the worked example. `examples/AUTOBLOG_CLAUDE.md` is the
+Pulse's `site.ts` as the worked example. `examples/scripts/refresh-blog-post.ts`,
+its fixture test and `examples/tests/fixtures/blog-refresh/` back
+`examples/blog-refresh.yml` (it runs that test before every brief). `examples/AUTOBLOG_CLAUDE.md` is the
 runbook the Routine follows.
 
 `claude.ts` mirrors `rankCandidates` and `pickBest` because [[modules/rank]]
