@@ -63,6 +63,12 @@ const REPORTS_DIR = path.resolve(process.env.BLOG_REFRESH_REPORTS_DIR ?? path.jo
 const FIXTURE_DIR = process.env.BLOG_REFRESH_FIXTURE_DIR ? path.resolve(process.env.BLOG_REFRESH_FIXTURE_DIR) : undefined;
 const LINK_POLICY = path.join(ROOT, "content/policy/link-constraints.json");
 const TIMEZONE = process.env.BLOG_GENERATOR_TIMEZONE ?? "America/Los_Angeles";
+/**
+ * How this site's frontmatter carries a HowTo: "steps" → howToName +
+ * howToSteps (hvacpulse.com), "nested" → howTo { name, steps } (promaxhvac.com).
+ * Same choice as blog-engine-refresh's --howto-shape.
+ */
+const HOWTO_SHAPE: "steps" | "nested" = "steps"; // PRO MAX: "nested"
 
 interface RefreshReport {
   status: "prompt" | "refreshed" | "no-target" | "no-signal";
@@ -275,7 +281,7 @@ async function refreshPost(
     if (client.pending) return "prompt";
     throw error;
   }
-  const shaped = applyHowToShape(result.frontmatter, result.howTo, "steps");
+  const shaped = applyHowToShape(result.frontmatter, result.howTo, HOWTO_SHAPE);
   const out = shaped.frontmatter;
   const changedFields = shaped.changed && !result.changedFields.includes("howTo")
     ? [...result.changedFields, "howTo"]
