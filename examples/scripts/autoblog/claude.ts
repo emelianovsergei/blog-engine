@@ -1379,7 +1379,7 @@ async function cmdRevise(): Promise<void> {
  * the same facts merge-pending checks, gathered through the session's REST
  * access (GraphQL is not available here).
  */
-function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
+function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVerdict; detail: string } {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
   const head = pr.head.sha;
@@ -1403,10 +1403,38 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
   const statuses = githubList<CommitStatus>(`${repo}/commits/${head}/statuses`);
   // merge-pending tells checks apart by workflow as well as name; REST check
   // runs carry only their check suite, so name it from the head's workflow runs.
-  const workflows = new Map(
-    (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: Array<{ name: string; check_suite_id: number }> })
-      .workflow_runs.map((w) => [w.check_suite_id, w.name] as const),
-  );
+  type HeadRun = {
+    id: number;
+    name: string;
+    check_suite_id: number;
+    event?: string;
+    conclusion?: string | null;
+    actor?: { login?: string };
+    head_repository?: { full_name?: string } | null;
+  };
+  const headRuns = (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: HeadRun[] }).workflow_runs;
+  const workflows = new Map(headRuns.map((w) => [w.check_suite_id, w.name] as const));
+  // Finalize's own push (a revision) raises pull_request runs as
+  // github-actions[bot]. A repo that holds such runs for approval leaves them
+  // in `action_required`, and GitHub reads the required check from that
+  // never-started run: the PR stays blocked with every check green
+  // (promax-website#335, 2026-09-30). Approve exactly those runs (this repo's
+  // branch, bot-triggered, this head) and wait for them like any running CI.
+  const heldRuns: string[] = [];
+  for (const w of headRuns.filter((r) =>
+    r.conclusion === "action_required" && r.event === "pull_request" &&
+    r.actor?.login === "github-actions[bot]" && r.head_repository?.full_name === `${owner}/${name}`)) {
+    if (!approveHeldRuns) {
+      heldRuns.push(`${w.name} (awaiting approval)`);
+      continue;
+    }
+    try {
+      githubApi("POST", `${repo}/actions/runs/${w.id}/approve`);
+      heldRuns.push(`${w.name} (approved; starting)`);
+    } catch (error) {
+      heldRuns.push(`${w.name} (awaiting approval; could not approve: ${String(error).split("\n")[0]})`);
+    }
+  }
   const runs = (githubApi("GET", `${repo}/commits/${head}/check-runs?per_page=100`) as { check_runs: Array<CheckRun & { check_suite?: { id?: number } }> })
     .check_runs.map((r) => ({ ...r, workflow: workflows.get(r.check_suite?.id ?? -1) }));
   // Finalized when any commit on the branch carries finalize's status, newest
@@ -1422,7 +1450,10 @@ function publishState(pr: OpenPr): { verdict: PublishVerdict; detail: string } {
     approvedOnHead: approvals.length > 0,
     approvedMinutes: approvedAt ? (Date.now() - Date.parse(approvedAt)) / 60_000 : undefined,
     pendingLabel: labels.includes("autoblog-approved-pending"),
-    ci: ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized")),
+    ci: (() => {
+      const ci = ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized"));
+      return { ...ci, pending: [...ci.pending, ...heldRuns] };
+    })(),
     codex: codexOnHead(head, approvedAt, reviews, { request: requestReactions, pr: prReactions, soleHead }, issueComments),
     held,
     paused: labels.includes("autoblog-hold"),
@@ -1546,7 +1577,7 @@ async function cmdPublish(): Promise<void> {
       // Closed by an earlier run (revise --list) after its last revision.
       todayClosed ??= recent.find((p) => !p.merged_at && isToday(p) && p.labels.some((l) => l.name === "autoblog-abandoned"))?.number;
     }
-    results = open.map((pr) => ({ pr, ...publishState(pr) }));
+    results = open.map((pr) => ({ pr, ...publishState(pr, dispatch) }));
     for (const r of results.filter((x) => x.verdict === "blocked")) closeIfCapped(r.pr);
     for (const r of results.filter((x) => x.verdict === "held" && isClaudeRefreshPr(x.pr))) {
       try {
@@ -1612,7 +1643,7 @@ async function cmdPublish(): Promise<void> {
       results.splice(i, 1);
       continue;
     }
-    const again = publishState(fresh);
+    const again = publishState(fresh, dispatch);
     if (again.verdict === "blocked" && closeIfCapped(fresh)) {
       results.splice(i, 1);
       continue;

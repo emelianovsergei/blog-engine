@@ -47,7 +47,9 @@ permissions:
   # by integration" — so gh exits 1 even when every check is green, and the
   # gate below reads that as "CI failing" for every PR, forever. The job
   # still exits 0, so this looks exactly like a healthy no-op run.
-  actions: read
+  # Write, not read: approving this repo's own held runs (below) needs
+  # Actions write, and the PAT may carry pull-request scopes only.
+  actions: write
   issues: read
 
 jobs:
@@ -271,6 +273,36 @@ jobs:
             fi
             if [ "$HEAD_SHA" != "$HEAD_NOW" ]; then
               echo "PR #$NUM: skipped — head moved from ${HEAD_NOW:0:10} to ${HEAD_SHA:0:10} after the approval window was measured"
+              continue
+            fi
+
+            # Finalize's own push (a revision) raises pull_request runs as
+            # github-actions[bot]. A repo that holds such runs for approval
+            # leaves them in `action_required`, and GitHub then reads the
+            # required check from that never-started run: the PR stays
+            # "blocked" with every check green, and each merge is refused
+            # (promax-website#335, 2026-09-30). Approve only those runs: this
+            # repo's own branch, bot-triggered, on the exact head being
+            # merged. They still have to pass, so the next run merges.
+            if ! WAITING=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&status=action_required&per_page=100" \
+                --jq '[.workflow_runs[] | select(.event == "pull_request" and .actor.login == "github-actions[bot]" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .id] | .[]'); then
+              echo "::warning::Could not list workflow runs awaiting approval for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+            if [ -n "$WAITING" ]; then
+              UNAPPROVED=""
+              for RUN_ID in $WAITING; do
+                gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null 2>&1 \
+                  || { [ -n "${PAT:-}" ] && GH_TOKEN="$PAT" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null; } \
+                  || UNAPPROVED="${UNAPPROVED} ${RUN_ID}"
+              done
+              if [ -n "$UNAPPROVED" ]; then
+                echo "::error::PR #$NUM: could not approve held workflow run(s)${UNAPPROVED} on ${HEAD_SHA:0:10}; its required checks cannot start. Approve them in the Actions tab."
+                FAILED=1
+              else
+                echo "PR #$NUM: skipped — approved $(wc -w <<<"$WAITING") bot-triggered run(s) that were awaiting approval on ${HEAD_SHA:0:10}; merging once they pass"
+              fi
               continue
             fi
 
