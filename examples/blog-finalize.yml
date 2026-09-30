@@ -432,7 +432,16 @@ jobs:
             echo "::warning::wiki:ingest failed; brain/ is left as on main for the next content PR."
             git checkout -- brain
             git clean -fdq -- brain
+            exit 0
           fi
+          # Only the post's own (new) page rides along. The pages an ingest
+          # also edits for a post (index.md, log.md, and the service and area
+          # pages that list related posts) are shared by every open post PR:
+          # two of them editing the same page would conflict on the second
+          # merge, and merge-pending cannot resolve a conflict, so a held post
+          # would block the next one. They refresh on the next ingest outside
+          # the autoblog (a work-post or content PR).
+          git checkout -- brain
 
       - name: Commit, push and open the draft PR
         if: steps.run.outputs.skip != 'true'
