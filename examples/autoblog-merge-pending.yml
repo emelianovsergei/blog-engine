@@ -47,7 +47,9 @@ permissions:
   # by integration" — so gh exits 1 even when every check is green, and the
   # gate below reads that as "CI failing" for every PR, forever. The job
   # still exits 0, so this looks exactly like a healthy no-op run.
-  actions: read
+  # Write, not read: approving this repo's own held runs (below) needs
+  # Actions write, and the PAT may carry pull-request scopes only.
+  actions: write
   issues: read
 
 jobs:
@@ -289,11 +291,18 @@ jobs:
               continue
             fi
             if [ -n "$WAITING" ]; then
+              UNAPPROVED=""
               for RUN_ID in $WAITING; do
-                GH_TOKEN="${PAT:-$GH_TOKEN}" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null \
-                  || echo "::warning::Could not approve workflow run ${RUN_ID} on #$NUM."
+                gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null 2>&1 \
+                  || { [ -n "${PAT:-}" ] && GH_TOKEN="$PAT" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null; } \
+                  || UNAPPROVED="${UNAPPROVED} ${RUN_ID}"
               done
-              echo "PR #$NUM: skipped — approved $(wc -w <<<"$WAITING") bot-triggered run(s) that were awaiting approval on ${HEAD_SHA:0:10}; merging once they pass"
+              if [ -n "$UNAPPROVED" ]; then
+                echo "::error::PR #$NUM: could not approve held workflow run(s)${UNAPPROVED} on ${HEAD_SHA:0:10}; its required checks cannot start. Approve them in the Actions tab."
+                FAILED=1
+              else
+                echo "PR #$NUM: skipped — approved $(wc -w <<<"$WAITING") bot-triggered run(s) that were awaiting approval on ${HEAD_SHA:0:10}; merging once they pass"
+              fi
               continue
             fi
 
