@@ -274,6 +274,29 @@ jobs:
               continue
             fi
 
+            # Finalize's own push (a revision) raises pull_request runs as
+            # github-actions[bot]. A repo that holds such runs for approval
+            # leaves them in `action_required`, and GitHub then reads the
+            # required check from that never-started run: the PR stays
+            # "blocked" with every check green, and each merge is refused
+            # (promax-website#335, 2026-09-30). Approve only those runs: this
+            # repo's own branch, bot-triggered, on the exact head being
+            # merged. They still have to pass, so the next run merges.
+            if ! WAITING=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&status=action_required&per_page=100" \
+                --jq '[.workflow_runs[] | select(.event == "pull_request" and .actor.login == "github-actions[bot]" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .id] | .[]'); then
+              echo "::warning::Could not list workflow runs awaiting approval for #$NUM; leaving for next run."
+              FAILED=1
+              continue
+            fi
+            if [ -n "$WAITING" ]; then
+              for RUN_ID in $WAITING; do
+                GH_TOKEN="${PAT:-$GH_TOKEN}" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/approve" >/dev/null \
+                  || echo "::warning::Could not approve workflow run ${RUN_ID} on #$NUM."
+              done
+              echo "PR #$NUM: skipped — approved $(wc -w <<<"$WAITING") bot-triggered run(s) that were awaiting approval on ${HEAD_SHA:0:10}; merging once they pass"
+              continue
+            fi
+
             # Classify the rollup fail-closed. Helper Autoblog Codex Heal is
             # ignored. CheckRun uses name/conclusion/status; StatusContext
             # uses context/state. Unknown terminal conclusions fail. Zero

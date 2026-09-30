@@ -8,6 +8,9 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-30] Autoblog approves its own held workflow runs
+- `examples/autoblog-merge-pending.yml` and `claude.ts publish` approve pull_request runs that github-actions[bot] started on the head being merged and that are waiting for approval. A held run of a required check blocked promax-website#335 for five hours. See [[concepts/claude-writer]].
+
 ## [2026-09-29] Weekly refresh written by the Claude session
 - `examples/blog-refresh.yml` no longer calls a model. It has two stages: a brief that writes the engine's refresh prompt, and a finalize that applies the session's answer and opens a Claude-reviewed PR.
 - `examples/scripts/autoblog/claude.ts` adds `refresh-brief`, `refresh-check`, `refresh-review` and `refresh-handoff`. `publish` merges refresh PRs, and closes a held one with `autoblog-refresh-dropped`.
