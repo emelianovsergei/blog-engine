@@ -8,6 +8,9 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-09-30] Autoblog post PRs carry only their own wiki page
+- `examples/blog-finalize.yml` restores every existing `brain/` page after the ingest, so a post PR adds only its own page and two open post PRs cannot conflict. Same as pulse-website and promax-website#337. See [[concepts/claude-writer]].
+
 ## [2026-09-30] Autoblog approves its own held workflow runs
 - `examples/autoblog-merge-pending.yml` and `claude.ts publish` approve pull_request runs that github-actions[bot] started on the head being merged and that are waiting for approval. A held run of a required check blocked promax-website#335 for five hours. See [[concepts/claude-writer]].
 
