@@ -1467,11 +1467,12 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
       // re-run replays its original event, and a stale `labeled` payload
       // replayed into autoblog-review could undo a later human approval. One
       // run per workflow, the newest cancelled one: two re-runs in one
-      // concurrency group would cancel each other.
+      // concurrency group would cancel each other. A run's `path` may carry an
+      // `@ref` suffix, so match the file name before it.
       const tests = (process.env.AUTOBLOG_TEST_WORKFLOWS ?? "ci.yml playwright.yml").split(/\s+/).filter(Boolean);
       const testRuns = headRuns.filter((r) =>
         r.event === "pull_request" && r.head_repository?.full_name === `${owner}/${name}` &&
-        tests.includes((r.path ?? "").split("/").pop() ?? ""));
+        tests.includes((r.path ?? "").split("@")[0].split("/").pop() ?? ""));
       if (pending.length === 0 && ci.failing.length === 0 && pull.mergeable_state === "blocked") {
         const newest = new Map<number | undefined, HeadRun>();
         for (const r of testRuns.filter((t) => t.conclusion === "cancelled" &&

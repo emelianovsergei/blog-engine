@@ -384,7 +384,8 @@ jobs:
             # re-run replays its original event, and a stale `labeled` payload
             # replayed into autoblog-review could undo a later human approval.
             # One run per workflow (the newest cancelled one): two re-runs in
-            # one concurrency group would cancel each other. Nothing on the
+            # one concurrency group would cancel each other. A run's `path`
+            # may carry an `@ref` suffix, so match the file name before it. Nothing on the
             # head is running any more, so a re-run cannot cancel a live run;
             # the next run merges once they pass.
             MSTATE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .mergeable_state) || MSTATE=""
@@ -393,7 +394,7 @@ jobs:
                   --jq '(env.AUTOBLOG_TEST_WORKFLOWS | split(" ")) as $tests
                     | [.workflow_runs[] | select(.event == "pull_request"
                         and .head_repository.full_name == env.GITHUB_REPOSITORY
-                        and ((.path | split("/") | last) as $f | any($tests[]; . == $f)))] as $runs
+                        and ((.path | split("@") | first | split("/") | last) as $f | any($tests[]; . == $f)))] as $runs
                     | [$runs[] | select(.conclusion == "cancelled")
                         | select(.workflow_id as $w | any($runs[]; .workflow_id == $w and .conclusion == "success"))]
                     | group_by(.workflow_id) | map(max_by(.created_at) | .id) | .[]'); then
