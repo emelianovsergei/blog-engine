@@ -370,6 +370,42 @@ jobs:
               continue
             fi
 
+            # The gate above ignores a cancelled check that a later run of the
+            # same check passed; branch protection does not always. A revision
+            # raises two pull_request runs on one head, concurrency cancels
+            # one, and GitHub can keep reading the required check from the
+            # cancelled run: the PR stays "blocked" with every check green and
+            # the merge is refused (promax-website#339, 2026-10-02). Re-run
+            # this repo's cancelled pull_request runs on this head. Nothing on
+            # the head is running any more, so a re-run cannot cancel a live
+            # run; the next run merges once they pass.
+            MSTATE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .mergeable_state) || MSTATE=""
+            if [ "$MSTATE" = "blocked" ]; then
+              if ! CANCELLED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&status=cancelled&per_page=100" \
+                  --jq '[.workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .id] | .[]'); then
+                echo "::warning::Could not list cancelled workflow runs for #$NUM; leaving for next run."
+                FAILED=1
+                continue
+              fi
+              if [ -n "$CANCELLED" ]; then
+                NOT_RERUN=""
+                # The PAT first: a run the owner restarts is never held for
+                # approval, and the approval step above only approves bot runs.
+                for RUN_ID in $CANCELLED; do
+                  { [ -n "${PAT:-}" ] && GH_TOKEN="$PAT" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun" >/dev/null 2>&1; } \
+                    || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun" >/dev/null \
+                    || NOT_RERUN="${NOT_RERUN} ${RUN_ID}"
+                done
+                if [ -n "$NOT_RERUN" ]; then
+                  echo "::error::PR #$NUM: blocked with every check green; could not re-run cancelled workflow run(s)${NOT_RERUN} on ${HEAD_SHA:0:10}. Re-run them in the Actions tab."
+                  FAILED=1
+                else
+                  echo "PR #$NUM: skipped — blocked with every check green; re-ran $(wc -w <<<"$CANCELLED") cancelled run(s) on ${HEAD_SHA:0:10}; merging once they pass"
+                fi
+                continue
+              fi
+            fi
+
             # Re-read the labels. `PRS` is a snapshot taken at the top of the
             # job, and an AI review finishing in between can add
             # `autoblog-review-failed` and drop `autoblog-approved-pending` —
