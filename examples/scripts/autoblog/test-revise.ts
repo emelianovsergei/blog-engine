@@ -382,6 +382,26 @@ assert.equal(
   codexOnHead("h1", at, [], none, [{ user: bot, body: "You have reached your Codex usage limits", created_at: "2026-09-28T09:03:00Z" }]),
   "limited",
 );
+const clean = (sha: string) => ({
+  user: bot,
+  body: `Codex Review: Didn't find any major issues. Bravo.\n\n**Reviewed commit:** \`${sha}\``,
+  created_at: "2026-10-03T08:57:28Z",
+});
+assert.equal(
+  codexOnHead("ceb0a22b128727b881d2727fa6c7e9b26d132f26", at, [], { ...none, soleHead: false }, [clean("ceb0a22b12")]),
+  "reviewed",
+  "a clean-review comment naming this head counts (pulse-website#426)",
+);
+assert.equal(
+  codexOnHead("ceb0a22b128727b881d2727fa6c7e9b26d132f26", at, [], { ...none, soleHead: false }, [clean("bb56d49a11")]),
+  "pending",
+  "a clean-review comment about an older head does not count",
+);
+assert.equal(
+  codexOnHead("ceb0a22b128727b881d2727fa6c7e9b26d132f26", at, [], none, [{ ...clean("ceb0a22b12"), user: { login: "someone" } }]),
+  "pending",
+  "only Codex's own comment counts",
+);
 assert.deepEqual(
   headRequestComments([{ id: 1, body: "@codex review" }, { id: 2, body: "@codex review\n\n<!-- autoblog-codex-heal-head: h1 -->" }, { id: 3, body: "<!-- autoblog-codex-heal-head: h0 -->" }], "h1").map((c) => c.id),
   [2],

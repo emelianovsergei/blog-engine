@@ -344,6 +344,13 @@ export function codexOnHead(
   if (reviews.some((r) => isCodex(r.user) && r.commit_id === head)) return "reviewed";
   if (plusOnes.request.some(thumbsUp)) return "reviewed";
   if (plusOnes.soleHead && plusOnes.pr.some((r) => thumbsUp(r) && after(r.created_at))) return "reviewed";
+  // Codex also answers a clean re-review with a comment naming the commit
+  // ("Reviewed commit: `ceb0a22b12`") instead of a 👍 (pulse-website#426,
+  // 2026-10-03). It counts when the commit it names is this head.
+  if (comments.some((c) => {
+    const sha = isCodex(c.user) ? /Reviewed commit:[*\s]*`([0-9a-f]{7,40})`/i.exec(c.body ?? "")?.[1]?.toLowerCase() : undefined;
+    return Boolean(sha && head.toLowerCase().startsWith(sha));
+  })) return "reviewed";
   if (comments.some((c) => isCodex(c.user) && /usage limits/i.test(c.body ?? "") && after(c.created_at))) return "limited";
   return "pending";
 }

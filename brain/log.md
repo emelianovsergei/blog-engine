@@ -8,6 +8,9 @@ sources: []
 ---
 # Developer Wiki Change Log
 
+## [2026-10-03] Codex's clean-review comment counts as a review
+- Codex answered a clean re-review with a comment naming the commit instead of a 👍, and neither `publish` nor merge-pending recognized it, so pulse-website#426 waited for the morning sweep. `examples/autoblog-merge-pending.yml` and `revise.ts codexOnHead` now count that comment when it names the head. See [[concepts/claude-writer]].
+
 ## [2026-10-03] Autoblog re-runs a cancelled required check before merging
 - A revision can start two runs of one check on the same head, and concurrency cancels one. GitHub kept reading the required check from the cancelled run, so promax-website#339 sat blocked with every check green. `examples/autoblog-merge-pending.yml` and `claude.ts publish` now re-run the repo's cancelled pull_request runs on the head once nothing is running. See [[concepts/claude-writer]].
 
