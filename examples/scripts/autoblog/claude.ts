@@ -1379,7 +1379,7 @@ async function cmdRevise(): Promise<void> {
  * the same facts merge-pending checks, gathered through the session's REST
  * access (GraphQL is not available here).
  */
-function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVerdict; detail: string } {
+function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdict; detail: string } {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
   const head = pr.head.sha;
@@ -1395,7 +1395,8 @@ function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVe
   type Reaction = { user?: { login?: string }; content?: string; created_at?: string };
   const requestReactions = headRequestComments(issueComments, head)
     .flatMap((c) => githubList<Reaction>(`${repo}/issues/comments/${c.id}/reactions`));
-  const commits = (githubApi("GET", `${repo}/pulls/${pr.number}`) as { commits?: number }).commits;
+  const pull = githubApi("GET", `${repo}/pulls/${pr.number}`) as { commits?: number; mergeable_state?: string };
+  const commits = pull.commits;
   const forcePushed = githubList<{ event?: string }>(`${repo}/issues/${pr.number}/events`)
     .some((e) => e.event === "head_ref_force_pushed");
   const soleHead = commits === 1 && !forcePushed;
@@ -1411,6 +1412,9 @@ function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVe
     conclusion?: string | null;
     actor?: { login?: string };
     head_repository?: { full_name?: string } | null;
+    path?: string;
+    workflow_id?: number;
+    created_at?: string;
   };
   const headRuns = (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: HeadRun[] }).workflow_runs;
   const workflows = new Map(headRuns.map((w) => [w.check_suite_id, w.name] as const));
@@ -1424,7 +1428,7 @@ function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVe
   for (const w of headRuns.filter((r) =>
     r.conclusion === "action_required" && r.event === "pull_request" &&
     r.actor?.login === "github-actions[bot]" && r.head_repository?.full_name === `${owner}/${name}`)) {
-    if (!approveHeldRuns) {
+    if (!restartRuns) {
       heldRuns.push(`${w.name} (awaiting approval)`);
       continue;
     }
@@ -1452,7 +1456,44 @@ function publishState(pr: OpenPr, approveHeldRuns = false): { verdict: PublishVe
     pendingLabel: labels.includes("autoblog-approved-pending"),
     ci: (() => {
       const ci = ciSummary(runs, statuses.filter((st) => st.context !== "autoblog/finalized"));
-      return { ...ci, pending: [...ci.pending, ...heldRuns] };
+      const pending = [...ci.pending, ...heldRuns];
+      // ciSummary ignores a cancelled check that a later run of the same check
+      // passed; branch protection does not always. A revision raises two
+      // pull_request runs on one head, concurrency cancels one, and GitHub can
+      // keep reading the required check from it: blocked with every check
+      // green (promax-website#339, 2026-10-02). Once nothing is running, re-run
+      // a cancelled test-workflow run whose workflow already passed on this
+      // head, as merge-pending does, and wait for it. Only test workflows: a
+      // re-run replays its original event, and a stale `labeled` payload
+      // replayed into autoblog-review could undo a later human approval. One
+      // run per workflow, the newest cancelled one: two re-runs in one
+      // concurrency group would cancel each other. A run's `path` may carry an
+      // `@ref` suffix, so match the file name before it.
+      const tests = (process.env.AUTOBLOG_TEST_WORKFLOWS ?? "ci.yml playwright.yml").split(/\s+/).filter(Boolean);
+      const testRuns = headRuns.filter((r) =>
+        r.event === "pull_request" && r.head_repository?.full_name === `${owner}/${name}` &&
+        tests.includes((r.path ?? "").split("@")[0].split("/").pop() ?? ""));
+      if (pending.length === 0 && ci.failing.length === 0 && pull.mergeable_state === "blocked") {
+        const newest = new Map<number | undefined, HeadRun>();
+        for (const r of testRuns.filter((t) => t.conclusion === "cancelled" &&
+          testRuns.some((o) => o.workflow_id === t.workflow_id && o.conclusion === "success"))) {
+          const seen = newest.get(r.workflow_id);
+          if (!seen || (r.created_at ?? "") > (seen.created_at ?? "")) newest.set(r.workflow_id, r);
+        }
+        for (const w of newest.values()) {
+          if (!restartRuns) {
+            pending.push(`${w.name} (cancelled; blocks the merge)`);
+            continue;
+          }
+          try {
+            githubApi("POST", `${repo}/actions/runs/${w.id}/rerun`);
+            pending.push(`${w.name} (cancelled; re-run)`);
+          } catch (error) {
+            pending.push(`${w.name} (cancelled; could not re-run: ${String(error).split("\n")[0]})`);
+          }
+        }
+      }
+      return { ...ci, pending };
     })(),
     codex: codexOnHead(head, approvedAt, reviews, { request: requestReactions, pr: prReactions, soleHead }, issueComments),
     held,

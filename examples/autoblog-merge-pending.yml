@@ -67,6 +67,9 @@ jobs:
           AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
           AUTOBLOG_HOLD_ON_CODEX_P1: ${{ vars.AUTOBLOG_HOLD_ON_CODEX_P1 || 'true' }}
           AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
+          # Workflow files that run the required test suite. Only these are
+          # ever re-run below (ci.yml on Pulse, playwright.yml on PRO MAX).
+          AUTOBLOG_TEST_WORKFLOWS: ${{ vars.AUTOBLOG_TEST_WORKFLOWS || 'ci.yml playwright.yml' }}
         run: |
           set -euo pipefail
 
@@ -368,6 +371,54 @@ jobs:
             if [ "${PENDING:-0}" -gt 0 ]; then
               echo "PR #$NUM: skipped — $PENDING check(s) still running"
               continue
+            fi
+
+            # The gate above ignores a cancelled check that a later run of the
+            # same check passed; branch protection does not always. A revision
+            # raises two pull_request runs on one head, concurrency cancels
+            # one, and GitHub can keep reading the required check from the
+            # cancelled run: the PR stays "blocked" with every check green and
+            # the merge is refused (promax-website#339, 2026-10-02). Re-run
+            # only the test workflows (AUTOBLOG_TEST_WORKFLOWS), only a
+            # cancelled run whose workflow already passed on this head: a
+            # re-run replays its original event, and a stale `labeled` payload
+            # replayed into autoblog-review could undo a later human approval.
+            # One run per workflow (the newest cancelled one): two re-runs in
+            # one concurrency group would cancel each other. A run's `path`
+            # may carry an `@ref` suffix, so match the file name before it. Nothing on the
+            # head is running any more, so a re-run cannot cancel a live run;
+            # the next run merges once they pass.
+            MSTATE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .mergeable_state) || MSTATE=""
+            if [ "$MSTATE" = "blocked" ]; then
+              if ! CANCELLED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+                  --jq '(env.AUTOBLOG_TEST_WORKFLOWS | split(" ")) as $tests
+                    | [.workflow_runs[] | select(.event == "pull_request"
+                        and .head_repository.full_name == env.GITHUB_REPOSITORY
+                        and ((.path | split("@") | first | split("/") | last) as $f | any($tests[]; . == $f)))] as $runs
+                    | [$runs[] | select(.conclusion == "cancelled")
+                        | select(.workflow_id as $w | any($runs[]; .workflow_id == $w and .conclusion == "success"))]
+                    | group_by(.workflow_id) | map(max_by(.created_at) | .id) | .[]'); then
+                echo "::warning::Could not list cancelled workflow runs for #$NUM; leaving for next run."
+                FAILED=1
+                continue
+              fi
+              if [ -n "$CANCELLED" ]; then
+                NOT_RERUN=""
+                # The PAT first: a run the owner restarts is never held for
+                # approval, and the approval step above only approves bot runs.
+                for RUN_ID in $CANCELLED; do
+                  { [ -n "${PAT:-}" ] && GH_TOKEN="$PAT" gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun" >/dev/null 2>&1; } \
+                    || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun" >/dev/null \
+                    || NOT_RERUN="${NOT_RERUN} ${RUN_ID}"
+                done
+                if [ -n "$NOT_RERUN" ]; then
+                  echo "::error::PR #$NUM: blocked with every check green; could not re-run cancelled workflow run(s)${NOT_RERUN} on ${HEAD_SHA:0:10}. Re-run them in the Actions tab."
+                  FAILED=1
+                else
+                  echo "PR #$NUM: skipped — blocked with every check green; re-ran $(wc -w <<<"$CANCELLED") cancelled run(s) on ${HEAD_SHA:0:10}; merging once they pass"
+                fi
+                continue
+              fi
             fi
 
             # Re-read the labels. `PRS` is a snapshot taken at the top of the
