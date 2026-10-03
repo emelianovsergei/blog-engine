@@ -161,8 +161,12 @@ jobs:
             # review` request that names this head (blog-finalize and
             # autoblog-codex-heal add the SHA marker); or a 👍 on the PR
             # itself when the PR never had another head (one commit, never
-            # force-pushed), so it can only be about this one. That ends the
-            # wait early; the P0/P1 and CI gates below still apply.
+            # force-pushed), so it can only be about this one. Codex also
+            # answers a clean re-review with a comment naming the commit
+            # ("Reviewed commit: `ceb0a22b12`") instead of a 👍
+            # (pulse-website#426, 2026-10-03): that counts when the commit it
+            # names is this head. That ends the wait early; the P0/P1 and CI
+            # gates below still apply.
             CODEX_SEEN=$(jq -r --arg h "$HEAD_NOW" '[.[][] | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector" and .commit_id == $h)] | length' <<<"$REVIEWS")
             if [ "${CODEX_SEEN:-0}" -eq 0 ] && REQ_IDS=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/comments" \
                 | jq -r --arg h "$HEAD_NOW" '[.[][]? | select(.body | contains("autoblog-codex-heal-head: " + $h)) | .id] | .[]'); then
@@ -171,6 +175,12 @@ jobs:
                   | jq '[.[] | select(.content == "+1" and (.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")] | length') || n=0
                 CODEX_SEEN=$(( ${CODEX_SEEN:-0} + ${n:-0} ))
               done
+            fi
+            if [ "${CODEX_SEEN:-0}" -eq 0 ]; then
+              CODEX_SEEN=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${NUM}/comments" \
+                | jq --arg h "$HEAD_NOW" '[.[][]? | select((.user.login // "" | sub("\\[bot\\]$"; "")) == "chatgpt-codex-connector")
+                    | (.body // "" | capture("Reviewed commit:[*\\s]*`(?<s>[0-9a-fA-F]{7,40})`")? | .s | ascii_downcase)
+                    | select(. as $s | $h | startswith($s))] | length') || CODEX_SEEN=0
             fi
             if [ "${CODEX_SEEN:-0}" -eq 0 ] \
               && COMMITS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .commits) \
