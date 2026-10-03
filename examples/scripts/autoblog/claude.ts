@@ -1412,6 +1412,8 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
     conclusion?: string | null;
     actor?: { login?: string };
     head_repository?: { full_name?: string } | null;
+    path?: string;
+    workflow_id?: number;
   };
   const headRuns = (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: HeadRun[] }).workflow_runs;
   const workflows = new Map(headRuns.map((w) => [w.check_suite_id, w.name] as const));
@@ -1459,10 +1461,17 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
       // pull_request runs on one head, concurrency cancels one, and GitHub can
       // keep reading the required check from it: blocked with every check
       // green (promax-website#339, 2026-10-02). Once nothing is running, re-run
-      // this repo's cancelled pull_request runs on this head and wait for them.
+      // a cancelled test-workflow run whose workflow already passed on this
+      // head, as merge-pending does, and wait for it. Only test workflows: a
+      // re-run replays its original event, and a stale `labeled` payload
+      // replayed into autoblog-review could undo a later human approval.
+      const tests = (process.env.AUTOBLOG_TEST_WORKFLOWS ?? "ci.yml playwright.yml").split(/\s+/).filter(Boolean);
+      const testRuns = headRuns.filter((r) =>
+        r.event === "pull_request" && r.head_repository?.full_name === `${owner}/${name}` &&
+        tests.includes((r.path ?? "").split("/").pop() ?? ""));
       if (pending.length === 0 && ci.failing.length === 0 && pull.mergeable_state === "blocked") {
-        for (const w of headRuns.filter((r) =>
-          r.conclusion === "cancelled" && r.event === "pull_request" && r.head_repository?.full_name === `${owner}/${name}`)) {
+        for (const w of testRuns.filter((r) => r.conclusion === "cancelled" &&
+          testRuns.some((o) => o.workflow_id === r.workflow_id && o.conclusion === "success"))) {
           if (!restartRuns) {
             pending.push(`${w.name} (cancelled; blocks the merge)`);
             continue;

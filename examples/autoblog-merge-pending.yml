@@ -67,6 +67,9 @@ jobs:
           AUTOBLOG_MERGE_DELAY: ${{ vars.AUTOBLOG_MERGE_DELAY || '1h' }}
           AUTOBLOG_HOLD_ON_CODEX_P1: ${{ vars.AUTOBLOG_HOLD_ON_CODEX_P1 || 'true' }}
           AUTOBLOG_INTERVAL: ${{ vars.AUTOBLOG_INTERVAL || '1d' }}
+          # Workflow files that run the required test suite. Only these are
+          # ever re-run below (ci.yml on Pulse, playwright.yml on PRO MAX).
+          AUTOBLOG_TEST_WORKFLOWS: ${{ vars.AUTOBLOG_TEST_WORKFLOWS || 'ci.yml playwright.yml' }}
         run: |
           set -euo pipefail
 
@@ -376,13 +379,22 @@ jobs:
             # one, and GitHub can keep reading the required check from the
             # cancelled run: the PR stays "blocked" with every check green and
             # the merge is refused (promax-website#339, 2026-10-02). Re-run
-            # this repo's cancelled pull_request runs on this head. Nothing on
-            # the head is running any more, so a re-run cannot cancel a live
-            # run; the next run merges once they pass.
+            # only the test workflows (AUTOBLOG_TEST_WORKFLOWS), only a
+            # cancelled run whose workflow already passed on this head: a
+            # re-run replays its original event, and a stale `labeled` payload
+            # replayed into autoblog-review could undo a later human approval.
+            # Nothing on the head is running any more, so a re-run cannot
+            # cancel a live run; the next run merges once they pass.
             MSTATE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .mergeable_state) || MSTATE=""
             if [ "$MSTATE" = "blocked" ]; then
-              if ! CANCELLED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&status=cancelled&per_page=100" \
-                  --jq '[.workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .id] | .[]'); then
+              if ! CANCELLED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+                  --jq '(env.AUTOBLOG_TEST_WORKFLOWS | split(" ")) as $tests
+                    | [.workflow_runs[] | select(.event == "pull_request"
+                        and .head_repository.full_name == env.GITHUB_REPOSITORY
+                        and ((.path | split("/") | last) as $f | any($tests[]; . == $f)))] as $runs
+                    | [$runs[] | select(.conclusion == "cancelled")
+                        | select(.workflow_id as $w | any($runs[]; .workflow_id == $w and .conclusion == "success"))
+                        | .id] | .[]'); then
                 echo "::warning::Could not list cancelled workflow runs for #$NUM; leaving for next run."
                 FAILED=1
                 continue
