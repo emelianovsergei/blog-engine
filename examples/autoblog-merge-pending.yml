@@ -383,8 +383,10 @@ jobs:
             # cancelled run whose workflow already passed on this head: a
             # re-run replays its original event, and a stale `labeled` payload
             # replayed into autoblog-review could undo a later human approval.
-            # Nothing on the head is running any more, so a re-run cannot
-            # cancel a live run; the next run merges once they pass.
+            # One run per workflow (the newest cancelled one): two re-runs in
+            # one concurrency group would cancel each other. Nothing on the
+            # head is running any more, so a re-run cannot cancel a live run;
+            # the next run merges once they pass.
             MSTATE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUM}" --jq .mergeable_state) || MSTATE=""
             if [ "$MSTATE" = "blocked" ]; then
               if ! CANCELLED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
@@ -393,8 +395,8 @@ jobs:
                         and .head_repository.full_name == env.GITHUB_REPOSITORY
                         and ((.path | split("/") | last) as $f | any($tests[]; . == $f)))] as $runs
                     | [$runs[] | select(.conclusion == "cancelled")
-                        | select(.workflow_id as $w | any($runs[]; .workflow_id == $w and .conclusion == "success"))
-                        | .id] | .[]'); then
+                        | select(.workflow_id as $w | any($runs[]; .workflow_id == $w and .conclusion == "success"))]
+                    | group_by(.workflow_id) | map(max_by(.created_at) | .id) | .[]'); then
                 echo "::warning::Could not list cancelled workflow runs for #$NUM; leaving for next run."
                 FAILED=1
                 continue

@@ -1414,6 +1414,7 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
     head_repository?: { full_name?: string } | null;
     path?: string;
     workflow_id?: number;
+    created_at?: string;
   };
   const headRuns = (githubApi("GET", `${repo}/actions/runs?head_sha=${head}&per_page=100`) as { workflow_runs: HeadRun[] }).workflow_runs;
   const workflows = new Map(headRuns.map((w) => [w.check_suite_id, w.name] as const));
@@ -1464,14 +1465,21 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
       // a cancelled test-workflow run whose workflow already passed on this
       // head, as merge-pending does, and wait for it. Only test workflows: a
       // re-run replays its original event, and a stale `labeled` payload
-      // replayed into autoblog-review could undo a later human approval.
+      // replayed into autoblog-review could undo a later human approval. One
+      // run per workflow, the newest cancelled one: two re-runs in one
+      // concurrency group would cancel each other.
       const tests = (process.env.AUTOBLOG_TEST_WORKFLOWS ?? "ci.yml playwright.yml").split(/\s+/).filter(Boolean);
       const testRuns = headRuns.filter((r) =>
         r.event === "pull_request" && r.head_repository?.full_name === `${owner}/${name}` &&
         tests.includes((r.path ?? "").split("/").pop() ?? ""));
       if (pending.length === 0 && ci.failing.length === 0 && pull.mergeable_state === "blocked") {
-        for (const w of testRuns.filter((r) => r.conclusion === "cancelled" &&
-          testRuns.some((o) => o.workflow_id === r.workflow_id && o.conclusion === "success"))) {
+        const newest = new Map<number | undefined, HeadRun>();
+        for (const r of testRuns.filter((t) => t.conclusion === "cancelled" &&
+          testRuns.some((o) => o.workflow_id === t.workflow_id && o.conclusion === "success"))) {
+          const seen = newest.get(r.workflow_id);
+          if (!seen || (r.created_at ?? "") > (seen.created_at ?? "")) newest.set(r.workflow_id, r);
+        }
+        for (const w of newest.values()) {
           if (!restartRuns) {
             pending.push(`${w.name} (cancelled; blocks the merge)`);
             continue;
