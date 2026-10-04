@@ -523,9 +523,16 @@ jobs:
             # going, and fail the job at the end so the problem stays visible.
             if gh pr merge "$NUM" --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
               # With a merge queue, a successful `gh pr merge` only queues the
-              # PR. Mark the live check due only once the merge has landed; a
-              # queued post is checked by the daily watchdog.
-              if [ -n "$(gh pr view "$NUM" --json mergedAt --jq '.mergedAt // empty' || true)" ]; then
+              # PR: skip the live check only when a lookup answers "not merged"
+              # (the daily watchdog checks it). A lookup that keeps failing
+              # still runs the check; running it costs nothing.
+              MERGED_AT="unknown"
+              for _ in 1 2 3; do
+                if MERGED_AT=$(gh pr view "$NUM" --json mergedAt --jq '.mergedAt // ""'); then break; fi
+                MERGED_AT="unknown"
+                sleep 5
+              done
+              if [ -n "$MERGED_AT" ]; then
                 echo "merged=true" >> "$GITHUB_OUTPUT"
               else
                 echo "PR #$NUM: queued to merge, not merged yet; the watchdog checks it on the live site."
