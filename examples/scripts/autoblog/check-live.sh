@@ -28,11 +28,16 @@ fi
 SITE="${SITE%/}"
 SINCE=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
 
-# New posts only: refresh and backfill PRs edit posts that are already live.
+# Every publication route the watchdog counts: the autoblog labels or an
+# autoblog head. Only files the PR added under content/blog are checked, so a
+# refresh or backfill PR (which edits live posts) adds nothing here.
 if ! PRS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=50" \
     | jq -r --arg s "$SINCE" '.[]
         | select(.merged_at != null and .merged_at >= $s)
-        | select(.head.ref | startswith("blog/claude-") or startswith("blog/auto-"))
+        | select(
+            ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+            or (.head.ref | startswith("autoblog/") or startswith("blog/auto-") or startswith("blog/claude-"))
+          )
         | .number'); then
   echo "::error::Could not list merged posts."
   exit 1
@@ -64,13 +69,20 @@ if [ "${#URLS[@]}" -eq 0 ]; then
 fi
 
 # One status per URL. A network error (000) is retried once before it counts.
+# curl already writes 000 when it fails, so its exit status is ignored rather
+# than appending a second 000.
+status() {
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$1") || true
+  echo "${code:-000}"
+}
 missing() {
   local u code
   for u in "${URLS[@]}"; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$u" || echo 000)
+    code=$(status "$u")
     if [ "$code" = 000 ]; then
       sleep 5
-      code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$u" || echo 000)
+      code=$(status "$u")
     fi
     [ "$code" = 200 ] || echo "$u ($code)"
   done
