@@ -34,17 +34,26 @@ SINCE=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
 # Every publication route the watchdog counts: the autoblog labels or an
 # autoblog head. Only files the PR added under content/blog are checked, so a
 # refresh or backfill PR (which edits live posts) adds nothing here.
-if ! PRS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=50" \
-    | jq -r --arg s "$SINCE" '.[]
-        | select(.merged_at != null and .merged_at >= $s)
-        | select(
-            ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
-            or (.head.ref | startswith("autoblog/") or startswith("blog/auto-") or startswith("blog/claude-"))
-          )
-        | .number'); then
-  echo "::error::Could not list merged posts."
-  exit 1
-fi
+# Closed PRs newest-updated first, page by page, until a page reaches PRs last
+# updated before SINCE: a PR merged since then was updated since then too.
+PRS=""
+for page in $(seq 1 20); do
+  if ! BATCH=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${page}"); then
+    echo "::error::Could not list merged posts."
+    exit 1
+  fi
+  PRS="$PRS $(jq -r --arg s "$SINCE" '.[]
+      | select(.merged_at != null and .merged_at >= $s)
+      | select(
+          ([.labels[].name] | any(. == "autoblog" or . == "autoblog-approved-pending"))
+          or (.head.ref | startswith("autoblog/") or startswith("blog/auto-") or startswith("blog/claude-"))
+        )
+      | .number' <<<"$BATCH")"
+  OLDEST=$(jq -r 'if length < 100 then "" else .[-1].updated_at end' <<<"$BATCH")
+  if [ -z "$OLDEST" ] || [[ "$OLDEST" < "$SINCE" ]]; then
+    break
+  fi
+done
 
 URLS=()
 for n in $PRS; do
