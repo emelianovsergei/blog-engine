@@ -104,8 +104,10 @@ fi
 echo "::warning::Not live on $SITE:"
 printf '%s\n' "$MISSING"
 
-if [ -n "${VERCEL_DEPLOY_HOOK:-}" ]; then
-  if curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" >/dev/null; then
+# The hook request is bounded too: a stalled endpoint must not outlive the budget.
+LEFT=$(( DEADLINE - $(date +%s) ))
+if [ -n "${VERCEL_DEPLOY_HOOK:-}" ] && [ "$LEFT" -gt 0 ]; then
+  if curl -fsS --max-time "$(( LEFT < 30 ? LEFT : 30 ))" -X POST "$VERCEL_DEPLOY_HOOK" >/dev/null; then
     echo "Triggered a production redeploy through the Vercel deploy hook; waiting until the time budget runs out."
     while [ "$(date +%s)" -lt "$DEADLINE" ]; do
       sleep 30
@@ -120,6 +122,8 @@ if [ -n "${VERCEL_DEPLOY_HOOK:-}" ]; then
     echo "::warning::The Vercel deploy hook request failed."
   fi
   echo "::error::Still not live after a redeploy: $(printf '%s' "$MISSING" | tr '\n' ' '). Check the latest production deployment in Vercel."
+elif [ -n "${VERCEL_DEPLOY_HOOK:-}" ]; then
+  echo "::error::Not live, and the time budget ran out before a redeploy: $(printf '%s' "$MISSING" | tr '\n' ' '). Redeploy main in Vercel."
 else
   echo "::error::Not live: $(printf '%s' "$MISSING" | tr '\n' ' '). Redeploy main in Vercel. Add a VERCEL_DEPLOY_HOOK secret (Vercel → Settings → Git → Deploy Hooks, branch main) to let this check redeploy on its own."
 fi
