@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Asserts that every new autoblog post merged in the last LIVE_CHECK_DAYS days
+# answers 200 on the production site.
+#
+# A merge is not a publication. On 2026-10-04 pulse-website#431 merged, but
+# Vercel's production deploy failed after 18 seconds, and the post returned 404
+# for hours while every GitHub check was green. Nothing looked at the live site.
+#
+# When a post is missing and the VERCEL_DEPLOY_HOOK secret is set (Vercel →
+# Project → Settings → Git → Deploy Hooks, branch main), this triggers one
+# production redeploy and waits for the post to appear. Otherwise, or if the
+# post is still missing after that, it exits 1 so the run goes red.
+#
+# Env: GH_TOKEN, GITHUB_REPOSITORY (set in Actions), AUTOBLOG_SITE_URL
+# (optional; default: SITE_URL in lib/constants.ts), LIVE_CHECK_DAYS
+# (default 2), VERCEL_DEPLOY_HOOK (optional).
+set -euo pipefail
+
+DAYS="${LIVE_CHECK_DAYS:-2}"
+SITE="${AUTOBLOG_SITE_URL:-}"
+if [ -z "$SITE" ] && [ -f lib/constants.ts ]; then
+  SITE=$(grep -A3 'export const SITE_URL' lib/constants.ts | grep -oE 'https://[A-Za-z0-9.-]+' | head -1 || true)
+fi
+if [ -z "$SITE" ]; then
+  echo "::error::Could not work out the site URL. Set the AUTOBLOG_SITE_URL repository variable."
+  exit 1
+fi
+SITE="${SITE%/}"
+SINCE=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+
+# New posts only: refresh and backfill PRs edit posts that are already live.
+if ! PRS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=50" \
+    | jq -r --arg s "$SINCE" '.[]
+        | select(.merged_at != null and .merged_at >= $s)
+        | select(.head.ref | startswith("blog/claude-") or startswith("blog/auto-"))
+        | .number'); then
+  echo "::error::Could not list merged posts."
+  exit 1
+fi
+
+URLS=()
+for n in $PRS; do
+  if ! FILES=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${n}/files?per_page=100" \
+      --jq '.[] | select(.status == "added" and (.filename | test("^content/blog/[^/]+\\.mdx$"))) | .filename'); then
+    echo "::error::Could not list the files of #$n."
+    exit 1
+  fi
+  for f in $FILES; do
+    # Read the post from main: a post renamed or removed since is not checked.
+    if ! BODY=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null); then
+      echo "#$n: $f is no longer on main; skipped."
+      continue
+    fi
+    SLUG=$(printf '%s\n' "$BODY" | awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit } /^slug:/ { print; exit }' \
+      | sed -E "s/^slug:[[:space:]]*['\"]?([^'\"[:space:]]+)['\"]?[[:space:]]*$/\1/")
+    [ -n "$SLUG" ] || SLUG=$(basename "$f" .mdx)
+    URLS+=("$SITE/blog/$SLUG")
+  done
+done
+
+if [ "${#URLS[@]}" -eq 0 ]; then
+  echo "No new post merged in the last $DAYS day(s); nothing to check."
+  exit 0
+fi
+
+# One status per URL. A network error (000) is retried once before it counts.
+missing() {
+  local u code
+  for u in "${URLS[@]}"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$u" || echo 000)
+    if [ "$code" = 000 ]; then
+      sleep 5
+      code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 20 "$u" || echo 000)
+    fi
+    [ "$code" = 200 ] || echo "$u ($code)"
+  done
+}
+
+MISSING=$(missing)
+if [ -z "$MISSING" ]; then
+  echo "✅ ${#URLS[@]} new post(s) live:"
+  printf '  %s\n' "${URLS[@]}"
+  exit 0
+fi
+echo "::warning::Not live on $SITE:"
+printf '%s\n' "$MISSING"
+
+if [ -n "${VERCEL_DEPLOY_HOOK:-}" ]; then
+  if curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" >/dev/null; then
+    echo "Triggered a production redeploy through the Vercel deploy hook; waiting up to 12 minutes."
+    for _ in $(seq 1 24); do
+      sleep 30
+      MISSING=$(missing)
+      if [ -z "$MISSING" ]; then
+        echo "✅ Live after the redeploy:"
+        printf '  %s\n' "${URLS[@]}"
+        exit 0
+      fi
+    done
+  else
+    echo "::warning::The Vercel deploy hook request failed."
+  fi
+  echo "::error::Still not live after a redeploy: $(printf '%s' "$MISSING" | tr '\n' ' '). Check the latest production deployment in Vercel."
+else
+  echo "::error::Not live: $(printf '%s' "$MISSING" | tr '\n' ' '). Redeploy main in Vercel. Add a VERCEL_DEPLOY_HOOK secret (Vercel → Settings → Git → Deploy Hooks, branch main) to let this check redeploy on its own."
+fi
+exit 1

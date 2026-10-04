@@ -1379,7 +1379,7 @@ async function cmdRevise(): Promise<void> {
  * the same facts merge-pending checks, gathered through the session's REST
  * access (GraphQL is not available here).
  */
-function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdict; detail: string } {
+function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdict; detail: string; delayLeft?: number } {
   const { owner, name } = repoSlug();
   const repo = `/repos/${owner}/${name}`;
   const head = pr.head.sha;
@@ -1501,7 +1501,15 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
   };
   // merge-pending's AUTOBLOG_MERGE_DELAY (default 1h); the session cannot read
   // repository variables, so the routine's environment carries an override.
-  const verdict = publishVerdict(state, Number(process.env.AUTOBLOG_MERGE_DELAY_MINUTES ?? "60"));
+  const delay = Number(process.env.AUTOBLOG_MERGE_DELAY_MINUTES ?? "60");
+  const verdict = publishVerdict(state, delay);
+  // Minutes until merge-pending's delay ends, when that delay is all that is
+  // left: Codex is out of quota ("delayed") or silent, and every other gate
+  // passed. cmdPublish waits that long instead of leaving the post to the
+  // morning sweep (2026-10-04: both posts sat 4.5 hours behind a Codex quota).
+  const onlyDelay = verdict === "delayed" ||
+    (verdict === "wait" && state.codex === "pending" && publishVerdict({ ...state, codex: "reviewed" }, delay) === "ready");
+  const delayLeft = onlyDelay ? Math.max(0, delay - (state.approvedMinutes ?? 0)) : undefined;
   const detail =
     verdict === "held" || verdict === "blocked"
       ? state.paused
@@ -1521,7 +1529,7 @@ function publishState(pr: OpenPr, restartRuns = false): { verdict: PublishVerdic
             : state.codex === "reviewed"
               ? "all gates passed"
               : "all gates passed; Codex did not review, the merge delay has passed";
-  return { verdict, detail };
+  return { verdict, detail, delayLeft };
 }
 
 /**
@@ -1579,8 +1587,11 @@ async function cmdPublish(): Promise<void> {
   const { runDate } = pacificNow();
   const prefix = `blog/claude-${runDate}`;
   const isToday = (p: OpenPr) => p.head.ref === prefix || p.head.ref.startsWith(`${prefix}-`);
-  const deadline = Date.now() + minutes * 60_000;
-  let results: Array<{ pr: OpenPr; verdict: PublishVerdict; detail: string }> = [];
+  let deadline = Date.now() + minutes * 60_000;
+  // A post that only waits out merge-pending's delay extends the wait to it,
+  // up to this cap, so it merges in this run instead of the morning sweep.
+  const cap = Date.now() + Math.max(minutes, 90) * 60_000;
+  let results: Array<{ pr: OpenPr; verdict: PublishVerdict; detail: string; delayLeft?: number }> = [];
   let todayMerged: (OpenPr & { merged_at?: string | null }) | undefined;
   let todayOpen = false;
   const closed: number[] = [];
@@ -1632,6 +1643,8 @@ async function cmdPublish(): Promise<void> {
     // "delayed" (Codex out of quota) turns "ready" once the merge delay passes,
     // possibly within this run: keep waiting for it too.
     const waiting = (!sweep && !todayOpen && !todayMerged && !todayClosed) || results.some((r) => r.verdict === "wait" || r.verdict === "delayed");
+    const delayLeft = Math.max(-1, ...results.map((r) => r.delayLeft ?? -1));
+    if (waiting && delayLeft >= 0) deadline = Math.min(cap, Math.max(deadline, Date.now() + (delayLeft + 2) * 60_000));
     if (!waiting || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 60_000));
   }
