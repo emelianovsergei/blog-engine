@@ -541,7 +541,10 @@ jobs:
       # the check redeploy once on its own. Red if a post is still missing.
       - name: Verify the new posts are live
         if: ${{ always() && steps.merge.outputs.merged == 'true' }}
-        timeout-minutes: 30
+        # Up to 15 minutes for main's deploy status, then check-live.sh: one
+        # pass, and with a deploy hook a 12-minute redeploy window whose
+        # polls take up to 40 seconds per URL.
+        timeout-minutes: 45
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AUTOBLOG_SITE_URL: ${{ vars.AUTOBLOG_SITE_URL }}
