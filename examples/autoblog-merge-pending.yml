@@ -59,6 +59,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Merge eligible PRs
+        id: merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GITHUB_TOKEN is FORBIDDEN from marking a draft PR ready, so the
@@ -520,11 +521,55 @@ jobs:
             fi
             # One bad PR must not abort the batch — record the failure, keep
             # going, and fail the job at the end so the problem stays visible.
-            gh pr merge "$NUM" --squash --delete-branch --match-head-commit "$HEAD_SHA" \
-              || { echo "::warning::Could not merge #$NUM (still draft, merge conflict, or head moved since checks passed); leaving for next run."; FAILED=1; }
+            if gh pr merge "$NUM" --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
+              # With a merge queue, a successful `gh pr merge` only queues the
+              # PR: skip the live check only when a lookup answers "not merged"
+              # (the daily watchdog checks it). A lookup that keeps failing
+              # still runs the check; running it costs nothing.
+              MERGED_AT="unknown"
+              for _ in 1 2 3; do
+                if MERGED_AT=$(gh pr view "$NUM" --json mergedAt --jq '.mergedAt // ""'); then break; fi
+                MERGED_AT="unknown"
+                sleep 5
+              done
+              if [ -n "$MERGED_AT" ]; then
+                echo "merged=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "PR #$NUM: queued to merge, not merged yet; the watchdog checks it on the live site."
+              fi
+            else
+              echo "::warning::Could not merge #$NUM (still draft, merge conflict, or head moved since checks passed); leaving for next run."
+              FAILED=1
+            fi
           done <<< "$PRS"
 
           if [ "$FAILED" -ne 0 ]; then
             echo "::error::One or more eligible autoblog PRs could not be merged (see warnings above)."
             exit 1
           fi
+
+      # A merge is not a publication: on 2026-10-04 pulse-website#431 merged,
+      # Vercel's production deploy failed after 18 seconds, and the post
+      # answered 404 while every check was green. Wait for main's deploy, then
+      # ask the live site for each new post; a VERCEL_DEPLOY_HOOK secret lets
+      # the check redeploy once on its own. Red if a post is still missing.
+      - name: Verify the new posts are live
+        if: ${{ always() && steps.merge.outputs.merged == 'true' }}
+        # Up to 15 minutes for main's deploy status, then check-live.sh, which
+        # stops at its own 15-minute wall-clock budget (one URL past it at most).
+        timeout-minutes: 45
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOBLOG_SITE_URL: ${{ vars.AUTOBLOG_SITE_URL }}
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          set -euo pipefail
+          # Vercel reports the production deploy as a commit status on main.
+          for _ in $(seq 1 30); do
+            STATE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main/statuses" \
+              --jq '[.[] | select(.context == "Vercel")][0].state // "none"') || STATE=unknown
+            case "$STATE" in success|failure|error) break ;; esac
+            sleep 30
+          done
+          echo "Vercel production deploy of main: $STATE"
+          bash scripts/autoblog/check-live.sh

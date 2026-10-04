@@ -3,10 +3,14 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-10-03"
+timestamp: "2026-10-04"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-10-04] Publish waits out the merge delay; new posts are checked on the live site
+- Codex ran out of quota and both posts waited 4.5 hours for the morning sweep: `publish` gave up after 45 minutes, before merge-pending's 1-hour delay ended. It now waits up to 90 minutes when that delay is all that is left.
+- pulse-website#431 merged but answered 404 after Vercel's production deploy failed. `scripts/autoblog/check-live.sh` asks the live site for each new post; merge-pending runs it after it merges and the watchdog runs it daily. A `VERCEL_DEPLOY_HOOK` secret lets it redeploy once. See [[concepts/claude-writer]].
 
 ## [2026-10-03] Codex's clean-review comment counts as a review
 - Codex answered a clean re-review with a comment naming the commit instead of a 👍, and neither `publish` nor merge-pending recognized it, so pulse-website#426 waited for the morning sweep. `examples/autoblog-merge-pending.yml` and `revise.ts codexOnHead` now count that comment when it names the head. See [[concepts/claude-writer]].

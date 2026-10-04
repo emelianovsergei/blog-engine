@@ -349,7 +349,7 @@ Nobody merges by hand and GitHub's cron runs the merge job only every few
 hours, so you publish:
 
 ```bash
-npm run autoblog:claude -- publish      # waits up to 45 min, then dispatches merge-pending
+npm run autoblog:claude -- publish      # waits up to 45 min (up to 90 when only the 1h merge delay is left), then dispatches merge-pending
 ```
 
 It waits for today's PR to exist and for every open Claude post to clear its
@@ -368,8 +368,17 @@ merged post.
 | 3 | Still waiting after 45 min (Codex slow, CI queued) | Report it. The morning sweep publishes it. |
 
 A Codex that is out of quota never reviews: `publish` reports those posts as
-`delayed`, and merge-pending merges them once its 1-hour delay has passed (the
-morning sweep or the daily fallback run).
+`delayed`, and merge-pending merges them once its 1-hour delay has passed.
+`publish` keeps waiting past 45 minutes (up to 90) when that delay is all that
+is left, so such a post merges in the same run; only a post still waiting
+after that goes to the morning sweep.
+
+A merge is not a publication. After merge-pending merges a post it waits for
+the production deploy and asks the live site for every post merged in the last
+two days (`scripts/autoblog/check-live.sh`); the daily watchdog repeats that.
+With a `VERCEL_DEPLOY_HOOK` secret it redeploys once on its own; a post still
+missing turns the run red. If your report finds a merged post that answers
+404, say so at the top: it needs a redeploy in Vercel.
 
 `publish` assumes merge-pending's `AUTOBLOG_MERGE_DELAY` is the default 1h:
 the session cannot read repository variables. A site that changes it sets

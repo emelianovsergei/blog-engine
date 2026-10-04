@@ -37,6 +37,28 @@ permissions:
   actions: read
 
 jobs:
+  # A merged post is not a published one: a failed production deploy left
+  # pulse-website#431 answering 404 for hours (2026-10-04). merge-pending checks
+  # right after it merges; this daily pass catches a post merged any other way.
+  live:
+    name: Verify new posts are live
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/autoblog/check-live.sh
+            lib/constants.ts
+          sparse-checkout-cone-mode: false
+      - name: Ask the live site for each post merged in the last 3 days
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOBLOG_SITE_URL: ${{ vars.AUTOBLOG_SITE_URL }}
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+          LIVE_CHECK_DAYS: 3
+        run: bash scripts/autoblog/check-live.sh
+
   watch:
     name: Verify a post actually shipped
     runs-on: ubuntu-latest
