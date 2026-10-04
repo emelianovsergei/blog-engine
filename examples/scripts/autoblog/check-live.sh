@@ -13,10 +13,13 @@
 #
 # Env: GH_TOKEN, GITHUB_REPOSITORY (set in Actions), AUTOBLOG_SITE_URL
 # (optional; default: SITE_URL in lib/constants.ts), LIVE_CHECK_DAYS
-# (default 2), VERCEL_DEPLOY_HOOK (optional).
+# (default 2), VERCEL_DEPLOY_HOOK (optional), LIVE_CHECK_BUDGET_SECONDS
+# (default 900: one wall-clock budget for every check and the redeploy wait,
+# so the run ends inside its workflow's timeout however many posts it checks).
 set -euo pipefail
 
 DAYS="${LIVE_CHECK_DAYS:-2}"
+DEADLINE=$(( $(date +%s) + ${LIVE_CHECK_BUDGET_SECONDS:-900} ))
 SITE="${AUTOBLOG_SITE_URL:-}"
 if [ -z "$SITE" ] && [ -f lib/constants.ts ]; then
   SITE=$(grep -A3 'export const SITE_URL' lib/constants.ts | grep -oE 'https://[A-Za-z0-9.-]+' | head -1 || true)
@@ -79,6 +82,10 @@ status() {
 missing() {
   local u code
   for u in "${URLS[@]}"; do
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+      echo "$u (not checked: time budget spent)"
+      continue
+    fi
     code=$(status "$u")
     if [ "$code" = 000 ]; then
       sleep 5
@@ -99,8 +106,8 @@ printf '%s\n' "$MISSING"
 
 if [ -n "${VERCEL_DEPLOY_HOOK:-}" ]; then
   if curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" >/dev/null; then
-    echo "Triggered a production redeploy through the Vercel deploy hook; waiting up to 12 minutes."
-    for _ in $(seq 1 24); do
+    echo "Triggered a production redeploy through the Vercel deploy hook; waiting until the time budget runs out."
+    while [ "$(date +%s)" -lt "$DEADLINE" ]; do
       sleep 30
       MISSING=$(missing)
       if [ -z "$MISSING" ]; then
