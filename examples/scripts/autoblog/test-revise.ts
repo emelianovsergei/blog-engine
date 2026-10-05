@@ -460,6 +460,10 @@ for (const topic of [
   "why does AC make me dizzy?",
   "HVAC and nausea",
   "burning odor from furnace",
+  "fire coming from a furnace",
+  "what to do after an oven caught fire",
+  "why is my furnace leaking gas?",
+  "gas leaking from a water heater",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -492,6 +496,8 @@ for (const topic of [
   "allergy-safe furnace filters",
   "AC runs nonstop 24/7 and needs service",
   "AC runs nearly 24/7 in a heat wave",
+  "gas fireplace pilot light basics",
+  "AC refrigerant leak signs",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
