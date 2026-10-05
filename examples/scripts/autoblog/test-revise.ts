@@ -453,6 +453,12 @@ for (const topic of [
   "HVAC company that is open 24 hours",
   "furnace smells like gas",
   "gas odor from furnace",
+  "emergency heat pump replacement",
+  "emergency heat pump installation",
+  "emergency heat system repair",
+  "can air conditioning cause headaches?",
+  "why does AC make me dizzy?",
+  "HVAC and nausea",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }

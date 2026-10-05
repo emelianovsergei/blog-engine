@@ -252,7 +252,7 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // "Emergency heat" is a heat pump setting, not an emergency, unless a
     // repair follows ("emergency heat pump repair"). "Emergency heating" and
     // "emergency heater" are emergencies.
-    "emergenc(?:y|ies)(?! heat\\b(?![\\s-]+(?:pump[\\s-]+)?(?:repairs?|service|technicians?|techs?|contractors?|company|fix)))",
+    "emergenc(?:y|ies)(?! heat\\b(?![\\s-]+(?:(?:pump|system|unit)s?[\\s-]+)?(?:repairs?|replace(?:ment|ments|d)?|install(?:ation|ations|ed|s)?|service|technicians?|techs?|contractors?|company|fix)))",
     // Round-the-clock or after-hours repair: "24-hour" or "24 hr" (not the
     // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
     // 24 hours", before a repair word with no punctuation in between.
@@ -292,6 +292,8 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "illness(?:es)?",
     "diseases?",
     "(?:make|makes|making|made|get|getting|got) (?:me |you |us |them |people |kids |family )?sick",
+    // Symptoms alone are medical topics too.
+    "headaches?|migraines?|dizz(?:y|iness)|nause(?:a|ous)|nosebleeds?|sore throats?|cough(?:s|ing)?|short(?:ness)? of breath|trouble breathing",
     "poison\\w*",
     "911",
   ]
