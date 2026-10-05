@@ -464,6 +464,9 @@ for (const topic of [
   "what to do after an oven caught fire",
   "why is my furnace leaking gas?",
   "gas leaking from a water heater",
+  "the dangers of a cracked heat exchanger",
+  "HVAC service on call 24/7",
+  "on-call furnace repair technician",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }

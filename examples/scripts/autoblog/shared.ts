@@ -256,13 +256,13 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // Round-the-clock or after-hours repair: "24-hour" or "24 hr" (not the
     // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
     // 24 hours", before a repair word with no punctuation in between.
-    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:runs?|running|ran|run|on|going)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
-    "(?:repairs?|service|technicians?|techs?|contractors?|company)\\s+(?:that(?:'s| is)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)",
+    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:runs?|running|ran|operates?|operating)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    "(?:repairs?|service|technicians?|techs?|contractors?|company)\\s+(?:that(?:'s| is)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
     // "Safety switch" or "safety valve" is a part, not a hazard topic.
     // "Allergy-safe" or "pet-safe" is a product claim, not a hazard topic.
     "(?<!-)safe(?:ty)?(?!-)(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
     "unsafe",
-    "danger(?:ous)?",
+    "danger(?:s|ous)?",
     "hazard(?:s|ous)?",
     "carbon monoxide",
     "co (?:detectors?|alarms?|poisoning|leaks?)",
