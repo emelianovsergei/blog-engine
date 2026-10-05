@@ -482,6 +482,8 @@ for (const topic of [
   "filter health benefits",
   "furnace repair available 24/7",
   "HVAC contractors available around the clock",
+  "furnace explosion causes",
+  "why did my AC explode?",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }

@@ -283,6 +283,7 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?![\\s-]up\\b| off\\b| on\\b)",
     "(?:catch(?:es|ing)?|caught) (?:on )?fire",
     "on fire",
+    "explo(?:de|des|ded|ding|sions?|sive)",
     // Flames from equipment, but not "flame sensor" or "pilot flame color".
     "flames? (?:(?:is|are|was|were|keep) )?(?:coming|shooting|from|out of)",
     "(?:burst|bursts|bursting) into flames?",
