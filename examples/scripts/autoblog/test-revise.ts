@@ -471,6 +471,10 @@ for (const topic of [
   "health benefits of air purifiers",
   "smoke is coming from a furnace",
   "sparks are coming from an outlet",
+  "HVAC companies open 24/7",
+  "furnace is on fire",
+  "HVAC service operates 24/7",
+  "our repair company runs 24/7",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -507,6 +511,8 @@ for (const topic of [
   "AC refrigerant leak signs",
   "HVAC system health check before winter",
   "healthy indoor humidity levels",
+  "furnace fire-up sequence",
+  "my HVAC system runs 24/7 in summer",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",

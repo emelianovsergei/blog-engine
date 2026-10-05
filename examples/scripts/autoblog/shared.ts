@@ -236,7 +236,9 @@ export function relayClient(
 }
 
 /**
- * Topics the blog does not cover: emergencies, hazards and health. The blog
+ * A fast keyword pre-filter, not the whole gate: the reviewer's editorial
+ * policy (claude.ts) blocks any emergency, safety or health topic or advice
+ * this list misses. Topics the blog does not cover: emergencies, hazards and health. The blog
  * shares friendly homeowner information; it is not a safety guide. On
  * 2026-10-05 a heat-wave "24-hour AC repair" post was closed after two
  * revisions because every fix to its safety advice (evacuating before the
@@ -256,8 +258,8 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // Round-the-clock or after-hours repair: "24-hour" or "24 hr" (not the
     // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
     // 24 hours", before a repair word with no punctuation in between.
-    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:runs?|running|ran|operates?|operating)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
-    "(?:repairs?|service|technicians?|techs?|contractors?|company)\\s+(?:that(?:'s| is)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
+    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:ac|a/c|hvac|unit|furnace|system|heater|pump|fan|blower|fridge|refrigerator|freezer|compressor|condenser|dehumidifier|it)\\s+(?:runs?|running|ran|operates?|operating)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    "(?:repairs?|service|technicians?|techs?|contractors?|company|companies)\\s+(?:(?:that(?:'s| is| are)|is|are|runs?|operates?|works?|stays?)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:open\\s+|on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
     // "Safety switch" or "safety valve" is a part, not a hazard topic.
     // "Allergy-safe" or "pet-safe" is a product claim, not a hazard topic.
     "(?<!-)safe(?:ty)?(?!-)(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
@@ -278,8 +280,9 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "smoking",
     "sparks? (?:(?:is|are|was|were|keep) )?(?:from|coming|flying|out of|inside|when)",
     "(?<!(?:igniter|ignitor|electrode|module|starter)s? (?:keeps? |is |not |won'?t stop )?)sparking",
-    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?! up\\b| off\\b| on\\b)",
+    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?![\\s-]up\\b| off\\b| on\\b)",
     "(?:catch(?:es|ing)?|caught) (?:on )?fire",
+    "on fire",
     "fires? (?:is |was )?(?:coming |came |started |starting |broke out )?(?:from|in|inside|out of|behind|under) (?:the |a |an |my |your )?(?:furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|range|heater|water heater|dryer|outlet|wiring|panel|equipment|vent)s?",
     "fire (?:risk|hazard)s?",
     "burning (?:smells?|odou?rs?)",
