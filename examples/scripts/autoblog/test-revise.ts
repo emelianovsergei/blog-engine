@@ -25,6 +25,7 @@ import {
   type OpenPr,
   type ReviewComment,
 } from "./revise";
+import { offLimitsTopic } from "./shared";
 
 const badge = (p: string) =>
   `**<sub><sub>![${p} Badge](https://img.shields.io/badge/${p}-orange?style=flat)</sub></sub>  Fix the thing**\n\nWhy it matters.\n\nUseful? React with 👍 / 👎.`;
@@ -420,5 +421,33 @@ held = classifyPr(pr([]), [thread(1)], [codex(1, "P1")], []);
 assert.equal(publishVerdict({ ...green, held }), "held", "a Codex P1 sends it back to step 0b");
 assert.equal(publishVerdict({ ...green, held: held && { ...held, blocked: "autoblog-hold" } }), "blocked");
 assert.equal(publishVerdict({ ...green, paused: true }), "blocked", "autoblog-hold alone blocks a ready post");
+
+// Emergency, hazard and health topics are out of scope; everyday ones are not.
+for (const topic of [
+  "24-hour AC repair during a Sacramento heat wave",
+  "emergency furnace repair on a holiday",
+  "carbon monoxide detector placement for furnace season",
+  "gas leak signs near a water heater",
+  "Is it safe to run the AC with ice on the coil?",
+  "dryer vent fire risk in older homes",
+  "heat stroke and a broken AC",
+  "24/7 HVAC service near me",
+]) {
+  assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
+}
+for (const topic of [
+  "furnace short cycling after a filter change",
+  "SMUD rebate for a smart thermostat: is it worth it?",
+  "heat pump defrost mode explained",
+  "heat pump emergency heat mode: when to use it",
+  "wildfire smoke and MERV 13 filters",
+  "fireplace draft and your thermostat",
+  "dryer vent cleaning cost in Sacramento",
+  "AC sticker shock: what a new system costs",
+  "how to safely clean condenser coils",
+]) {
+  assert.equal(offLimitsTopic(topic), undefined, `in scope: ${topic}`);
+}
+assert.equal(offLimitsTopic(undefined, "furnace filter sizes", "co alarm beeping"), "co alarm", "every text is checked");
 
 console.log("✔ revise helper tests passed");

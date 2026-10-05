@@ -234,3 +234,55 @@ export function relayClient(
   };
   return client;
 }
+
+/**
+ * Topics the blog does not cover: emergencies, hazards and health. The blog
+ * shares friendly homeowner information; it is not a safety guide. On
+ * 2026-10-05 a heat-wave "24-hour AC repair" post was closed after two
+ * revisions because every fix to its safety advice (evacuating before the
+ * breaker, when to call 911, a fan cutoff) drew a new Codex P1.
+ *
+ * Matched against what names a topic (a candidate's topic and query, a plan's
+ * title and keywords), not against prose, so "turn the power off first" in a
+ * maintenance post is not caught. The reviewer's editorial policy covers the
+ * body.
+ */
+const OFF_LIMITS_TOPIC = new RegExp(
+  [
+    // "Emergency heat" is a heat pump setting, not an emergency.
+    "emergenc(?:y|ies)(?! heat)",
+    "24[\\s/-]*(?:hours?|hrs?|7)",
+    "after[\\s-]hours",
+    "safe(?:ty)?",
+    "unsafe",
+    "danger(?:ous)?",
+    "hazard(?:s|ous)?",
+    "carbon monoxide",
+    "co (?:detectors?|alarms?|poisoning|leaks?)",
+    "gas leaks?",
+    "smell(?:s|ing)? (?:of )?gas",
+    "smoke (?:detectors?|alarms?)",
+    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?) fires?",
+    "fire (?:risk|hazard)s?",
+    "burning smell",
+    "electric(?:al)? shocks?",
+    "evacuat\\w*",
+    "heat (?:stroke|illness|exhaustion)",
+    "hypothermia",
+    "health (?:risks?|hazards?)",
+    "poison\\w*",
+    "911",
+  ]
+    .map((p) => `\\b${p}\\b`)
+    .join("|"),
+  "i",
+);
+
+/** The off-limits phrase in a topic's text, or undefined when it is in scope. */
+export function offLimitsTopic(...texts: Array<string | undefined>): string | undefined {
+  for (const text of texts) {
+    const hit = text?.match(OFF_LIMITS_TOPIC);
+    if (hit) return hit[0];
+  }
+  return undefined;
+}
