@@ -259,7 +259,8 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:runs?|running|ran|run|on|going)\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
     "(?:repairs?|service|technicians?|techs?|contractors?|company)\\s+(?:that(?:'s| is)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)",
     // "Safety switch" or "safety valve" is a part, not a hazard topic.
-    "safe(?:ty)?(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
+    // "Allergy-safe" or "pet-safe" is a product claim, not a hazard topic.
+    "(?<!-)safe(?:ty)?(?!-)(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
     "unsafe",
     "danger(?:ous)?",
     "hazard(?:s|ous)?",
@@ -279,7 +280,7 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?! up\\b| off\\b| on\\b)",
     "catch(?:es|ing)? (?:on )?fire",
     "fire (?:risk|hazard)s?",
-    "burning smell",
+    "burning (?:smells?|odou?rs?)",
     "electric(?:al)? shocks?",
     "evacuat\\w*",
     "heat (?:stroke|illness|exhaustion)",

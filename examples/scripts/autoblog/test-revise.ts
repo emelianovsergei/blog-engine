@@ -459,6 +459,7 @@ for (const topic of [
   "can air conditioning cause headaches?",
   "why does AC make me dizzy?",
   "HVAC and nausea",
+  "burning odor from furnace",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -488,6 +489,7 @@ for (const topic of [
   "after 24 hours the refrigerator needs service",
   "AC runs 24/7 and needs service",
   "gas furnace vs heat pump",
+  "allergy-safe furnace filters",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
