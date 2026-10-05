@@ -728,7 +728,9 @@ function cmdCheck(): void {
   }
   for (const keyword of plan.keywords ?? []) {
     const hit = offLimitsTopic(keyword);
-    if (hit) problems.push(`plan: keyword "${keyword}" is an emergency or safety query ("${hit}") — drop it from keywords`);
+    if (!hit) continue;
+    if (ctx.revisionOf) console.warn(`⚠️ keyword "${keyword}" is an emergency or safety query ("${hit}"); kept, since a revision keeps its topic.`);
+    else problems.push(`plan: keyword "${keyword}" is an emergency or safety query ("${hit}") — drop it from keywords`);
   }
   const siblingClash = ctx.siblingPosts.find((p) => p.slug === plan.slug);
   if (siblingClash) problems.push(`plan: slug "${plan.slug}" is already used by ${SITE.sibling.key} — pick a distinct topic or slug`);

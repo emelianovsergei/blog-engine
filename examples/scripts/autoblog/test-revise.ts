@@ -490,6 +490,8 @@ for (const topic of [
   "AC runs 24/7 and needs service",
   "gas furnace vs heat pump",
   "allergy-safe furnace filters",
+  "AC runs nonstop 24/7 and needs service",
+  "AC runs nearly 24/7 in a heat wave",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
