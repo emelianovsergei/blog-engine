@@ -249,10 +249,12 @@ export function relayClient(
  */
 const OFF_LIMITS_TOPIC = new RegExp(
   [
-    // "Emergency heat" is a heat pump setting, not an emergency.
-    "emergenc(?:y|ies)(?! heat)",
-    "24[\\s/-]*(?:hours?|hrs?|7)",
-    "after[\\s-]hours",
+    // "Emergency heat" (mode, setting, strips) is a heat pump setting, not an
+    // emergency; "emergency heat repair" or "emergency heating" is one.
+    "emergenc(?:y|ies)(?! heat (?:mode|settings?|strips?|light|vs)\\b| heat(?:$|[?:,.!]))",
+    // Round-the-clock or after-hours repair, not "my AC runs 24/7".
+    "(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)(?:\\s+[a-z/-]+){0,2}\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    "(?:repairs?|service|technicians?|techs?|contractors?)\\s+(?:open\\s+)?(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)",
     "safe(?:ty)?",
     "unsafe",
     "danger(?:ous)?",
@@ -262,6 +264,10 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "gas leaks?",
     "smell(?:s|ing)? (?:of )?gas",
     "smoke (?:detectors?|alarms?)",
+    // Smoke or sparks from equipment; wildfire smoke stays in scope.
+    "(?<!wildfire )smoke (?:from|coming|out of|in the)(?! (?:wild)?fires?\\b| outside| outdoors)",
+    "smoking",
+    "spark(?:s|ing)?",
     "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?) fires?",
     "fire (?:risk|hazard)s?",
     "burning smell",

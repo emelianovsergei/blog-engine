@@ -432,6 +432,15 @@ for (const topic of [
   "dryer vent fire risk in older homes",
   "heat stroke and a broken AC",
   "24/7 HVAC service near me",
+  "AC repair open 24 hours in Sacramento",
+  "after-hours furnace repair cost",
+  "smoke coming from a furnace vent",
+  "sparks from an AC disconnect",
+  "microwave sparking inside",
+  "why is my AC unit smoking",
+  "emergency heating repair on a holiday",
+  "emergency heater repair near me",
+  "emergency heat repair",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -440,11 +449,17 @@ for (const topic of [
   "SMUD rebate for a smart thermostat: is it worth it?",
   "heat pump defrost mode explained",
   "heat pump emergency heat mode: when to use it",
+  "emergency heat vs aux heat on a heat pump",
+  "what is emergency heat?",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
   "AC sticker shock: what a new system costs",
   "how to safely clean condenser coils",
+  "why does my AC run 24/7?",
+  "should I run the HVAC fan 24 hours a day?",
+  "smoke from wildfires and your HVAC filter",
+  "wildfire smoke from the outside air intake",
 ]) {
   assert.equal(offLimitsTopic(topic), undefined, `in scope: ${topic}`);
 }
