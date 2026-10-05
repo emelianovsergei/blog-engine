@@ -475,6 +475,8 @@ for (const topic of [
   "furnace is on fire",
   "HVAC service operates 24/7",
   "our repair company runs 24/7",
+  "flames coming from a furnace",
+  "what to do after an oven burst into flames",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -513,6 +515,8 @@ for (const topic of [
   "healthy indoor humidity levels",
   "furnace fire-up sequence",
   "my HVAC system runs 24/7 in summer",
+  "furnace flame sensor cleaning",
+  "what pilot flame color means",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
