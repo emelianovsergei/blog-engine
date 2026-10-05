@@ -252,10 +252,13 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // "Emergency heat" (mode, setting, strips) is a heat pump setting, not an
     // emergency; "emergency heat repair" or "emergency heating" is one.
     "emergenc(?:y|ies)(?! heat (?:mode|settings?|strips?|light|vs)\\b| heat(?:$|[?:,.!]))",
-    // Round-the-clock or after-hours repair, not "my AC runs 24/7".
-    "(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)(?:\\s+[a-z/-]+){0,2}\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    // Round-the-clock or after-hours repair, not "my AC runs 24 hours a day".
+    // Words in between are allowed, punctuation is not ("runs 24/7: when to
+    // call for repair" stays in scope).
+    "(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)(?! a day| straight| nonstop)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
     "(?:repairs?|service|technicians?|techs?|contractors?)\\s+(?:open\\s+)?(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)",
-    "safe(?:ty)?",
+    // "Safety switch" or "safety valve" is a part, not a hazard topic.
+    "safe(?:ty)?(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
     "unsafe",
     "danger(?:ous)?",
     "hazard(?:s|ous)?",
@@ -264,10 +267,13 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "gas leaks?",
     "smell(?:s|ing)? (?:of )?gas",
     "smoke (?:detectors?|alarms?)",
-    // Smoke or sparks from equipment; wildfire smoke stays in scope.
-    "(?<!wildfire )smoke (?:from|coming|out of|in the)(?! (?:wild)?fires?\\b| outside| outdoors)",
+    // Smoke or sparks from equipment. Wildfire smoke (named anywhere in the
+    // topic) and a spark igniter or electrode (a part) stay in scope.
+    "(?<!wild ?fires?\\b.*)smoke (?:from|coming|out of|in the|smells?|odou?rs?)(?!.*\\bwild ?fires?\\b)(?! (?:fires?\\b|outside|outdoors))",
+    "smells? like (?:smoke|burning)",
     "smoking",
-    "spark(?:s|ing)?",
+    "sparks? (?:from|coming|flying|out of|inside|when)",
+    "(?<!(?:igniter|ignitor|electrode|module|starter)s? (?:keeps? |is |not |won'?t stop )?)sparking",
     "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?) fires?",
     "fire (?:risk|hazard)s?",
     "burning smell",

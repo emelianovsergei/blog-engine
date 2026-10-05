@@ -441,6 +441,10 @@ for (const topic of [
   "emergency heating repair on a holiday",
   "emergency heater repair near me",
   "emergency heat repair",
+  "24 hour heating and air conditioning repair",
+  "furnace smells like smoke",
+  "smoke odor from AC",
+  "outlet sparking behind the fridge",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -451,6 +455,15 @@ for (const topic of [
   "heat pump emergency heat mode: when to use it",
   "emergency heat vs aux heat on a heat pump",
   "what is emergency heat?",
+  "gas range spark igniter not working",
+  "oven spark electrode replacement",
+  "igniter keeps sparking on a gas stove",
+  "condensate safety switch keeps tripping",
+  "furnace limit safety switch troubleshooting",
+  "AC runs 24/7: when to call for repair",
+  "wildfire smoke smell inside the house",
+  "smoke smell in the house after wildfire smoke days",
+  "refrigerator still warm after 24 hours",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",
