@@ -296,7 +296,7 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "hypothermia",
     // Medical topics. Allergy and air-quality comfort stay in scope.
     // Any health topic, but not "system health check" (maintenance jargon).
-    "(?<!(?:system|unit|equipment|hvac|furnace|ac|battery|filter) )health(?! (?:checks?|check-?ups?|scores?|reports?|monitoring)\\b)",
+    "health(?! (?:checks?|check-?ups?|scores?|reports?|monitoring)\\b)",
     "respiratory",
     "asthma",
     "medical",
