@@ -249,9 +249,10 @@ export function relayClient(
  */
 const OFF_LIMITS_TOPIC = new RegExp(
   [
-    // "Emergency heat" (mode, setting, strips) is a heat pump setting, not an
-    // emergency; "emergency heat repair" or "emergency heating" is one.
-    "emergenc(?:y|ies)(?! heat (?:mode|settings?|strips?|light|vs)\\b| heat(?:$|[?:,.!]))",
+    // "Emergency heat" is a heat pump setting, not an emergency, unless a
+    // repair follows ("emergency heat pump repair"). "Emergency heating" and
+    // "emergency heater" are emergencies.
+    "emergenc(?:y|ies)(?! heat\\b(?![\\s-]+(?:pump[\\s-]+)?(?:repairs?|service|technicians?|techs?|contractors?|company|fix)))",
     // Round-the-clock or after-hours repair, not "my AC runs 24 hours a day".
     // Words in between are allowed, punctuation is not ("runs 24/7: when to
     // call for repair" stays in scope).
@@ -274,14 +275,22 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "smoking",
     "sparks? (?:from|coming|flying|out of|inside|when)",
     "(?<!(?:igniter|ignitor|electrode|module|starter)s? (?:keeps? |is |not |won'?t stop )?)sparking",
-    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?) fires?",
+    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?! up\\b| off\\b| on\\b)",
+    "catch(?:es|ing)? (?:on )?fire",
     "fire (?:risk|hazard)s?",
     "burning smell",
     "electric(?:al)? shocks?",
     "evacuat\\w*",
     "heat (?:stroke|illness|exhaustion)",
     "hypothermia",
-    "health (?:risks?|hazards?)",
+    // Medical topics. Allergy and air-quality comfort stay in scope.
+    "health (?:risks?|hazards?|effects?|problems?|issues?)",
+    "respiratory",
+    "asthma",
+    "medical",
+    "illness(?:es)?",
+    "diseases?",
+    "(?:make|makes|making|made|get|getting|got) (?:me |you |us |them |people |kids |family )?sick",
     "poison\\w*",
     "911",
   ]

@@ -849,7 +849,7 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
  * post was closed on 2026-10-05 after its safety advice drew a new Codex P1 at
  * every revision.
  */
-function editorialPolicy(): string {
+function editorialPolicy(topicFixed = false): string {
   const dir = path.join(ROOT, "content", "our-work");
   // The facts each entry documents (what was done, where, when), not just its
   // slug: the reviewer checks a story's details against them.
@@ -870,7 +870,10 @@ function editorialPolicy(): string {
     "Site editorial policy (blocking):",
     `- A specific job, customer or call told as something ${SITE.review.business} actually did ("last October we found...", "a Citrus Heights homeowner called us", a dated visit, a named household, a meter reading from a real call) is fabricated first-hand experience unless a documented job below supports each of its details. Report it as a BLOCKER under the contentQuality dimension, quote the sentence as the location, and suggest reframing it as a typical scenario ("a typical first-cold-morning call: ...").`,
     "- Framing a scenario as typical, common or hypothetical is fine and is not an issue.",
-    "- This blog shares friendly, everyday homeowner information. It is not a safety or emergency guide. Report as a BLOCKER under contentQuality, quoting the passage: emergency or safety procedures (evacuating, when to call 911, what to do about smoke, sparks, a gas smell or carbon monoxide), medical or heat-illness guidance (symptoms, who is at risk, when to seek care, safe indoor temperatures), and hazard warnings longer than one plain sentence. Suggest cutting each to one sentence that sends the reader to the right professional (a licensed technician, the gas utility or emergency services), or removing it. That one sentence, whose only action is sending the reader to a professional (for example: if you smell gas, leave and call the gas utility), is the fix and is not an issue. A post whose topic is itself an emergency, a hazard or a health risk is a BLOCKER: the topic is out of scope.",
+    "- This blog shares friendly, everyday homeowner information. It is not a safety or emergency guide. Report as a BLOCKER under contentQuality, quoting the passage: emergency or safety procedures (evacuating, when to call 911, what to do about smoke, sparks, a gas smell or carbon monoxide), medical or heat-illness guidance (symptoms, who is at risk, when to seek care, safe indoor temperatures), and hazard warnings longer than one plain sentence. Suggest cutting each to one sentence that sends the reader to the right professional (a licensed technician, the gas utility or emergency services), or removing it. That one sentence, whose only action is sending the reader to a professional (for example: if you smell gas, leave and call the gas utility), is the fix and is not an issue.",
+    topicFixed
+      ? "- This post's topic is fixed (a revision of a held post or a refresh of a published one): do not report the topic itself, only safety or medical guidance in the text as above."
+      : "- A post whose topic is itself an emergency, a hazard or a health risk is a BLOCKER: the topic is out of scope.",
     "Documented jobs (content/our-work/):",
     ...(jobs.length ? jobs : ["- none"]),
   ].join("\n");
@@ -904,7 +907,7 @@ async function cmdReview(): Promise<void> {
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
   const promptPath = work(`review-${round}.prompt.md`);
-  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)", editorialPolicy());
+  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)", editorialPolicy(Boolean(loadContext().revisionOf)));
   let result: ReviewResult;
   try {
     result = await reviewBlogPost({
@@ -1801,7 +1804,7 @@ function refreshBriefFile(repo: string, file: string): string | undefined {
 
 /** The engine's prompt with this site's editorial policy ahead of the answer schema. */
 function withEditorialPolicy(prompt: string): string {
-  const policy = editorialPolicy().trim();
+  const policy = editorialPolicy(true).trim();
   const at = prompt.lastIndexOf("Answer with ONE JSON object");
   return at >= 0 ? `${prompt.slice(0, at)}${policy}\n\n${prompt.slice(at)}` : `${prompt}\n\n${policy}\n`;
 }
@@ -1957,7 +1960,7 @@ async function cmdRefreshReview(): Promise<void> {
   const { frontmatter, body } = parseDocument(fs.readFileSync(refreshWork("preview.mdx"), "utf-8"));
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
-  const client = relayClient(refreshWork(`review-${round}.prompt.md`), answer, "Claude review subagent (did not write the refresh)", editorialPolicy());
+  const client = relayClient(refreshWork(`review-${round}.prompt.md`), answer, "Claude review subagent (did not write the refresh)", editorialPolicy(true));
   let result: ReviewResult;
   try {
     result = await reviewBlogPost({

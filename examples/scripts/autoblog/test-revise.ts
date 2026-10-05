@@ -445,6 +445,11 @@ for (const topic of [
   "furnace smells like smoke",
   "smoke odor from AC",
   "outlet sparking behind the fridge",
+  "emergency heat pump repair",
+  "furnace fire causes",
+  "what to do if an AC unit catches fire",
+  "can air conditioning trigger asthma?",
+  "is my AC making me sick",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -464,6 +469,12 @@ for (const topic of [
   "wildfire smoke smell inside the house",
   "smoke smell in the house after wildfire smoke days",
   "refrigerator still warm after 24 hours",
+  "emergency heat on a heat pump",
+  "using emergency heat during a cold snap",
+  "emergency heat costs",
+  "furnace spark ignitor replacement",
+  "furnace fires up then shuts off",
+  "HVAC tips for allergy sufferers",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",

@@ -91,8 +91,9 @@ fix a P2 when it is cheap and plainly right. Change nothing else: same topic,
 same slug, same date. A finding about safety advice (evacuating, 911, heat
 illness, gas or carbon monoxide, a temperature cutoff) is fixed by cutting that
 advice down to one sentence that sends the reader to a professional, never by
-adding detail (step 8's editorial policy); `check` only warns about an
-off-limits topic here, since a revision keeps its topic. Then steps 7 and 8
+adding detail (step 8's editorial policy). A revision keeps its topic, so
+`check` only warns about an off-limits topic and the reviewer is told not to
+block the topic itself, only its safety advice. Then steps 7 and 8
 exactly as for a new post (`check`, build, `review` with a **new** subagent,
 the fix loop). Then:
 
