@@ -450,6 +450,9 @@ for (const topic of [
   "what to do if an AC unit catches fire",
   "can air conditioning trigger asthma?",
   "is my AC making me sick",
+  "HVAC company that is open 24 hours",
+  "furnace smells like gas",
+  "gas odor from furnace",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -475,6 +478,10 @@ for (const topic of [
   "furnace spark ignitor replacement",
   "furnace fires up then shuts off",
   "HVAC tips for allergy sufferers",
+  "AC ran 24 hours before needing repair",
+  "after 24 hours the refrigerator needs service",
+  "AC runs 24/7 and needs service",
+  "gas furnace vs heat pump",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",

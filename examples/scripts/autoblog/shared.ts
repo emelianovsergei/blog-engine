@@ -253,11 +253,11 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // repair follows ("emergency heat pump repair"). "Emergency heating" and
     // "emergency heater" are emergencies.
     "emergenc(?:y|ies)(?! heat\\b(?![\\s-]+(?:pump[\\s-]+)?(?:repairs?|service|technicians?|techs?|contractors?|company|fix)))",
-    // Round-the-clock or after-hours repair, not "my AC runs 24 hours a day".
-    // Words in between are allowed, punctuation is not ("runs 24/7: when to
-    // call for repair" stays in scope).
-    "(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)(?! a day| straight| nonstop)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
-    "(?:repairs?|service|technicians?|techs?|contractors?)\\s+(?:open\\s+)?(?:24[\\s/-]*(?:hours?|hrs?|7)|after[\\s-]hours)",
+    // Round-the-clock or after-hours repair: "24-hour" or "24 hr" (not the
+    // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
+    // 24 hours", before a repair word with no punctuation in between.
+    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:runs?|running|ran|run|on|going)\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    "(?:repairs?|service|technicians?|techs?|contractors?|company)\\s+(?:that(?:'s| is)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock)",
     // "Safety switch" or "safety valve" is a part, not a hazard topic.
     "safe(?:ty)?(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
     "unsafe",
@@ -266,7 +266,8 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "carbon monoxide",
     "co (?:detectors?|alarms?|poisoning|leaks?)",
     "gas leaks?",
-    "smell(?:s|ing)? (?:of )?gas",
+    "smell(?:s|ing)? (?:of |like )?(?:natural )?gas",
+    "gas (?:odou?rs?|smells?)",
     "smoke (?:detectors?|alarms?)",
     // Smoke or sparks from equipment. Wildfire smoke (named anywhere in the
     // topic) and a spark igniter or electrode (a part) stay in scope.
