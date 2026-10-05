@@ -88,8 +88,14 @@ npm run autoblog:claude -- revise --pr <N>     # rebuilds .autoblog/ from the PR
 Fix every P0/P1, blocker and major finding in `.autoblog/plan.json` (the
 frontmatter: FAQs, HowTo steps, summary, citations) and/or `.autoblog/body.md`;
 fix a P2 when it is cheap and plainly right. Change nothing else: same topic,
-same slug, same date. Then steps 7 and 8 exactly as for a new post (`check`,
-build, `review` with a **new** subagent, the fix loop). Then:
+same slug, same date. A finding about safety advice (evacuating, 911, heat
+illness, gas or carbon monoxide, a temperature cutoff) is fixed by cutting that
+advice down to one sentence that sends the reader to a professional, never by
+adding detail (step 8's editorial policy). A revision keeps its topic, so
+`check` only warns about an off-limits topic and the reviewer is told not to
+block the topic itself, only its safety advice. Then steps 7 and 8
+exactly as for a new post (`check`, build, `review` with a **new** subagent,
+the fix loop). Then:
 
 ```bash
 npm run autoblog:claude -- handoff               # meta.json names the PR branch (revisionOf)
@@ -199,6 +205,16 @@ Write `.autoblog/candidates.json`, an array of:
   …", "heat pump defrost …"): autocomplete is a prefix API.
 - Avoid over-represented categories. Favor the weather anomaly if there is one.
 - One homeowner problem per candidate, for this site's service areas only.
+- **No emergency, safety or health topics.** This blog shares friendly,
+  everyday homeowner information: how things work, maintenance, costs,
+  rebates, choosing equipment, comfort and efficiency. It is not a safety
+  guide. Skip emergencies and after-hours repair ("24-hour AC repair"),
+  carbon monoxide, gas leaks, fire, smoke or electrical hazards, heat illness
+  and other health risks, even when Search Console or the weather points
+  there. `rank` drops a candidate whose topic or `hintQuery` names one, and
+  `check` rejects a plan whose title or keywords do. On 2026-10-05 a
+  heat-wave post was closed after two revisions because each fix to its
+  safety advice drew a new Codex P1.
 - `similarity` is your honest judgment (0-1) against the closest post on
   **either** site, published or pending: ≥ 0.86 same topic (rejected), 0.6-0.86
   adjacent (penalized), < 0.6 distinct. A different angle on the same question
@@ -319,6 +335,13 @@ last week") is a blocker unless it matches a documented job in
 `content/our-work/`. Codex held three posts in a row for exactly this. Fix it
 by reframing the story as the typical case it is ("a typical first-cold-morning
 call: ..."), never by adding more invented detail.
+
+The policy also makes safety and emergency guidance a blocker: evacuation or
+911 instructions, what to do about smoke, sparks, gas or carbon monoxide,
+heat-illness or other medical advice, and any hazard warning longer than one
+plain sentence. Fix it by cutting the passage to one sentence that sends the
+reader to the right professional, or removing it. Never fix it by adding more
+safety detail: that is how one Codex finding turns into the next.
 
 ## 9. Hand off and push
 

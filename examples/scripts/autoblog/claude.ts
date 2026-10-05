@@ -88,6 +88,7 @@ import {
 import {
   autocompleteFetch,
   autocompleteReachable,
+  offLimitsTopic,
   readPostRows,
   relayClient,
   type AutocompleteCache,
@@ -458,6 +459,17 @@ async function cmdRank(): Promise<void> {
       throw new Error(`Unknown categoryId "${c.categoryId}" (allowed: ${SITE.categories.map((x) => x.id).join(", ")})`);
     }
   }
+  // Emergency, hazard and health topics are out of scope (the runbook's
+  // step 2): drop them before ranking, so one can never win.
+  const inScope = candidates.filter((c) => {
+    const hit = offLimitsTopic(c.topic, c.hintQuery);
+    if (hit) console.warn(`⚠️ Dropped "${c.topic}": "${hit}" makes it an emergency or safety topic, which this blog does not cover.`);
+    return !hit;
+  });
+  if (inScope.length === 0) {
+    throw new Error("every candidate is an emergency or safety topic; propose friendly, everyday homeowner topics instead (AUTOBLOG_CLAUDE.md step 2)");
+  }
+  candidates.splice(0, candidates.length, ...inScope);
   const opportunities = new Set(brief.gsc.opportunities.map((o) => o.query.toLowerCase()));
   const answering = candidates.filter((c) => c.hintQuery && opportunities.has(c.hintQuery.toLowerCase())).length;
   if (opportunities.size > 0 && answering * 2 < candidates.length) {
@@ -707,6 +719,21 @@ function cmdCheck(): void {
   } catch (error) {
     problems.push(`plan: ${error instanceof Error ? error.message : String(error)}`);
   }
+  // The slug is left out: it repeats the title, and turning its hyphens into
+  // spaces would split compounds such as "allergy-safe".
+  const offLimits = offLimitsTopic(plan.title, plan.metaTitle, plan.targetKeyword);
+  if (offLimits && ctx.revisionOf) {
+    // A revision keeps its topic: only its safety advice can be cut back.
+    console.warn(`⚠️ "${offLimits}": an emergency or safety topic. Cut its safety advice to one sentence that points to a professional.`);
+  } else if (offLimits) {
+    problems.push(`plan: "${offLimits}" makes this an emergency or safety topic, which this blog does not cover — pick another topic (step 2)`);
+  }
+  for (const keyword of plan.keywords ?? []) {
+    const hit = offLimitsTopic(keyword);
+    if (!hit) continue;
+    if (ctx.revisionOf) console.warn(`⚠️ keyword "${keyword}" is an emergency or safety query ("${hit}"); kept, since a revision keeps its topic.`);
+    else problems.push(`plan: keyword "${keyword}" is an emergency or safety query ("${hit}") — drop it from keywords`);
+  }
   const siblingClash = ctx.siblingPosts.find((p) => p.slug === plan.slug);
   if (siblingClash) problems.push(`plan: slug "${plan.slug}" is already used by ${SITE.sibling.key} — pick a distinct topic or slug`);
   problems.push(...bodyViolations(body).map((v) => `body: ${v}`));
@@ -818,12 +845,15 @@ function reviewNeighbours(exclude: string): ExistingPostLike[] {
 }
 
 /**
- * A site rule the engine's rubric does not carry. Codex held three posts in a
+ * Site rules the engine's rubric does not carry. Codex held three posts in a
  * row (2026-09-26..28) for a made-up service call told as the company's own
  * job, after the reviewer had praised it as "believable". The documented jobs
- * are listed so the reviewer can tell a real one from an invented one.
+ * are listed so the reviewer can tell a real one from an invented one. Safety
+ * and emergency guidance is out of scope too (see offLimitsTopic): a heat-wave
+ * post was closed on 2026-10-05 after its safety advice drew a new Codex P1 at
+ * every revision.
  */
-function editorialPolicy(): string {
+function editorialPolicy(topicFixed = false): string {
   const dir = path.join(ROOT, "content", "our-work");
   // The facts each entry documents (what was done, where, when), not just its
   // slug: the reviewer checks a story's details against them.
@@ -844,6 +874,10 @@ function editorialPolicy(): string {
     "Site editorial policy (blocking):",
     `- A specific job, customer or call told as something ${SITE.review.business} actually did ("last October we found...", "a Citrus Heights homeowner called us", a dated visit, a named household, a meter reading from a real call) is fabricated first-hand experience unless a documented job below supports each of its details. Report it as a BLOCKER under the contentQuality dimension, quote the sentence as the location, and suggest reframing it as a typical scenario ("a typical first-cold-morning call: ...").`,
     "- Framing a scenario as typical, common or hypothetical is fine and is not an issue.",
+    "- This blog shares friendly, everyday homeowner information. It is not a safety or emergency guide. Report as a BLOCKER under contentQuality, quoting the passage: emergency or safety procedures (evacuating, when to call 911, what to do about smoke, sparks, a gas smell or carbon monoxide), medical or heat-illness guidance (symptoms, who is at risk, when to seek care, safe indoor temperatures), and hazard warnings longer than one plain sentence. Suggest cutting each to one sentence that sends the reader to the right professional (a licensed technician, the gas utility or emergency services), or removing it. That one sentence, whose only action is sending the reader to a professional (for example: if you smell gas, leave and call the gas utility), is the fix and is not an issue.",
+    topicFixed
+      ? "- This post's topic is fixed (a revision of a held post or a refresh of a published one): do not report the topic itself, only safety or medical guidance in the text as above."
+      : "- A post whose topic is itself an emergency, a hazard or a health risk is a BLOCKER: the topic is out of scope.",
     "Documented jobs (content/our-work/):",
     ...(jobs.length ? jobs : ["- none"]),
   ].join("\n");
@@ -877,7 +911,7 @@ async function cmdReview(): Promise<void> {
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
   const promptPath = work(`review-${round}.prompt.md`);
-  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)", editorialPolicy());
+  const client = relayClient(promptPath, answer, "Claude review subagent (did not write the post)", editorialPolicy(Boolean(loadContext().revisionOf)));
   let result: ReviewResult;
   try {
     result = await reviewBlogPost({
@@ -1774,7 +1808,7 @@ function refreshBriefFile(repo: string, file: string): string | undefined {
 
 /** The engine's prompt with this site's editorial policy ahead of the answer schema. */
 function withEditorialPolicy(prompt: string): string {
-  const policy = editorialPolicy().trim();
+  const policy = editorialPolicy(true).trim();
   const at = prompt.lastIndexOf("Answer with ONE JSON object");
   return at >= 0 ? `${prompt.slice(0, at)}${policy}\n\n${prompt.slice(at)}` : `${prompt}\n\n${policy}\n`;
 }
@@ -1930,7 +1964,7 @@ async function cmdRefreshReview(): Promise<void> {
   const { frontmatter, body } = parseDocument(fs.readFileSync(refreshWork("preview.mdx"), "utf-8"));
   const answer = flag("answer") ? path.resolve(flag("answer")!) : undefined;
   if (answer) need(answer, "write the reviewer's JSON answer first");
-  const client = relayClient(refreshWork(`review-${round}.prompt.md`), answer, "Claude review subagent (did not write the refresh)", editorialPolicy());
+  const client = relayClient(refreshWork(`review-${round}.prompt.md`), answer, "Claude review subagent (did not write the refresh)", editorialPolicy(true));
   let result: ReviewResult;
   try {
     result = await reviewBlogPost({

@@ -234,3 +234,91 @@ export function relayClient(
   };
   return client;
 }
+
+/**
+ * A fast keyword pre-filter, not the whole gate: the reviewer's editorial
+ * policy (claude.ts) blocks any emergency, safety or health topic or advice
+ * this list misses. Topics the blog does not cover: emergencies, hazards and health. The blog
+ * shares friendly homeowner information; it is not a safety guide. On
+ * 2026-10-05 a heat-wave "24-hour AC repair" post was closed after two
+ * revisions because every fix to its safety advice (evacuating before the
+ * breaker, when to call 911, a fan cutoff) drew a new Codex P1.
+ *
+ * Matched against what names a topic (a candidate's topic and query, a plan's
+ * title and keywords), not against prose, so "turn the power off first" in a
+ * maintenance post is not caught. The reviewer's editorial policy covers the
+ * body.
+ */
+const OFF_LIMITS_TOPIC = new RegExp(
+  [
+    // "Emergency heat" is a heat pump setting, not an emergency, unless a
+    // repair follows ("emergency heat pump repair"). "Emergency heating" and
+    // "emergency heater" are emergencies.
+    "emergenc(?:y|ies)(?! heat\\b(?![\\s-]+(?:(?:pump|system|unit)s?[\\s-]+)?(?:repairs?|replace(?:ment|ments|d)?|install(?:ation|ations|ed|s)?|service|technicians?|techs?|contractors?|company|fix)))",
+    // Round-the-clock or after-hours repair: "24-hour" or "24 hr" (not the
+    // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
+    // 24 hours", before a repair word with no punctuation in between.
+    "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:ac|a/c|hvac|unit|furnace|system|heater|pump|fan|blower|fridge|refrigerator|freezer|compressor|condenser|dehumidifier|it)\\s+(?:(?:is|are|was|were|keeps?|has been)\\s+)?(?:runs?|running|ran|operates?|operating)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
+    "(?:repairs?|service|technicians?|techs?|contractors?|company|companies)\\s+(?:(?:that(?:'s| is| are)|is|are|runs?|operates?|works?|stays?)\\s+)?(?:available\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:open\\s+|on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
+    // "Safety switch" or "safety valve" is a part, not a hazard topic.
+    // "Allergy-safe" or "pet-safe" is a product claim, not a hazard topic.
+    "(?<!-)safe(?:ty)?(?!-)(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
+    "unsafe",
+    "danger(?:s|ous)?",
+    "hazard(?:s|ous)?",
+    "carbon monoxide",
+    "co (?:detectors?|alarms?|poisoning|leaks?)",
+    "gas (?:is |was )?leak(?:s|ing|ed|age)?",
+    "leak(?:s|ing|ed)? (?:natural |propane )?gas",
+    "smell(?:s|ing)? (?:of |like )?(?:natural )?gas",
+    "gas (?:odou?rs?|smells?)",
+    "smoke (?:detectors?|alarms?)",
+    // Smoke or sparks from equipment. Wildfire smoke (named anywhere in the
+    // topic) and a spark igniter or electrode (a part) stay in scope.
+    "(?<!wild ?fires?\\b.*)smoke (?:(?:is|are|was|keeps?) )?(?:from|coming|out of|in the|smells?|odou?rs?)(?!.*\\bwild ?fires?\\b)(?! (?:fires?\\b|outside|outdoors))",
+    "smells? like (?:smoke|burning)",
+    "smoking",
+    "sparks? (?:(?:is|are|was|were|keep) )?(?:from|coming|flying|out of|inside|when)",
+    "(?<!(?:igniter|ignitor|electrode|module|starter)s? (?:keeps? |is |not |won'?t stop )?)sparking",
+    "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?![\\s-]up\\b| off\\b| on\\b)",
+    "(?:catch(?:es|ing)?|caught) (?:on )?fire",
+    "on fire",
+    "explo(?:de|des|ded|ding|sions?|sive)",
+    // Flames from equipment, but not "flame sensor" or "pilot flame color".
+    "flames? (?:(?:is|are|was|were|keep) )?(?:coming|shooting|from|out of)",
+    "(?:burst|bursts|bursting) into flames?",
+    "in flames",
+    "fires? (?:is |was )?(?:coming |came |started |starting |broke out )?(?:from|in|inside|out of|behind|under) (?:the |a |an |my |your )?(?:furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|range|heater|water heater|dryer|outlet|wiring|panel|equipment|vent)s?",
+    "fire (?:risk|hazard)s?",
+    "burning (?:smells?|odou?rs?)",
+    "electric(?:al)? shocks?",
+    "evacuat\\w*",
+    "heat (?:stroke|illness|exhaustion)",
+    "hypothermia",
+    // Medical topics. Allergy and air-quality comfort stay in scope.
+    // Any health topic, but not "system health check" (maintenance jargon).
+    "health(?! (?:checks?|check-?ups?|scores?|reports?|monitoring)\\b)",
+    "respiratory",
+    "asthma",
+    "medical",
+    "illness(?:es)?",
+    "diseases?",
+    "(?:make|makes|making|made|get|getting|got) (?:me |you |us |them |people |kids |family )?sick",
+    // Symptoms alone are medical topics too.
+    "headaches?|migraines?|dizz(?:y|iness)|nause(?:a|ous)|nosebleeds?|sore throats?|cough(?:s|ing)?|short(?:ness)? of breath|trouble breathing",
+    "poison\\w*",
+    "911",
+  ]
+    .map((p) => `\\b${p}\\b`)
+    .join("|"),
+  "i",
+);
+
+/** The off-limits phrase in a topic's text, or undefined when it is in scope. */
+export function offLimitsTopic(...texts: Array<string | undefined>): string | undefined {
+  for (const text of texts) {
+    const hit = text?.match(OFF_LIMITS_TOPIC);
+    if (hit) return hit[0];
+  }
+  return undefined;
+}

@@ -3,10 +3,14 @@ type: "log"
 title: "Developer Wiki Change Log"
 description: "Track of major modifications and releases."
 tags: ["log", "changelog"]
-timestamp: "2026-10-04"
+timestamp: "2026-10-05"
 sources: []
 ---
 # Developer Wiki Change Log
+
+## [2026-10-05] No emergency, safety or health topics
+- Pulse's 2026-10-05 post ("24-hour AC repair" in a heat wave) was closed after two revisions. Each fix to its safety advice (evacuating before the breaker, 911 for heat illness, a fan cutoff by temperature, then by heat index) drew a new Codex P1.
+- The blog shares friendly, everyday homeowner information; it is not a safety guide. `rank` now drops candidates whose topic or query names an emergency, hazard or health risk, `check` rejects such a plan, and the reviewer's editorial policy makes safety or medical guidance a blocker. A held post's safety finding is fixed by cutting the advice to one sentence that points to a professional.
 
 ## [2026-10-04] Publish waits out the merge delay; new posts are checked on the live site
 - Codex ran out of quota and both posts waited 4.5 hours for the morning sweep: `publish` gave up after 45 minutes, before merge-pending's 1-hour delay ended. It now waits up to 90 minutes when that delay is all that is left.
