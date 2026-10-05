@@ -480,6 +480,8 @@ for (const topic of [
   "HVAC health effects on children",
   "furnace health risks",
   "filter health benefits",
+  "furnace repair available 24/7",
+  "HVAC contractors available around the clock",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }

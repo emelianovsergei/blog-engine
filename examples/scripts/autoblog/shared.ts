@@ -259,7 +259,7 @@ const OFF_LIMITS_TOPIC = new RegExp(
     // duration "24 hours"), "24/7" (not "runs 24/7"), "after-hours" or "open
     // 24 hours", before a repair word with no punctuation in between.
     "(?:24[\\s-]*(?:hour|hr)(?!s)|(?<!\\b(?:ac|a/c|hvac|unit|furnace|system|heater|pump|fan|blower|fridge|refrigerator|freezer|compressor|condenser|dehumidifier|it)\\s+(?:runs?|running|ran|operates?|operating)(?:\\s+[a-z]+){0,2}\\s+)24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)(?:\\s+[a-z/&-]+){0,6}?\\s+(?:repairs?|service|technicians?|techs?|contractors?|company|companies)",
-    "(?:repairs?|service|technicians?|techs?|contractors?|company|companies)\\s+(?:(?:that(?:'s| is| are)|is|are|runs?|operates?|works?|stays?)\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:open\\s+|on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
+    "(?:repairs?|service|technicians?|techs?|contractors?|company|companies)\\s+(?:(?:that(?:'s| is| are)|is|are|runs?|operates?|works?|stays?)\\s+)?(?:available\\s+)?(?:open\\s+24[\\s-]*(?:hours?|hrs?)|(?:open\\s+|on[\\s-]call\\s+)?24\\s*/\\s*7|after[\\s-]hours|around[\\s-]the[\\s-]clock|on[\\s-]call)",
     // "Safety switch" or "safety valve" is a part, not a hazard topic.
     // "Allergy-safe" or "pet-safe" is a product claim, not a hazard topic.
     "(?<!-)safe(?:ty)?(?!-)(?! (?:switch(?:es)?|valves?|sensors?|controls?|limits?|shut-?offs?|cut-?offs?|floats?|devices?|thermostats?)\\b)",
