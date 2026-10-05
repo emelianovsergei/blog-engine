@@ -467,6 +467,10 @@ for (const topic of [
   "the dangers of a cracked heat exchanger",
   "HVAC service on call 24/7",
   "on-call furnace repair technician",
+  "how HVAC affects your health",
+  "health benefits of air purifiers",
+  "smoke is coming from a furnace",
+  "sparks are coming from an outlet",
 ]) {
   assert.ok(offLimitsTopic(topic), `off limits: ${topic}`);
 }
@@ -501,6 +505,8 @@ for (const topic of [
   "AC runs nearly 24/7 in a heat wave",
   "gas fireplace pilot light basics",
   "AC refrigerant leak signs",
+  "HVAC system health check before winter",
+  "healthy indoor humidity levels",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",

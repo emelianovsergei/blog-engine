@@ -273,10 +273,10 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "smoke (?:detectors?|alarms?)",
     // Smoke or sparks from equipment. Wildfire smoke (named anywhere in the
     // topic) and a spark igniter or electrode (a part) stay in scope.
-    "(?<!wild ?fires?\\b.*)smoke (?:from|coming|out of|in the|smells?|odou?rs?)(?!.*\\bwild ?fires?\\b)(?! (?:fires?\\b|outside|outdoors))",
+    "(?<!wild ?fires?\\b.*)smoke (?:(?:is|are|was|keeps?) )?(?:from|coming|out of|in the|smells?|odou?rs?)(?!.*\\bwild ?fires?\\b)(?! (?:fires?\\b|outside|outdoors))",
     "smells? like (?:smoke|burning)",
     "smoking",
-    "sparks? (?:from|coming|flying|out of|inside|when)",
+    "sparks? (?:(?:is|are|was|were|keep) )?(?:from|coming|flying|out of|inside|when)",
     "(?<!(?:igniter|ignitor|electrode|module|starter)s? (?:keeps? |is |not |won'?t stop )?)sparking",
     "(?:electrical|house|kitchen|dryer(?:[\\s-]vent)?|furnace|ac|a/c|unit|hvac|appliance|microwave|oven|stove|heater|outlet|wiring|equipment) fires?(?! up\\b| off\\b| on\\b)",
     "(?:catch(?:es|ing)?|caught) (?:on )?fire",
@@ -288,7 +288,8 @@ const OFF_LIMITS_TOPIC = new RegExp(
     "heat (?:stroke|illness|exhaustion)",
     "hypothermia",
     // Medical topics. Allergy and air-quality comfort stay in scope.
-    "health (?:risks?|hazards?|effects?|problems?|issues?)",
+    // Any health topic, but not "system health check" (maintenance jargon).
+    "(?<!(?:system|unit|equipment|hvac|furnace|ac|battery|filter) )health(?! (?:checks?|check-?ups?|scores?|reports?|monitoring)\\b)",
     "respiratory",
     "asthma",
     "medical",
