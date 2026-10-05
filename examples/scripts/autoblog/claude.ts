@@ -719,7 +719,9 @@ function cmdCheck(): void {
   } catch (error) {
     problems.push(`plan: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const offLimits = offLimitsTopic(plan.title, plan.metaTitle, plan.slug.replace(/-/g, " "), plan.targetKeyword);
+  // The slug is left out: it repeats the title, and turning its hyphens into
+  // spaces would split compounds such as "allergy-safe".
+  const offLimits = offLimitsTopic(plan.title, plan.metaTitle, plan.targetKeyword);
   if (offLimits && ctx.revisionOf) {
     // A revision keeps its topic: only its safety advice can be cut back.
     console.warn(`⚠️ "${offLimits}": an emergency or safety topic. Cut its safety advice to one sentence that points to a professional.`);

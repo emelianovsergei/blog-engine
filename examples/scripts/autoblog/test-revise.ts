@@ -524,6 +524,7 @@ for (const topic of [
   "my HVAC system runs 24/7 in summer",
   "furnace flame sensor cleaning",
   "what pilot flame color means",
+  "my AC is running 24/7 and needs repair",
   "wildfire smoke and MERV 13 filters",
   "fireplace draft and your thermostat",
   "dryer vent cleaning cost in Sacramento",

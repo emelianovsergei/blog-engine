@@ -212,7 +212,7 @@ Write `.autoblog/candidates.json`, an array of:
   carbon monoxide, gas leaks, fire, smoke or electrical hazards, heat illness
   and other health risks, even when Search Console or the weather points
   there. `rank` drops a candidate whose topic or `hintQuery` names one, and
-  `check` rejects a plan whose title, slug or keywords do. On 2026-10-05 a
+  `check` rejects a plan whose title or keywords do. On 2026-10-05 a
   heat-wave post was closed after two revisions because each fix to its
   safety advice drew a new Codex P1.
 - `similarity` is your honest judgment (0-1) against the closest post on
