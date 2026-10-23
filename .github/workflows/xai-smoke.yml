@@ -26,7 +26,7 @@ concurrency:
 jobs:
   xai-smoke:
     name: xai-smoke
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     env:
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
     steps:
